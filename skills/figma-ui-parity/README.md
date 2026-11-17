@@ -1,6 +1,6 @@
 # figma-ui-parity
 
-版本：4.47.0 · 分类：ui-testing · 平台：Windows / macOS / Linux
+版本：4.48.0 · 分类：ui-testing · 平台：Windows / macOS / Linux
 
 以 Figma 设计稿为基准，对本地或远程页面执行智能 UI 还原、响应式、交互可用性、可访问性、页面性能、异常数据和视觉回归检查：自动生成元素级场景、双向盘点设计与页面元素、验证按钮及浮层真实行为，统一去重缺陷并输出 HTML、JSON、CSV 报告。
 

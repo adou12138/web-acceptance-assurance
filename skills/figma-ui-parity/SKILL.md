@@ -1,7 +1,7 @@
 ---
 name: "figma-ui-parity"
 description: "以 Figma 设计稿为基准执行 UI 还原、视觉回归、响应式、可访问性、性能与交互可用性检查，双向盘点设计与页面元素并输出 HTML、JSON、CSV 报告。有 Figma 设计稿或导出物时走本 skill；无设计稿的常规页面走查由砺衡主体五视角承担，仅当砺衡专家按信号主动升级或用户显式要求页面侧 45 维深查时才使用本 skill 的页面侧链路。"
-version: 4.47.0
+version: 4.48.0
 author: TestCase
 agent_created: true
 category: ui-testing
@@ -11,7 +11,7 @@ platforms: [windows, macos, linux]
 # Figma UI Parity
 
 > **砺衡包内版 · 剥离适配声明（v1.13.0，2026-11-17）**
-> - 剥离源：figma-ui-parity **4.47.0**（版本冻结，源 skill 零改动）；frontmatter `version` 与 `check_environment.py VERSION` 保持源值（版本一致性测试强制）。
+> - 剥离源：figma-ui-parity **4.48.0**（版本冻结）；frontmatter `version` 与 `check_environment.py VERSION` 保持源值（版本一致性测试强制）。4.48.0 起通道判定按能力、token 读取兼容 headers 与 env 两种落地形态。
 > - **两套质量体系边界**：本 skill 按自身门禁判定（45 维度覆盖率 / `validate_defects` / `smoke_chain` 全绿），**不套用**砺衡的 S0/G/V/COV/COV-PATH 门禁；报告（HTML/JSON/CSV）自成体系，在砺衡报告中按附件引用。
 > - **与砺衡视觉能力分工**：有 Figma 设计稿 → 走本 skill（像素级还原）；**无设计稿** → 走砺衡 `visual-usability.md` 五视角走查，报告不得写“还原度”（见 §R0 输入路由）。
 > - **宿主依赖（冷启动四态）**：先跑 `python scripts/check_environment.py` 查看四态（`ready/partial/needs_setup/unavailable`）——设计数据依赖 Figma MCP/REST token、页面提取依赖 Playwright MCP、像素 diff 依赖 visual-parity MCP（可选）；未就绪时按官方降级链（页面走查 / 静态 DOM / 截图+样式）执行，不得声称像素级通过。安装指引见 `references/tooling.md`（playwright MCP 与 figma token 的 `~/.workbuddy/mcp.json` 配置）。

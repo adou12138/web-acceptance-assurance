@@ -4,7 +4,7 @@ from __future__ import annotations
 import json, os, shutil, subprocess, sys
 from pathlib import Path
 
-VERSION = "4.47.0"
+VERSION = "4.48.0"
 checks = []
 def add(id, status, detail): checks.append({"id": id, "status": status, "detail": detail})
 

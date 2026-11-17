@@ -23,9 +23,9 @@
 `mcp_visual-parity` 需通过 URL 访问参考页面。Figma 设计稿用流程阶段 2 的 `get_images` 导出的 PNG。
 
 1. **确认设计稿 PNG**：
-   - **通道 A**：用 `get_images` 导出，下载到本地 `PARITY_WORK_DIR\figma_spec.png`；若无下载能力，直接用返回的 PNG URL 作为 `referenceUrl`（需可公网访问）。
+   - **通道 A**：用取图工具导出——官方远程 MCP 是 `get_images`，figma-developer-mcp 是 `download_figma_images`（`pngScale` 控倍率）——下载到本地 `PARITY_WORK_DIR\figma_spec.png`；若无下载能力，直接用返回的 PNG URL 作为 `referenceUrl`（需可公网访问）。
    - **通道 B**：按 `references/figma-fields.md` 的通道 B 第 4 步，先取 `/v1/images` 的 S3 URL 再 curl 下载到 `PARITY_WORK_DIR\figma_spec.png`。**已实测**：1438×1127 的设计稿，`scale=2` 导出为 **2876×2254** PNG，约 287KB，可直接用。
-   - 两条通道都拿不到 PNG：退化为用节点数据（`get_file_nodes` 或 `/v1/files`、`/v1/files/.../nodes`）做**样式级对比**，跳过像素级对比，并在报告中明确标注。
+   - 两条通道都拿不到 PNG：退化为用节点数据（`get_file_nodes` / `get_figma_data` 或 `/v1/files`、`/v1/files/.../nodes`）做**样式级对比**，跳过像素级对比，并在报告中明确标注。
 
 2. **启动本地静态服务器**（`blocking=false`）：
 

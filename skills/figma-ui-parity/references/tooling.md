@@ -8,8 +8,8 @@
 
 | 通道 | 工具 / 方式 | 检查方式 | 可用 / 不可用时的处理 |
 |------|------------|----------|----------------------|
-| **A（优先）** | `mcp__figma` MCP | 用 `ToolSearch` 搜索 `mcp__figma`，确认 `get_file` / `get_file_nodes` / `get_images` 已加载 | 可用 → 走通道 A。不可用（搜不到、或报 `not found in the deferred tools index`）→ **自动切通道 B，不要要求用户去点 Trust** |
-| **B（回退，已实测可用）** | `curl` + `X-Figma-Token` 直连 Figma REST API | 执行 `curl -H "X-Figma-Token: <token>" https://api.figma.com/v1/me`，返回 **HTTP 200** 即通道可用 | 可用 → 走通道 B 完成流程阶段 2。返回 401 → token 失效，引导更新 `mcp.json` |
+| **A（优先）** | `mcp__figma` MCP（**两族工具名并存**） | 用 `ToolSearch` 搜 `figma`，按**能力**而非固定工具名判定：取节点数据 = `get_figma_data`（figma-developer-mcp）或 `get_file_nodes` / `get_file`（官方远程 MCP）；取图片 = `download_figma_images` 或 `get_images` | 命中任一族 → 走通道 A。一个都搜不到 → **自动切通道 B，不要要求用户去点 Trust** |
+| **B（回退，已实测可用）** | `curl` + `X-Figma-Token` 直连 Figma REST API | 按 1.2 口径取 token 后执行 `/v1/me`，返回 **HTTP 200** 即通道可用 | 可用 → 走通道 B 完成流程阶段 2。返回 401 → token 失效，引导更新 `mcp.json` |
 | — | `mcp__playwright` | 用 `ToolSearch` 搜 `mcp__playwright`，确认 `browser_navigate` / `browser_evaluate` / `browser_take_screenshot` / `browser_snapshot` 已加载 | 不可用 → 按下方"安装配置"在 `~/.workbuddy/mcp.json` 追加 `playwright` 服务器，并在连接器管理点 Trust |
 | — | `mcp_visual-parity` | 查看工具列表是否包含 `compare_pages` | 不可用 → **降级模式**：跳过流程阶段 5–6，仅用 Playwright + LLM 对比 |
 
@@ -52,10 +52,20 @@
 2. **先试通道 A**：用 `ToolSearch` 搜索 `mcp__figma`。
    - 搜到工具 → 通道 A 可用，进入流程阶段 2 的通道 A 分支。
    - 搜不到 → 进入第 3 步。
-3. **回退通道 B**：执行令牌探活。token 必须从 `~/.workbuddy/mcp.json` 的 `mcpServers.figma.headers.X-Figma-Token` 读取，**禁止在任何命令回显、日志或回复中打印明文 token**：
+3. **回退通道 B**：执行令牌探活。token 从 `~/.workbuddy/mcp.json` 的 `mcpServers.figma` 读取，**先看 `headers.X-Figma-Token`，再看 `env.FIGMA_API_KEY` / `env.FIGMA_TOKEN`**（官方远程 MCP 用 headers，figma-developer-mcp 等 stdio 服务器用 env）；**禁止在任何命令回显、日志或回复中打印明文 token**：
 
 ```bash
-TOKEN=$(python -c "import json,os;p=os.path.expanduser('~/.workbuddy/mcp.json');print(json.load(open(p,encoding='utf-8'))['mcpServers']['figma']['headers']['X-Figma-Token'])")
+TOKEN=$(python - <<'PY'
+import json, os
+cfg = json.load(open(os.path.expanduser("~/.workbuddy/mcp.json"), encoding="utf-8"))
+fig = (cfg.get("mcpServers") or {}).get("figma") or {}
+env = fig.get("env") or {}
+tok = (fig.get("headers") or {}).get("X-Figma-Token") or env.get("FIGMA_API_KEY") or env.get("FIGMA_TOKEN")
+if not tok:
+    raise SystemExit("figma token 未配置：headers.X-Figma-Token 与 env.FIGMA_API_KEY 均为空")
+print(tok)
+PY
+)
 curl -sS -m 20 -o me.json -w "HTTP:%{http_code}\n" -H "X-Figma-Token: $TOKEN" https://api.figma.com/v1/me
 ```
 
@@ -64,10 +74,10 @@ curl -sS -m 20 -o me.json -w "HTTP:%{http_code}\n" -H "X-Figma-Token: $TOKEN" ht
 | 返回情况 | 判定 | 处理动作 |
 |----------|------|----------|
 | HTTP 200（`/v1/me` 返回 email / handle） | token 有效、通道 B 可用 | ✅ 走通道 B，进入流程阶段 2 的通道 B 分支 |
-| 401 / 403 | token 失效 | ❌ 引导更新 `~/.workbuddy/mcp.json` 中 `figma` 的 `X-Figma-Token`（Figma 官网 Personal access tokens 页面生成） |
+| 401 / 403 | token 失效 | ❌ 引导更新 `~/.workbuddy/mcp.json` 中 `figma` 的 token（headers 或 env 按现有形态改；Figma 官网 Personal access tokens 页面生成） |
 | 两通道都不可用 | 无法访问设计稿 | ❌ 终止流程并说明原因，**不得伪造或猜测设计稿数据** |
 
-**注意**：通道 A 未激活是**正常且常见**的状态（MCP 按 workspace 单独激活），**不要因此要求用户去点 Trust**，直接切通道 B 即可。仅当用户明确希望走 MCP 通道时，才提示去连接器管理启用。
+**注意**：通道 A 未激活是**正常且常见**的状态（MCP 按 workspace 单独激活），**不要因此要求用户去点 Trust**，直接切通道 B 即可。仅当用户明确希望走 MCP 通道时，才提示去连接器管理启用。判“通道 A 不可用”的依据只能是**能力缺失**（搜不到任何取节点/取图工具），不能因为工具叫 `get_figma_data` 而不是 `get_file_nodes` 就判不可用。
 
 #### 1.3 token 新鲜度提醒
 
