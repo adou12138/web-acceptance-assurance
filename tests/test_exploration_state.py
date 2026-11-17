@@ -176,7 +176,7 @@ class ExplorationStateTests(unittest.TestCase):
         gate = self.report()["gate"]
         self.assertEqual(gate["ready_pending"], 1)
         self.assertEqual(gate["ready_pending_ids"], ["EXP-1"])
-        self.assertEqual(gate["missing_views"], ["交互易用性", "基础无障碍", "功能", "性能"])
+        self.assertEqual(gate["missing_views"], ["界面样式", "交互易用性", "基础无障碍", "功能", "性能"])
         self.assertEqual(gate["verdict_ceiling"], "待核实")
         self.assertIn("未执行", gate["message"])
 
@@ -194,16 +194,17 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertTrue(gate["traversal_recorded"])
         self.assertEqual(gate["verdict_ceiling"], "通过")
 
-    def test_gate_counts_skipped_view_with_reason_as_recorded_not_missing(self):
+    def test_gate_tracks_skipped_view_with_reason_but_does_not_count_it_as_executed(self):
         self.data["items"] = [
             self.item("EXP-1", status="SKIPPED", blocked_reason="本需求无性能指标", attributes=["performance"]),
             self.item("EXP-2", status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=["visual", "usability", "accessibility", "functional"]),
             self.item("EXP-TRAV-1", status="SKIPPED", blocked_reason="纯接口批次无页面控件可遍历", attributes=["functional", "usability"]),
         ]
         gate = self.report()["gate"]
-        self.assertEqual(gate["missing_views"], [])
+        self.assertEqual(gate["missing_views"], ["性能"])
+        self.assertEqual(gate["skipped_views"]["性能"], ["EXP-1"])
         self.assertTrue(gate["traversal_recorded"])
-        self.assertEqual(gate["verdict_ceiling"], "通过")
+        self.assertEqual(gate["verdict_ceiling"], "待核实")
 
     def test_gate_requires_traversal_entry_for_pass_ceiling(self):
         """E3：清单无控件遍历条目（EXP-TRAV-）时结论上限为待核实。"""
@@ -217,6 +218,12 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertEqual(gate["verdict_ceiling"], "待核实")
         self.assertIn("控件遍历", gate["message"])
 
+    def test_not_run_traversal_alone_does_not_count_as_recorded(self):
+        self.data["items"] = [self.item("EXP-TRAV-1", attributes=["functional", "visual", "usability"])]
+        gate = self.report()["gate"]
+        self.assertFalse(gate["traversal_recorded"])
+        self.assertEqual(gate["traversal_pending"], 1)
+
     def test_gate_traversal_pending_counted_separately(self):
         """E3：遍历条目仍为 NOT_RUN 时计入 traversal_pending 并压低结论上限。"""
         attributes = {"visual": ["visual"], "usability": ["usability"], "accessibility": ["accessibility"],
@@ -224,6 +231,8 @@ class ExplorationStateTests(unittest.TestCase):
         items = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=attrs)
                  for name, attrs in attributes.items()]
         items.append(self.item("EXP-TRAV-1", attributes=["functional", "visual", "usability"]))
+        items.append(self.item("EXP-TRAV-2", status="PASS", observation="已清点控件",
+                               evidence_paths=[str(self.evidence)], attributes=["functional", "visual", "usability"]))
         self.data["items"] = items
         gate = self.report()["gate"]
         self.assertTrue(gate["traversal_recorded"])
@@ -295,6 +304,38 @@ class ExplorationStateTests(unittest.TestCase):
             self.assertFalse(output.exists())
         source.write_text(json.dumps(self.data), encoding="utf-8")
         self.assertEqual(self.cli(source, self.folder / "absent" / "new.csv").returncode, 2)
+
+    def test_skipped_and_blocked_views_do_not_satisfy_gate(self):
+        self.data["items"] = [
+            self.item("EXP-TRAV-1", attributes=["functional"], status="PASS",
+                      observation="已实测", evidence_paths=[str(self.evidence)]),
+            self.item("EXP-V", attributes=["visual"], status="SKIPPED", blocked_reason="未执行"),
+            self.item("EXP-U", attributes=["usability"], status="BLOCKED", blocked_reason="无表单"),
+            self.item("EXP-A", attributes=["accessibility"], status="SKIPPED", blocked_reason="未执行"),
+            self.item("EXP-P", attributes=["performance"], status="SKIPPED", blocked_reason="无阈值"),
+        ]
+        report = self.report()
+        gate = report["gate"]
+        self.assertEqual(gate["verdict_ceiling"], "待核实")
+        self.assertEqual(gate["missing_views"], ["界面样式", "交互易用性", "基础无障碍", "性能"])
+        self.assertEqual(gate["executed_views"]["功能"], ["EXP-TRAV-1"])
+        self.assertEqual(gate["skipped_views"]["性能"], ["EXP-P"])
+        self.assertEqual(report["views"]["性能"], ["EXP-P"], "兼容字段仍保留全部记录")
+
+    def test_executed_view_restores_ceiling_with_skipped_sibling(self):
+        passed = lambda ident, attr: self.item(ident, attributes=[attr], status="PASS",
+                                                observation="已实测", evidence_paths=[str(self.evidence)])
+        self.data["items"] = [
+            self.item("EXP-TRAV-1", attributes=["functional"], status="PASS",
+                      observation="已实测", evidence_paths=[str(self.evidence)]),
+            passed("EXP-V", "visual"), passed("EXP-U", "usability"),
+            passed("EXP-A", "accessibility"), passed("EXP-P", "performance"),
+            self.item("EXP-V2", attributes=["visual"], status="SKIPPED", blocked_reason="附带未执行项"),
+        ]
+        gate = self.report()["gate"]
+        self.assertEqual(gate["missing_views"], [])
+        self.assertEqual(gate["verdict_ceiling"], "通过")
+        self.assertEqual(gate["skipped_views"]["界面样式"], ["EXP-V2"])
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ def _bugs(value):
         _text(bug.get("id"), "bug.id")
         if bug["id"] in ids or bug.get("severity") not in SEVERITIES or bug.get("status") not in BUG_STATES:
             raise ValueError("duplicate/invalid bug ID, severity or status")
+        for key in ("source", "external_id"):
+            if key in bug:
+                _text(bug[key], "bug." + key)
         ids.add(bug["id"])
     return value
 
@@ -69,7 +72,10 @@ def _context(value):
 def _design(value):
     errors, warnings = validate_design(value)
     if errors:
-        raise ValueError("invalid case design: " + "; ".join(errors))
+        hint = ""
+        if not isinstance(value, dict) or not isinstance(value.get("testcases"), list):
+            hint = "；若用例来自 qa-req2testcase-generator，请改用砺衡 case-generator 重新生成（本台账只接受 case_data schema 1.0）"
+        raise ValueError("invalid case design: " + "; ".join(errors) + hint)
     return {case["id"]: case for case in value["testcases"]}, warnings
 
 
@@ -81,16 +87,39 @@ def _write_json_new(path, value):
         os.fsync(stream.fileno())
 
 
-def initialize(workspace, design, context, round_id, known_issues=None):
+def _gate_precondition(batches, gate_report):
+    """校验第 2→3 跳进门条件；两者均为可选，未提供时保持旧行为。"""
+    info = {}
+    if batches is not None:
+        if not isinstance(batches, dict) or not isinstance(batches.get("batches"), list) or not batches["batches"]:
+            raise ValueError("batches must be a batch state object with a nonempty batches array")
+        bad = [str(b.get("unit_id", "?")) for b in batches["batches"]
+               if not isinstance(b, dict) or b.get("status") != "done" or b.get("gate") not in {"pass", "waived"}]
+        if bad:
+            raise ValueError("design gate not closed: " + ", ".join(bad) + "（批次未完成或门禁未通过）")
+        info["batches_closed"] = True
+    if gate_report is not None:
+        if not isinstance(gate_report, dict) or gate_report.get("status") not in {"pass", "warning"}:
+            raise ValueError("gate report must be pass/warning; fail or missing status blocks execution")
+        failed = [str(c.get("id", "?")) for c in gate_report.get("checks", [])
+                  if isinstance(c, dict) and c.get("status") == "failed"]
+        if failed:
+            raise ValueError("gate report has failed checks: " + ", ".join(failed))
+        info["gate_report_status"] = gate_report["status"]
+    return info
+
+
+def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
     _bugs(known_issues)
+    gate_precondition = _gate_precondition(batches, gate_report)
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
     workspace.mkdir(exist_ok=False)
-    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings}
+    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition}
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
@@ -308,6 +337,8 @@ def main():
         if command == "init":
             part.add_argument("round_id")
             part.add_argument("--bugs")
+            part.add_argument("--batches", help="case-generator 的 batches.json；未闭环时拒绝建台账")
+            part.add_argument("--gate-report", help="设计门禁报告；fail 时拒绝建台账")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -320,7 +351,10 @@ def main():
     try:
         design, context = _load(args.design), _load(args.context)
         if args.command == "init":
-            result = initialize(args.workspace, design, context, args.round_id, _load(args.bugs) if args.bugs else None)
+            result = initialize(args.workspace, design, context, args.round_id,
+                                _load(args.bugs) if args.bugs else None,
+                                _load(args.batches) if args.batches else None,
+                                _load(args.gate_report) if args.gate_report else None)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

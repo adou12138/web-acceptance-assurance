@@ -6,7 +6,7 @@ S0 结构校验先跑；结构不过则不计算后续文本门禁（避免在�
 不自动改用例、不做超标自动降级；失败输出定位到 case_id 或批次号。
 
 检查项：S0 / G1 / G1.5 / G2 / G3 / G4 / G5 / G6 / G7 / V05 / V07 / V08 / V09 /
-V11 / V12 / V13 / COV / RATIO-SMOKE / RATIO-P0（含小样本例外与批内告警）。
+V11 / V12 / V13 / COV / COV-PATH / COV-UI / RATIO-SMOKE / RATIO-P0（含小样本例外与批内告警）。
 
 退出码：0=通过；1=门禁不通过；2=用法/输入/依赖错误。
 """
@@ -148,6 +148,7 @@ class GateRunner:
         self._cov(cases, tcs)
         self._ratios(cases, tcs, th)
         self._cov_path(cases)
+        self._cov_ui(cases, tcs)
         return self._summary(cases, t0)
 
     # G1 步骤具体性（规则集可由 policy.gate_rules.g1 覆盖）
@@ -512,6 +513,26 @@ class GateRunner:
         else:
             self.record("COV-PATH", "异常与权限路径配比", "BLOCK", issues,
                         f"exception_coverage={coverage:.0%} ≥ {min_ratio} 且豁免均已按对象形态举证")
+
+    # COV-UI：界面/无障碍维度为零时必须逐类裁定，不得静默跳过（E4）
+    def _cov_ui(self, cases, tcs):
+        rule = self.policy.get("gate_rules", {}).get("cov_ui", {})
+        attrs = rule.get("required_attributes", ["visual", "accessibility"])
+        exempt = set(rule.get("exempt_states", ["not_applicable", "insufficient_evidence", "deferred"]))
+        applicability = cases.get("applicability") if isinstance(cases.get("applicability"), dict) else {}
+        issues = []
+        for attr in attrs:
+            count = sum(1 for tc in tcs if attr in (tc.get("attributes") or []))
+            if count:
+                continue
+            entry = applicability.get(attr)
+            state = entry.get("state") if isinstance(entry, dict) else None
+            reason = entry.get("reason") if isinstance(entry, dict) else None
+            if state in exempt and isinstance(reason, str) and reason.strip():
+                continue
+            issues.append({"case_id": "_ui_", "why": f"{attr} 用例为 0 且 applicability 未给出 {sorted(exempt)} 裁定与理由"})
+        self.record("COV-UI", "界面与无障碍零覆盖举证", "BLOCK", issues,
+                    f"{'/'.join(attrs)} 有用例或已逐类裁定不覆盖")
 
     def _summary(self, cases, t0):
         tcs = cases.get("testcases", [])

@@ -1,0 +1,359 @@
+{
+  "$comment": "检查维度稳定命名空间。正文流程步骤为 1-9，本表 7.x 为检查维度编号，两者正交；references 内的 7.x 引用一律指向本表。",
+  "version": "1.0",
+  "dimensions": [
+    {
+      "id": "7.1",
+      "name": "静态样式检查清单",
+      "scope": "尺寸/间距/排版/视觉/内容适配",
+      "owner": "references/extraction.md",
+      "automation": "partial",
+      "script": "scripts/compare_fields.py"
+    },
+    {
+      "id": "7.2",
+      "name": "交互状态对比",
+      "scope": "hover / active / disabled",
+      "owner": "references/extraction.md",
+      "automation": "partial"
+    },
+    {
+      "id": "7.3",
+      "name": "图标与图片对比",
+      "scope": "区块级图标与图片整体核对",
+      "owner": "references/extraction.md",
+      "automation": "partial"
+    },
+    {
+      "id": "7.4",
+      "name": "响应式/多视口实测",
+      "scope": "断点溢出、跑出视口、截断、触控目标、constraints 断言",
+      "owner": "references/responsive.md",
+      "automation": "partial",
+      "script": "scripts/responsive_check.js"
+    },
+    {
+      "id": "7.5",
+      "name": "图标成对精确比对",
+      "scope": "形状指纹/颜色/邻近文本",
+      "owner": "references/icon-diff.md",
+      "automation": "partial",
+      "script": "scripts/extract_icons.js"
+    },
+    {
+      "id": "7.6",
+      "name": "排列顺序比对",
+      "scope": "同容器内元素顺序",
+      "owner": "references/extraction.md",
+      "automation": "partial",
+      "script": "scripts/order_divider_scroll_check.js"
+    },
+    {
+      "id": "7.7",
+      "name": "装饰元素（分隔线）比对",
+      "scope": "分隔线位置、间距、多余/缺失",
+      "owner": "references/extraction.md",
+      "automation": "partial",
+      "script": "scripts/order_divider_scroll_check.js"
+    },
+    {
+      "id": "7.8",
+      "name": "重复文案与文案一致性",
+      "scope": "文案逐字比对、重复文案错位",
+      "owner": "references/extraction.md",
+      "automation": "partial",
+      "script": "scripts/compare_fields.py"
+    },
+    {
+      "id": "7.9",
+      "name": "免滚动可达性",
+      "scope": "主操作是否需滚动才可见",
+      "owner": "references/extraction.md",
+      "automation": "partial",
+      "script": "scripts/order_divider_scroll_check.js"
+    },
+    {
+      "id": "7.10",
+      "name": "跨环境对比",
+      "scope": "多环境差异合并跟踪（无多环境时 notRun）",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "none"
+    },
+    {
+      "id": "7.11",
+      "name": "缺陷记录携带元素定位与现象",
+      "scope": "每条缺陷必须有 symptom + element",
+      "owner": "references/report-templates.md",
+      "automation": "partial",
+      "script": "scripts/validate_defects.py"
+    },
+    {
+      "id": "7.12",
+      "name": "待确认问题记录",
+      "scope": "pending 项与确定缺陷分离",
+      "owner": "references/report-templates.md",
+      "automation": "partial",
+      "script": "scripts/assemble_report.py"
+    },
+    {
+      "id": "7.13",
+      "name": "复合元素内部对齐",
+      "scope": "图文居中、必填标识、hint 对齐",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial",
+      "script": "scripts/alignment_modal_checks.js"
+    },
+    {
+      "id": "7.14",
+      "name": "弹框/浮层逐个走查",
+      "scope": "每个弹框内部逐项检查",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial",
+      "script": "scripts/alignment_modal_checks.js"
+    },
+    {
+      "id": "7.15",
+      "name": "控件内容完整显示与多余文案",
+      "scope": "截断、省略、多余标点",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial"
+    },
+    {
+      "id": "7.16",
+      "name": "长内容布局与状态相关显隐",
+      "scope": "异常空白、状态切换后显隐",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial"
+    },
+    {
+      "id": "7.17",
+      "name": "表单校验与错误态",
+      "scope": "必填/错误/成功/禁用态与边界校验",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial",
+      "script": "scripts/discover_scenarios.py"
+    },
+    {
+      "id": "7.18",
+      "name": "浮层/下拉/弹框交互与层级",
+      "scope": "裁切、层级、关闭行为、锚点跟随",
+      "owner": "references/button-audit.md",
+      "automation": "partial"
+    },
+    {
+      "id": "7.19",
+      "name": "可访问性与键盘可用性",
+      "scope": "无障碍名称、Tab 顺序、焦点、键盘操作",
+      "owner": "references/aria-diff.md",
+      "automation": "partial",
+      "script": "scripts/capture_aria.js"
+    },
+    {
+      "id": "7.20",
+      "name": "加载/空态/禁用态",
+      "scope": "skeleton、empty、loading、数据切换重置",
+      "owner": "references/state-journey.md",
+      "automation": "partial",
+      "script": "scripts/discover_scenarios.py + scripts/extra_checks.js"
+    },
+    {
+      "id": "7.21",
+      "name": "长文本/多语言/密集数据适配",
+      "scope": "长文案、混排、多条目、列表密度",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "partial",
+      "script": "scripts/discover_scenarios.py"
+    },
+    {
+      "id": "7.22",
+      "name": "按钮可用性与点击生效",
+      "scope": "三层判定：可点击性、生效信号、还原",
+      "owner": "references/button-audit.md",
+      "automation": "script",
+      "script": "scripts/node/run_button_audit.cjs"
+    },
+    {
+      "id": "7.23",
+      "name": "元素双向盘点",
+      "scope": "设计稿有页面无 / 页面有设计稿无",
+      "owner": "references/button-audit.md",
+      "automation": "script",
+      "script": "scripts/compare_fields.py"
+    },
+    {
+      "id": "7.24",
+      "name": "图片与插画适配",
+      "scope": "宽高比失真、object-fit、裁剪、加载失败占位",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.25",
+      "name": "暗色模式与主题切换",
+      "scope": "prefers-color-scheme、硬编码颜色、主题切换后残留",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js + scripts/state_probes.js（驱动 scripts/node/run_state_scenarios.cjs）"
+    },
+    {
+      "id": "7.26",
+      "name": "打印与导出视图",
+      "scope": "打印样式丢失、表格截断、按钮误入",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/state_probes.js（页内探测，驱动 scripts/node/run_state_scenarios.cjs）"
+    },
+    {
+      "id": "7.27",
+      "name": "多行文本截断与省略",
+      "scope": "line-clamp、行数、末行省略、高度跳动",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.28",
+      "name": "表单控件细节",
+      "scope": "placeholder 样式、caret、autocomplete、数字/密码控件",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.29",
+      "name": "焦点可见性与键盘细节",
+      "scope": "outline/focus-visible、焦点陷阱、快捷键",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.30",
+      "name": "国际化细节",
+      "scope": "RTL、emoji、全角半角、长文案截断",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.31",
+      "name": "滚动 UX",
+      "scope": "滚动条、固定底栏遮挡、sticky 头部、滚动锁定",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/extra_checks.js"
+    },
+    {
+      "id": "7.32",
+      "name": "页面级状态残留",
+      "scope": "SPA 路由切换、多标签页、返回/刷新后状态",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/discover_scenarios.py + scripts/node/run_state_scenarios.cjs"
+    },
+    {
+      "id": "7.33",
+      "name": "接口异常与慢网络下的界面",
+      "scope": "网络条件矩阵：接口 500 / 断网（请求发不出去）/ 弱网（慢但成功）下的白屏、骨架残留、错误提示与加载反馈缺失",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "script",
+      "script": "scripts/node/run_state_scenarios.cjs"
+    },
+    {
+      "id": "7.34",
+      "name": "角色与权限态视图差异",
+      "scope": "不同角色看到的结构与操作差异",
+      "owner": "references/bug-driven-checks.md",
+      "automation": "none"
+    },
+    {
+      "id": "7.35",
+      "name": "运行期 JS 异常",
+      "scope": "console.error / window.onerror / unhandledrejection",
+      "owner": "references/runtime-observability.md",
+      "automation": "script",
+      "script": "scripts/runtime_observability.js"
+    },
+    {
+      "id": "7.36",
+      "name": "交互期网络失败",
+      "scope": "fetch/XHR 非 2xx 或网络错误（含 5xx 优先）",
+      "owner": "references/runtime-observability.md",
+      "automation": "script",
+      "script": "scripts/runtime_observability.js"
+    },
+    {
+      "id": "7.37",
+      "name": "重复请求/重复提交",
+      "scope": "同一写请求在短窗口内重复发出",
+      "owner": "references/runtime-observability.md",
+      "automation": "script",
+      "script": "scripts/runtime_observability.js"
+    },
+    {
+      "id": "7.38",
+      "name": "可交互元素遮挡",
+      "scope": "可交互元素被其他元素覆盖、点击落不到",
+      "owner": "references/runtime-observability.md",
+      "automation": "script",
+      "script": "scripts/runtime_observability.js"
+    },
+    {
+      "id": "7.39",
+      "name": "多页用户旅程",
+      "scope": "跨页导航：404/500 落地页、落地空白、链接无反应、返回中断、中途弹登录",
+      "owner": "references/journeys.md",
+      "automation": "script",
+      "script": "scripts/node/run_journeys.cjs"
+    },
+    {
+      "id": "7.40",
+      "name": "性能与核心网页指标",
+      "scope": "TTFB / FCP / LCP / CLS / TBT 长任务 / 资源传输体积 / 未压缩大图；无网络节流时耗时只记 warn",
+      "owner": "references/performance.md",
+      "automation": "script",
+      "script": "scripts/performance_probe.js（驱动 scripts/node/run_performance.cjs）"
+    },
+    {
+      "id": "7.41",
+      "name": "可访问性规则合规",
+      "scope": "WCAG 2.1 A/AA 子集：图片替代文本、控件命名、标签关联、标题层级、lang、main 地标、ARIA 合法性、tabindex、对比度、重复 id；可选叠加 axe-core",
+      "owner": "references/a11y-rules.md",
+      "automation": "script",
+      "script": "scripts/a11y_audit.js（驱动 scripts/node/run_a11y_audit.cjs）"
+    },
+    {
+      "id": "7.42",
+      "name": "设计稿侧文本对比度",
+      "scope": "在设计模型上直接算文本对比度（WCAG 1.4.3 AA）；图片底/渐变底/半透明祖先降级 pending，不按白底硬判",
+      "owner": "references/design-contrast.md",
+      "automation": "script",
+      "script": "scripts/design_contrast.py"
+    },
+    {
+      "id": "7.43",
+      "name": "键盘可达性与焦点顺序",
+      "scope": "Tab 能否走到每个可聚焦元素、顺序是否与 DOM 一致、正 tabindex、弹层焦点逃逸",
+      "owner": "references/keyboard-a11y.md",
+      "automation": "script",
+      "script": "scripts/keyboard_order.js（驱动 scripts/node/run_keyboard_order.cjs）"
+    },
+    {
+      "id": "7.44",
+      "name": "交互首响应时延",
+      "scope": "点击到首个实质变化（URL/弹层/请求/DOM/文本）的时间；>1000ms warn，>2000ms 缺陷",
+      "owner": "references/performance.md",
+      "automation": "script",
+      "script": "scripts/node/run_button_audit.cjs + scripts/node/response_timer.cjs"
+    },
+    {
+      "id": "7.45",
+      "name": "请求载荷完整性",
+      "scope": "参数占位符泄漏（undefined/NaN/[object Object]/未替换模板）、同名参数重复、写请求零参数",
+      "owner": "references/runtime-observability.md",
+      "automation": "script",
+      "script": "scripts/runtime_observability.js"
+    }
+  ]
+}

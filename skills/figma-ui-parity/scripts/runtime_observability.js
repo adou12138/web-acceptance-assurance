@@ -1,0 +1,500 @@
+/*
+ * 运行期观测（页面内执行）——补上「静态探测 / 视觉比对」看不到的一类真实缺陷：
+ *   - 7.35 运行期 JS 异常（console.error / window.onerror / unhandledrejection）
+ *   - 7.36 交互期网络失败（fetch / XHR 非 2xx 或网络错误）
+ *   - 7.37 重复请求 / 重复提交（同一写请求在短窗口内重复发出）
+ *   - 7.38 遮挡（可交互元素被其他元素盖住，用户点不到）
+ *
+ * 为什么需要：extra_checks.js 只读 DOM 与 computed style，看不到"交互过程中炸了没"。
+ * JS 报错、接口 500、重复提交、元素被盖住——这几类都是用户真实遇到、但静态快照
+ * 抓不到的缺陷。本文件把它们变成可机械采集的证据。
+ *
+ * 用法（两阶段，自动识别）：
+ *   ① 页面加载稳定后调用一次 → 安装钩子，返回 {mode:"install"}
+ *   ② 完成本轮交互后再调用一次 → 采集并返回 {mode:"collect", findings[]}
+ *   （钩子挂在 window.__vpObs 上，跨两次 evaluate 保持）
+ *
+ * 约束：全文不出现反斜杠转义（换行用 String.fromCharCode(10) 构造），
+ *       避免 MCP 传参吃掉一层反斜杠导致静默改语义。
+ * 判据保守：不确定的一律降为 pending / 跳过，宁可漏报不造假缺陷。
+ */
+(() => {
+  const NL = String.fromCharCode(10);
+
+  /* ================= 凭据脱敏（F31 红线） =================
+   * 写请求 body 原文 / 失败请求 query 会进 findings.raw 并一路流到 report.json /
+   * CSV / xlsx——登录、改密表单的 urlencoded body 里有明文密码，带 token 的请求
+   * query 里有会话凭据。SKILL.md 红线「产物不得写入 token/Cookie」必须有采集端
+   * 执行点，而不是只写在注释里。命中敏感键名的值一律替换为 [REDACTED]。
+   */
+  const SENSITIVE_KEY = /(password|passwd|pwd|token|secret|authorization|auth|cookie|session|apikey|api[-_]?key|access[-_]?key|credential|jwt|bearer|apikey|sig|signature|ticket)/i;
+  const redact = (text) => {
+    let s = String(text == null ? '' : text);
+    if (!s) return s;
+    // ① urlencoded / 表单形态：password=xxx&token=yyy（值取到 & 或结尾）
+// 【审查修复】值字符集补上分号排除：原先 `[^&\s]*` 会把分号一起吃掉，
+    // 于是「sessionid=zzz; theme=dark」变成「sessionid=[REDACTED] theme=dark」——
+    // 分号消失后，同一 Cookie 头里的后续项被并进已打码的值里而整段丢失。
+    // urlencoded 与 Cookie 都以 & / ; 作分隔符，排除它才是正确边界。
+    s = s.replace(/([?&]?)([A-Za-z0-9_\-]*?(?:password|passwd|pwd|token|secret|apikey|api_key|access_key|credential|authorization|session)[A-Za-z0-9_\-]*)(=)([^&;\s]*)/gi,
+      (m, pre, key, eq) => pre + key + eq + '[REDACTED]');
+    // ② JSON 形态："password":"xxx" / 'token': 'yyy'
+    s = s.replace(/(["'])(?:(?!\1)[^\\])*?(?:password|passwd|pwd|token|secret|apikey|api_key|access_key|credential|authorization|session)(?:(?!\1)[^\\])*?\1(\s*:\s*)(["'])(?:(?!\3).)*?\3/gi,
+      (m, q1, mid, q2) => q1.slice(0, 1) + mid + q2 + '[REDACTED]' + q2);
+    // ③ Bearer / Basic 请求头形态
+    s = s.replace(/(Bearer\s+)[A-Za-z0-9._\-]+/gi, '$1[REDACTED]');
+    s = s.replace(/(Basic\s+)[A-Za-z0-9+/=]+/gi, '$1[REDACTED]');
+    // 【审查修复】④ Cookie / Set-Cookie 请求头形态——此前完全不在覆盖范围内。
+    // 形如「Cookie: SID=abcdef123456; sessionid=zzz; theme=dark」里的会话凭据会**明文**
+    // 进 findings.raw 并一路流到 report.json / CSV / xlsx，直接违反 SKILL.md 红线
+    // 「产物不得写入 token / Cookie」。按 ; 拆分逐项判定：无害偏好（theme）保留，
+    // 凭据类键名打码。键名判定复用 SENSITIVE_KEY，另加 sid/csrf/xsrf 这类
+    // 不在通用词表里的会话键前缀族（注意前缀族里不能出现连字符相邻的星号）。
+    const cookieSecret = (k) => SENSITIVE_KEY.test(k)
+      || /^(?:sid|phpsessid|jsessionid|sessionid|csrf[\w-]+|xsrf[\w-]+)$/i.test(k);
+    s = s.replace(/((?:^|[\s;])(?:cookie|set-cookie)\s*:\s*)([^\r\n]+)/gi,
+      (m, pre, val) => pre + val.split(';').map(part => {
+        const eq = part.indexOf('=');
+        if (eq < 0) return part;
+        const k = part.slice(0, eq);
+        // 只替换等号之后的值，保留键名与分隔符——若整段替换，值里残留的其它片段
+        // （例如规则 ① 已打码但未切分的尾巴）会被一起丢掉。
+        return cookieSecret(k.trim()) ? part.slice(0, eq + 1) + '[REDACTED]' : part;
+      }).join(';'));
+    return s;
+  };
+  const redactUrl = (u) => {
+    let s = String(u == null ? '' : u);
+    if (!s) return s;
+    // query 里带 token/session 的 URL 打码（保留 path 可定位）
+    return s.replace(/((?:\?|&)[^=\s]*?(?:token|session|auth|key|secret|credential)[^=\s]*?=)[^&\s]*/gi, '$1[REDACTED]');
+  };
+
+  const visible = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0;
+  };
+
+  // 类名转义：Tailwind 任意值类名拼进选择器即非法 CSS，下游按 selector 定位会失败，
+  // 缺陷因此拿不到位置图。契约见 tests/test_selector_escape_contract.py。
+  const escCls = (name) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(name);
+    const raw = String(name);
+    for (let i = 0; i < raw.length; i += 1) {
+      const c = raw.charCodeAt(i);
+      const ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || raw[i] === '_' || raw[i] === '-';
+      if (!ok) return '';
+    }
+    return raw;
+  };
+
+  const selectorOf = (el) => {
+    if (!el || !el.tagName) return '';
+    const tag = el.tagName.toLowerCase();
+    let cand;
+    if (el.id) cand = '#' + escCls(el.id);
+    else {
+      const cls = (el.className && typeof el.className === 'string')
+        ? el.className.split(String.fromCharCode(32)).filter(Boolean).slice(0, 2).map(escCls).filter(Boolean).join('.')
+        : '';
+      cand = tag + (cls ? '.' + cls : '');
+    }
+    try {
+      document.querySelectorAll(cand);
+      return cand;
+    } catch (e) {
+      return tag;
+    }
+  };
+
+  const rectOf = (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + window.scrollX), y: Math.round(r.top + window.scrollY), w: Math.round(r.width), h: Math.round(r.height) };
+  };
+
+  const findings = [];
+  const push = (dimension, symptom, expected, actual, el, extra) => {
+    findings.push(Object.assign({
+      dimension,
+      symptom,
+      expected,
+      actual,
+      severityHint: (extra && extra.severityHint) || 'P2',
+      severity: (extra && extra.severityHint) || 'P2',
+      confidence: extra && extra.confidence != null ? extra.confidence : 0.8,
+      status: (extra && extra.status) || 'confirmed',
+      category: (extra && extra.category) || dimension,
+      element: el ? { selector: selectorOf(el), nth: 0, bbox: rectOf(el), anchor: (el.innerText || el.getAttribute('aria-label') || '').slice(0, 30) } : null,
+      evidence: [{ type: (extra && extra.evidenceType) || 'runtime-probe', result: 'mismatch' }],
+      sources: ['runtime-observability'],
+      property: (extra && extra.property) || null,
+    }, extra && extra.raw ? { raw: extra.raw } : {}));
+  };
+
+  /* ================= ① 安装钩子 ================= */
+  if (!window.__vpObs) {
+    const obs = { errors: [], requests: [], startedAt: Date.now() };
+    window.__vpObs = obs;
+
+    const origError = typeof console.error === 'function' ? console.error.bind(console) : null;
+    console.error = function () {
+      try {
+        const text = Array.prototype.map.call(arguments, (a) => String(a && a.message ? a.message : a)).join(' ');
+        obs.errors.push({ kind: 'console', text, at: Date.now() });
+      } catch (e) { /* 采集失败不得影响页面 */ }
+      if (origError) { try { origError.apply(console, arguments); } catch (e) {} }
+    };
+    window.addEventListener('error', (ev) => {
+      obs.errors.push({
+        kind: 'onerror',
+        text: String((ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error'),
+        source: ev && ev.filename ? String(ev.filename) : '',
+        at: Date.now(),
+      });
+    });
+    window.addEventListener('unhandledrejection', (ev) => {
+      const r = ev && ev.reason;
+      obs.errors.push({ kind: 'unhandledrejection', text: String((r && r.message) || r || 'unhandled rejection'), at: Date.now() });
+    });
+
+    if (window.fetch) {
+      const of = window.fetch;
+      window.fetch = function () {
+        const args = arguments;
+        const url = String(args[0] && args[0].url ? args[0].url : args[0]);
+        const method = String((args[1] && args[1].method) || (args[0] && args[0].method) || 'GET').toUpperCase();
+        const rawBody = args[1] && args[1].body;
+        // bodyKind 决定「这段 body 能不能拿来判参数」：FormData / Blob / ArrayBuffer
+        // 经 String() 会变成 "[object FormData]" 这类字符串，看着像占位符泄漏，
+        // 其实是采集侧的转换产物。不可读的 body 一律不参与载荷判定。
+        const bodyKind = rawBody == null ? 'none'
+          : (typeof rawBody === 'string' ? 'string'
+            : String((rawBody.constructor && rawBody.constructor.name) || 'other'));
+        const body = rawBody ? String(rawBody) : '';
+        const at = Date.now();
+        return of.apply(this, args).then((resp) => {
+          const rec = { url, method, body, bodyKind, status: resp.status, ok: !!resp.ok, at };
+          obs.requests.push(rec);
+          // 响应体只留前 2KB：HTTP 200 + {"success":false} 这类"接口报错但界面显示成功"
+          // 的缺陷，只看 status 永远看不到。clone 读取不消费原响应，失败静默不计。
+          try {
+            const ct = String((resp.headers && resp.headers.get && resp.headers.get('content-type')) || '');
+            if (ct.indexOf('json') >= 0 || ct.indexOf('text') >= 0 || ct.indexOf('html') >= 0) {
+              resp.clone().text()
+                .then((t) => { rec.bodyText = redact(String(t).slice(0, 2000)); })
+                .catch((e) => { rec.bodyError = String((e && e.message) || e).slice(0, 80); });
+            }
+          } catch (e) { rec.bodyError = String((e && e.message) || e).slice(0, 80); }
+          return resp;
+        }, (err) => {
+          obs.requests.push({ url, method, body, bodyKind, status: 0, ok: false, at, error: String((err && err.message) || err) });
+          throw err;
+        });
+      };
+    }
+    if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+      const O = window.XMLHttpRequest.prototype.open;
+      const Sd = window.XMLHttpRequest.prototype.send;
+      window.XMLHttpRequest.prototype.open = function (m, u) {
+        this.__vp = { method: String(m || 'GET').toUpperCase(), url: String(u), body: '', bodyKind: 'none', at: 0 };
+        return O.apply(this, arguments);
+      };
+      window.XMLHttpRequest.prototype.send = function (b) {
+        const self = this;
+        if (self.__vp) {
+          self.__vp.body = b ? String(b) : '';
+          self.__vp.bodyKind = b == null ? 'none'
+            : (typeof b === 'string' ? 'string' : String((b.constructor && b.constructor.name) || 'other'));
+          self.__vp.at = Date.now();
+          self.addEventListener('loadend', () => {
+            try {
+              const ok = self.status >= 200 && self.status < 300;
+              const rec = { url: self.__vp.url, method: self.__vp.method, body: self.__vp.body,
+                            bodyKind: self.__vp.bodyKind, status: self.status, ok, at: self.__vp.at };
+              // 同上：responseType 为 text/空时才读，否则拿到的是对象不是文本
+              if (!self.responseType || self.responseType === 'text') {
+                try { rec.bodyText = redact(String(self.responseText || '').slice(0, 2000)); } catch (e) {}
+              }
+              obs.requests.push(rec);
+            } catch (e) {}
+          });
+        }
+        return Sd.apply(this, arguments);
+      };
+    }
+    return JSON.stringify({ mode: 'install', installed: true, startedAt: obs.startedAt });
+  }
+
+  /* ================= ② 采集 ================= */
+  const obs = window.__vpObs;
+  // 【F11】钩子未安装时不得静默返回 []（与「页面干净」不可区分）：带显式标记返回，
+  // 调用方据 hooksInstalled=false 填 notRun。
+  if (!obs) {
+    return JSON.stringify({
+      mode: 'collect', url: location.href, findings: [],
+      hooksInstalled: false, interactionsObserved: 0,
+      note: '钩子未安装（本页面未执行过 install 阶段）——本轮采集无效，'
+          + '7.35-7.38 必须填 notRun，不得视为「页面干净」。',
+      summary: { total: 0, byDimension: {}, errorCount: 0, requestCount: 0, overlayOpen: false },
+    });
+  }
+
+  // --- 7.35 运行期 JS 异常（按文本去重，最多 20 条）---
+  const seenErr = {};
+  obs.errors.forEach((e) => {
+    const key = e.kind + '|' + e.text;
+    if (seenErr[key]) return;
+    seenErr[key] = 1;
+    if (findings.filter((f) => f.dimension === '7.35').length >= 20) return;
+    const isReject = e.kind === 'unhandledrejection';
+    push('7.35', '页面运行期抛出未捕获异常：' + e.text.slice(0, 120), '控制台无未捕获错误，交互不中断',
+      e.kind + (e.source ? ' @ ' + e.source : '') + '：' + e.text.slice(0, 160), null,
+      { severityHint: 'P1', confidence: 0.85, property: 'js-error', evidenceType: 'error-hook',
+        raw: { kind: e.kind, text: e.text.slice(0, 300) } });
+  });
+
+  // --- 7.36 交互期网络失败（写请求与非 2xx；GET 失败也采，但 5xx 优先）---
+  const seenReq = {};
+  obs.requests.forEach((r) => {
+    const failed = !r.ok;
+    if (!failed) return;
+    const key = r.method + ' ' + r.url + ' ' + r.status;
+    if (seenReq[key]) return;
+    seenReq[key] = 1;
+    if (findings.filter((f) => f.dimension === '7.36').length >= 20) return;
+    const server = r.status >= 500 || r.status === 0;
+    push('7.36', '交互过程中请求失败：' + r.method + ' ' + redactUrl(r.url) + '（状态 ' + r.status + '）',
+      '交互触发的请求应成功返回；失败时界面应给出明确提示而非静默',
+      '状态码 ' + r.status + (r.error ? '，错误 ' + r.error : ''), null,
+      { severityHint: server ? 'P1' : 'P2', confidence: 0.8, property: 'network-failure', evidenceType: 'request-hook',
+        raw: { method: r.method, url: redactUrl(r.url), status: r.status, body: redact(String(r.body || '').slice(0, 200)) } });
+  });
+
+  // --- 7.36 业务码与错误页（HTTP 200 也可能是失败）---
+  // 只看 status 会漏掉一整类最阴的缺陷：接口返回 200 + {"success":false} / errcode!=0，
+  // 前端照常渲染"保存成功"。判据必须保守，否则每个返回 code:200 的正常接口都会中招：
+  //   ① 明确的失败字段（success/ok 为 false、errcode 非 0）→ pending，业务码语义不可知
+  //   ② 错误页伪装 200（错误堆栈 / 框架错误页标题）→ confirmed，这是确定性证据
+  const ERROR_PAGE_SIGNALS = [
+    'Whitelabel Error Page', 'HTTP Status 500', 'HTTP Status 404',
+    'Traceback (most recent call last)', 'Fatal error:', 'Internal Server Error',
+  ];
+  const BUSINESS_FAIL_KEYS = ['"success":false', '"success": false', '"ok":false', '"ok": false'];
+  const seenBusiness = {};
+  obs.requests.forEach((r) => {
+    const text = String(r.bodyText || '');
+    if (!text) return;
+    const urlKey = r.method + ' ' + r.url.split('?')[0];
+    if (seenBusiness[urlKey]) return;
+
+    const errorPage = ERROR_PAGE_SIGNALS.filter((sig) => text.indexOf(sig) >= 0);
+    let businessFail = BUSINESS_FAIL_KEYS.filter((sig) => text.indexOf(sig) >= 0);
+    // errcode 非 0（微信/问卷星系接口常用）：只认 0 之外的整数值，避免把 errcode:0 误判
+    const errcode = text.match(/"errcode"\s*:\s*(-?\d+)/i);
+    if (errcode && String(errcode[1]) !== '0') businessFail = businessFail.concat(['errcode=' + errcode[1]]);
+
+    if (!errorPage.length && !businessFail.length) return;
+    seenBusiness[urlKey] = 1;
+    if (findings.filter((f) => f.dimension === '7.36').length >= 20) return;
+
+    if (errorPage.length) {
+      push('7.36', '接口以 HTTP ' + r.status + ' 返回错误页（伪装成成功响应）：' + urlKey,
+        '错误应返回对应状态码或结构化错误体，不应以 200 返回错误页',
+        '响应体命中错误页特征：' + errorPage.join(' / '), null,
+        { severityHint: 'P1', confidence: 0.85, status: 'confirmed', property: 'error-page-as-200',
+          evidenceType: 'response-body',
+          raw: { method: r.method, url: redactUrl(r.url), status: r.status,
+                 signals: errorPage, bodyHead: redact(String(r.bodyText || '').slice(0, 200)) } });
+    } else {
+      push('7.36', '接口返回 HTTP ' + r.status + ' 但业务结果疑似失败：' + urlKey,
+        '业务失败应有明确的失败语义，且界面不得显示为成功',
+        '响应体命中失败信号：' + businessFail.join(' / '), null,
+        { severityHint: 'P2', confidence: 0.5, status: 'pending', property: 'business-error-as-200',
+          evidenceType: 'response-body',
+          raw: { method: r.method, url: redactUrl(r.url), status: r.status,
+                 signals: businessFail, bodyHead: redact(String(r.bodyText || '').slice(0, 200)) } });
+    }
+  });
+
+  // --- 7.45 请求载荷完整性（参数在发出前就已经坏了）---
+  // 边界：只判「不理解业务语义也能确定是错的」，不猜必填项——必填项属于契约测试。
+  //   ① 占位符泄漏：undefined / NaN / [object Object] / 未替换的模板标记 → confirmed
+  //   ② 同一 query 键重复出现 → pending（服务端取首个还是末个取决于实现）
+  //   ③ 写方法却一个参数都没有 → pending（可能是合法的无参接口，如登出）
+  // bodyKind 不是 string 的请求（FormData / Blob）不参与判定：那些 body 的字符串化
+  // 产物本身就是 "[object FormData]"，拿它当证据会批量误报。
+  const PAYLOAD_WRITE = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+  const PLACEHOLDER_RULES = [
+    { id: 'undefined-literal', label: '"undefined"',
+      test: (s) => s.indexOf('"undefined"') >= 0 || /:undefined[,}]/.test(s) || /(^|[?&])[^=&]+=undefined(&|$)/.test(s) },
+    { id: 'nan-literal', label: 'NaN',
+      test: (s) => s.indexOf('"NaN"') >= 0 || /:NaN[,}]/.test(s) || /(^|[?&])[^=&]+=NaN(&|$)/.test(s) },
+    { id: 'object-object', label: '[object Object]',
+      test: (s) => s.indexOf('[object Object]') >= 0 },
+    { id: 'template-unresolved', label: '未替换的模板标记',
+      test: (s) => s.indexOf('${') >= 0 || s.indexOf('{{') >= 0 || s.indexOf('<%=') >= 0 },
+  ];
+  function queryKeys(url) {
+    const q = String(url || '').split('#')[0].split('?')[1];
+    if (!q) return [];
+    return q.split('&').map((p) => p.split('=')[0]).filter(Boolean);
+  }
+  const seenPayload = {};
+  // 非字符串 body（FormData/Blob/ArrayBuffer）无法判读内容：它们的字符串化产物
+  // 是采集侧造的，拿来做证据会批量误报。这类请求不判，但必须计数——
+  // 「有多少请求的载荷没能检查」是覆盖口径的一部分，不能静默变成 0。
+  let payloadNotInspectable = 0;
+  obs.requests.forEach((r) => {
+    if (findings.filter((f) => f.dimension === '7.45').length >= 20) return;
+    const bodyReadable = !r.bodyKind || r.bodyKind === 'string' || r.bodyKind === 'none';
+    if (!bodyReadable) payloadNotInspectable += 1;
+    const body = bodyReadable ? String(r.body || '') : '';
+    const urlText = String(r.url || '');
+    const urlKey = r.method + ' ' + urlText.split('?')[0];
+    if (seenPayload[urlKey]) return;
+
+    const hits = [];
+    PLACEHOLDER_RULES.forEach((rule) => {
+      if (rule.test(urlText) || (body && rule.test(body))) hits.push(rule.label);
+    });
+    if (hits.length) {
+      seenPayload[urlKey] = 1;
+      push('7.45', '请求参数含未解析占位符：' + r.method + ' ' + redactUrl(urlText),
+        '请求参数应是已解析的实际值，不应出现 undefined / NaN / [object Object] / 未替换模板',
+        '命中占位符特征：' + hits.join(' / '),
+        null,
+        { severityHint: 'P2', confidence: 0.85, status: 'confirmed', property: 'payload-placeholder',
+          evidenceType: 'request-hook',
+          raw: { method: r.method, url: redactUrl(urlText), signals: hits,
+                 bodyHead: redact(body.slice(0, 200)) } });
+      return;
+    }
+
+    const keys = queryKeys(urlText);
+    const dupes = keys.filter((k, i) => keys.indexOf(k) !== i).filter((k, i, arr) => arr.indexOf(k) === i);
+    if (dupes.length) {
+      seenPayload[urlKey] = 1;
+      push('7.45', '同一请求里重复携带同名参数：' + r.method + ' ' + redactUrl(urlText),
+        '同一参数名只应出现一次，重复时服务端取值取决于实现，结果不可预期',
+        '重复的键：' + dupes.join(', ') + '（共 ' + keys.length + ' 个参数）',
+        null,
+        { severityHint: 'P3', confidence: 0.6, status: 'pending', property: 'payload-duplicate-key',
+          evidenceType: 'request-hook',
+          raw: { method: r.method, url: redactUrl(urlText), duplicateKeys: dupes } });
+      return;
+    }
+
+    if (PAYLOAD_WRITE[r.method] && bodyReadable && !body.trim() && !keys.length) {
+      seenPayload[urlKey] = 1;
+      push('7.45', '写请求没有携带任何参数：' + r.method + ' ' + redactUrl(urlText),
+        '写操作应携带目标与数据；若确为无参接口（如登出），应在接口文档中明确',
+        '请求体为空且 URL 无查询参数；无法从页面侧判断是否为合法无参接口',
+        null,
+        { severityHint: 'P3', confidence: 0.4, status: 'pending', property: 'payload-empty-write',
+          evidenceType: 'request-hook',
+          raw: { method: r.method, url: redactUrl(urlText) } });
+    }
+  });
+
+  // --- 7.37 重复请求 / 重复提交（仅写方法，避免把轮询 GET 误报）---
+  const WRITE = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+  const groups = {};
+  obs.requests.forEach((r) => {
+    if (!WRITE[r.method]) return;
+    // 签名里的 body 也可能含凭据（同一签名会进 raw.signature）——同样脱敏后再拼接。
+    const sig = r.method + ' ' + r.url.split('?')[0] + ' ' + redact(String(r.body || '').slice(0, 300));
+    (groups[sig] = groups[sig] || []).push(r);
+  });
+  Object.keys(groups).forEach((sig) => {
+    const reqs = groups[sig].filter((r) => r && r.at).sort((a, b) => a.at - b.at);
+    if (reqs.length < 2) return;
+    const span = reqs[reqs.length - 1].at - reqs[0].at;
+    if (span > 3000) return; // 3 秒内重复才是"疑似重复提交"，隔太久是正常重试
+    if (findings.filter((f) => f.dimension === '7.37').length >= 10) return;
+    // 自动确认（保守，v4.13.0）：仅当**每一个**重复请求都返回成功（ok）才 confirmed——
+    // 全部成功=客户端确实重复发了、服务端也照单全收（无客户端防抖、服务端未拦），是可确认的
+    // 重复提交缺陷；只要有失败，说明服务端拦掉了重复（有防护），不能确认，留 pending 交人工。
+    // 响应成功与否是硬证据，不靠猜。（注：若服务端有幂等去重，严重度或可降，但客户端重复发送本身已成立。）
+    const allOk = reqs.every((r) => r.ok);
+    const okCount = reqs.filter((r) => r.ok).length;
+    push('7.37', '同一写请求在 ' + span + 'ms 内重复发出 ' + reqs.length + ' 次'
+        + (allOk ? '（全部成功，未被拦截）' : '（' + okCount + '/' + reqs.length + ' 成功）')
+        + '，' + (allOk ? '确认重复提交/无防抖' : '疑似重复提交/无防抖'),
+      '写操作应防重复提交（按钮置灰 / 幂等键 / 前端去抖）',
+      '相同方法+路径+载荷重复 ' + reqs.length + ' 次，' + okCount + ' 次成功', null,
+      { severityHint: 'P1', confidence: allOk ? 0.85 : 0.6, status: allOk ? 'confirmed' : 'pending',
+        property: 'duplicate-submit', evidenceType: 'request-hook',
+        raw: { signature: sig.slice(0, 200), count: reqs.length, spanMs: span, okCount: okCount, allOk: allOk } });
+  });
+
+  // --- 7.38 遮挡（可交互元素被盖住，用户点不到）---
+  const overlayOpen = Array.prototype.slice
+    .call(document.querySelectorAll('[role=dialog], [class*=modal], [class*=dialog], [class*=drawer], [class*=mask], [class*=overlay]'))
+    .some((el) => visible(el));
+  if (!overlayOpen) {
+    const targets = Array.prototype.slice
+      .call(document.querySelectorAll('a[href], button, input, select, textarea, [role=button], [onclick]'))
+      .filter(visible).slice(0, 80);
+    let hit = 0;
+    for (let i = 0; i < targets.length && hit < 15; i += 1) {
+      const el = targets[i];
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      const cx = Math.round(r.left + r.width / 2);
+      const cy = Math.round(r.top + r.height / 2);
+      if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) continue; // 不在视口内不算
+      let top = null;
+      try { top = document.elementFromPoint(cx, cy); } catch (e) { top = null; }
+      if (!top) continue;
+      if (top === el || el.contains(top) || top.contains(el)) continue;
+      const tcs = getComputedStyle(top);
+      if (tcs.pointerEvents === 'none') continue; // 事件穿透，不算遮挡
+      hit += 1;
+      // 保守（v4.13.0）：保持 pending，只按证据强度给置信度供排序——遮挡物**非交互**（普通浮层）
+      // 比遮挡物**也可交互**（可能是刻意叠层，如按钮上的角标）更像真 bug。不自动确认。
+      const coverInteractive = top.matches('a[href], button, input, select, textarea, [role=button], [onclick]');
+      push('7.38', '可交互元素被其他元素覆盖，点击可能落不到它：' + selectorOf(el),
+        '可交互元素应位于最上层（z-index / 遮挡布局）', '中心点命中 ' + selectorOf(top), el,
+        { severityHint: 'P1', confidence: coverInteractive ? 0.5 : 0.7, status: 'pending', property: 'occlusion', evidenceType: 'hit-test',
+          raw: { target: selectorOf(el), coveredBy: selectorOf(top), coverInteractive: coverInteractive } });
+    }
+  }
+
+  // 说明：本文件采集的是"运行期"证据，须在安装钩子并完成一轮交互后再调用采集。
+  // 【F11】「未装钩子」与「页面干净」必须可区分：二者都产出 findings=[]，但含义完全
+  // 不同——前者是"没观测到任何东西"（须 notRun），后者才是"观测到了且干净"。
+  // hooksInstalled=false 或采集抛错时带显式标记，调用方不得据此填 pass。
+  // （审查修复：原表达式 `Date.now() - startedAt >= 0` 恒真，等于没校验——
+  //   obs 存在即视为已安装钩子，这本身就是正确语义：钩子安装时会创建 __vpObs。）
+  const hooksInstalled = !!obs;
+  return JSON.stringify({
+    mode: 'collect',
+    url: location.href,
+    findings,
+    hooksInstalled: hooksInstalled,
+    interactionsObserved: obs.requests.length,
+    // 「检查了哪些维度」显式声明：钩子装上且真的观测到交互时，这五个维度就是
+    // 实测过的——没有 findings 只代表没发现问题，不代表没测。缺了这条，
+    // 下游按「无产物覆盖」判 notRun，覆盖率会凭空少 5 个维度。
+    checked: (hooksInstalled && obs.requests.length > 0)
+      ? ['7.35', '7.36', '7.37', '7.38', '7.45'] : [],
+    collectError: (typeof window.__vpCollectError !== 'undefined') ? window.__vpCollectError : null,
+    note: '运行期观测：7.35 异常 / 7.36 网络失败 / 7.37 重复提交 / 7.38 遮挡。'
+      + '7.37/7.38 判据保守（pending），需人工复核后再落确定缺陷；'
+      + 'hooksInstalled=false 或 interactionsObserved=0 时该轮采集无效，'
+      + '相关维度必须填 notRun（未证明执行=未执行），不得凭空填 pass。未触发交互则相应维度填 notRun。'
+      + '7.45 只判字符串 body；payloadNotInspectable 是「无法判读的请求数」，不是 0 缺陷。',
+    summary: {
+      total: findings.length,
+      byDimension: findings.reduce((acc, f) => { acc[f.dimension] = (acc[f.dimension] || 0) + 1; return acc; }, {}),
+      errorCount: obs.errors.length,
+      requestCount: obs.requests.length,
+      payloadChecked: obs.requests.length - payloadNotInspectable,
+      payloadNotInspectable,
+      overlayOpen,
+    },
+  });
+})()

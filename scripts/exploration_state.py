@@ -130,19 +130,22 @@ def _evidence(paths, name):
     return result
 
 
-def _gate(rows, views):
-    """按已提供清单计算执行门禁：未消费候选、必查视角无记录或缺控件遍历条目时降低结论上限。"""
+def _gate(rows, views, executed_views):
+    """按已提供清单计算执行门禁：未消费候选、必查视角无实测记录或缺控件遍历条目时降低结论上限。
+
+    SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖。
+    """
     ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()]
-    missing = [view for view in REQUIRED_VIEWS if not views[view]]
+    missing = [view for view in REQUIRED_VIEWS if not executed_views[view]]
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
-    traversal_recorded = bool(traversal_items)
+    traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
     if ready:
         ceiling = "待核实"
         message = f"仍有{len(ready)}项可执行未执行，技术结论上限为待核实；需执行或逐项写明未执行理由与影响"
     elif missing:
         ceiling = "待核实"
-        message = "必查视角无任何记录：" + "、".join(missing) + "；需补检查或写明不适用理由"
+        message = "必查视角无实测记录（PASS/FAIL）：" + "、".join(missing) + "；需补执行或写明不适用理由"
     elif not traversal_recorded:
         ceiling = "待核实"
         message = "清单中无控件遍历条目（EXP-TRAV- 前缀）：按 exploration-runtime.md 的控件遍历约定补充条目或写明不适用理由；技术结论上限为待核实"
@@ -155,6 +158,9 @@ def _gate(rows, views):
         "ready_pending_ids": ready,
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
         "missing_views": missing,
+        "executed_views": {view: list(ids) for view, ids in executed_views.items()},
+        "skipped_views": {view: [row["id"] for row in rows if row["status"] in {"BLOCKED", "SKIPPED"} and set(row["attributes"]) & attrs]
+                          for view, attrs in VIEWS.items()},
         "traversal_pending": traversal_pending,
         "traversal_recorded": traversal_recorded,
         "verdict_ceiling": ceiling,
@@ -220,10 +226,12 @@ def summarize(data):
         "reproduction_candidates": [row["id"] for row in rows if row["status"] == "FAIL"],
         "needs_reconcile": [row["id"] for row in rows if row["side_effect_pending"]],
         "views": {view: [row["id"] for row in rows if set(row["attributes"]) & attributes] for view, attributes in VIEWS.items()},
+        "executed_views": {view: [row["id"] for row in rows if row["status"] in {"PASS", "FAIL"} and set(row["attributes"]) & attributes]
+                           for view, attributes in VIEWS.items()},
         "items": rows,
         "scope": SCOPE,
     }
-    report["gate"] = _gate(rows, report["views"])
+    report["gate"] = _gate(rows, report["views"], report["executed_views"])
     return report
 
 

@@ -1,6 +1,6 @@
 ---
 name: case-generator
-description: 砺衡专家包内 skill：测试用例生成。requirement-review 完成后调用；以 cases JSON 为唯一事实源，按模块分批生成合规用例（过 case_data.validate 与门禁），渲染 19 列 Excel / 交付 JSON / 五视角 CSV 视图，支持大需求分批与全量汇总。
+description: 砺衡专家包内 skill：测试用例生成。requirement-review 完成后调用；以 cases JSON 为唯一事实源，按模块分批生成合规用例（过 case_data.validate 与门禁），渲染 19 列 Excel / 交付 JSON / 五视角 CSV 视图，支持大需求分批与全量汇总。需求级用例不要改走 qa-req2testcase-generator（产物 schema 与砺衡执行台账不兼容）。
 ---
 
 # case-generator（测试用例生成）
@@ -12,7 +12,7 @@ description: 砺衡专家包内 skill：测试用例生成。requirement-review 
 
 | 项 | 约定 |
 |---|---|
-| 何时调用 | `requirement-review` 完成，拿到 `review-result.json` 绝对路径，需要产出用例 |
+| 何时调用 | `requirement-review` 完成，拿到 `review-result.json` 绝对路径，需要产出用例。**不含接口专项**（契约/action/接口清单线索 → api-test；cases 中 `layer=api` 的 TC 执行归接口执行，结果由主体会话回填主体台账）。检出维度全景见专家包 `references/bug-detection-map.md` |
 | 输入 | `review-result.json` 绝对路径 + 需求正文 |
 | 输出 | **`cases-<short>.json`**（唯一事实源）+ 门禁报告 + 按路由渲染的视图 |
 | 不适用 | 不改冻结基线；不产出实测结论（只给需求时执行项一律 `NOT_RUN`）；阻塞项不生成确定断言；**不改写已交付视图**；不评分放行 |
@@ -50,7 +50,7 @@ python scripts/batch.py finish --workdir <工作区> --unit M01 --cases <cases J
 
 ### 3. 门禁（只报不改）
 
-`gate_checks.py` 依次执行：**S0 结构校验先跑**（`case_data.validate` 无 errors，含每个 requirement 至少一个 required 用例、`case_ids` 双向登记、四要素齐全）→ S0 不过直接判**待修订**，不计算后续文本门禁 → G1/G1.5/G2/G3/G4/G5/G6/G7 + V05/V07/V08/V09/V11/V12/V13 + COV（四层覆盖/方法见证）+ RATIO-SMOKE / RATIO-P0。
+`gate_checks.py` 依次执行：**S0 结构校验先跑**（`case_data.validate` 无 errors，含每个 requirement 至少一个 required 用例、`case_ids` 双向登记、四要素齐全）→ S0 不过直接判**待修订**，不计算后续文本门禁 → G1/G1.5/G2/G3/G4/G5/G6/G7 + V05/V07/V08/V09/V11/V12/V13 + COV（四层覆盖/方法见证）+ COV-PATH（异常与权限路径配比）+ COV-UI（界面样式/无障碍零用例须逐类裁定）+ RATIO-SMOKE / RATIO-P0。
 
 - 门禁不通过 → 用例状态标**待修订**（与执行状态 `NOT_RUN` 区分），报告定位到 `case_id` 或批次号；修订后**重跑该批**。不自动改用例、不做超标自动降级。
 - 小样本例外：用例数 < 20 时比率门禁降为告警，改用绝对数（每模块 ≥1 条冒烟、每需求 ≥1 条；P0 同理）。
@@ -70,7 +70,7 @@ python scripts/batch.py aggregate --workdir <工作区> --cases <cases JSON>
 |---|---|
 | 给人看（存档/评审/交付同事） | **19 列 Excel**：`render_xlsx.py --cases <JSON> --out 测试用例_{task_id}.xlsx --verify`（JSON 留在工作区作事实源，不单独交付） |
 | 给程序/下游接着读 | **交付 JSON**：`render_json.py --cases <JSON> --out <路径>`（结构见 `references/output-json.md`） |
-| 由本专家继续执行 | 沿用既有契约：五视角 CSV + 可选 HTML + 执行台账（`execution_ledger.py` 直接吃同一份 cases JSON，无需转换） |
+| 由本专家继续执行 | `render_csv.py --cases <JSON> --out <目录> --task-id <...> --verify` 生成五视角 CSV（视角映射复用 `exploration_state.VIEWS`），加可选 HTML + 执行台账（`execution_ledger.py` 直接吃同一份 cases JSON，无需转换） |
 | 明确"两种都要" | 交付 JSON + 19 列 Excel 分别落 `outputs/json/` 与 `outputs/xlsx/`，文件名带时间戳；交付前核对两者 `case_id` 集合与条数一致 |
 | 判不准 | 问一句「给人看还是给程序接着用」，不猜 |
 
@@ -96,7 +96,17 @@ python scripts/gate_checks.py --cases <JSON> [--scope <scope JSON>] [--json]
 # 视图渲染
 python scripts/render_xlsx.py --cases <JSON> --out <xlsx> --verify --task-id <...>
 python scripts/render_json.py --cases <JSON> --out <json>
+python scripts/render_csv.py --cases <JSON> --out <目录> --task-id <...> --verify
 ```
+
+# 与执行阶段的机器交接（第 3 跳进门条件）
+
+```bash
+python <专家包>/scripts/execution_ledger.py init <workspace> <cases JSON> <context JSON> <round_id> \
+  --batches <batches.json> --gate-report <gate 报告>
+```
+
+批次未全 done 或门禁 fail 时拒绝建台账；baseline 记 `gate_precondition`。
 
 ## 工具不可用时
 

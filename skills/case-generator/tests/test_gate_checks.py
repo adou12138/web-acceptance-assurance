@@ -29,6 +29,27 @@ class TestFullGate(unittest.TestCase):
         self.assertEqual(failed_ids(report), set(), json.dumps(report, ensure_ascii=False)[:2000])
         self.assertEqual(report["counts"], {"testcases": 12, "smoke": 2, "p0": 2})
 
+    def test_cov_ui_zero_without_ruling_is_blocked(self):
+        cases = load(CASES_12)
+        cases["applicability"].pop("visual")
+        cases["applicability"].pop("accessibility")
+        report = run_gate(cases)
+        self.assertIn("COV-UI", failed_ids(report))
+        issues = next(c["issues"] for c in report["checks"] if c["id"] == "COV-UI")
+        self.assertEqual({i["why"].split()[0] for i in issues}, {"visual", "accessibility"})
+
+    def test_cov_ui_zero_with_exempt_ruling_passes(self):
+        report = run_gate(load(CASES_12))
+        self.assertNotIn("COV-UI", failed_ids(report))
+        self.assertIn("COV-UI", [c["id"] for c in report["checks"]])
+
+    def test_cov_ui_present_case_needs_no_ruling(self):
+        cases = load(CASES_12)
+        cases["testcases"][0]["attributes"] = ["functional", "visual", "accessibility"]
+        cases["applicability"].pop("visual")
+        cases["applicability"].pop("accessibility")
+        self.assertNotIn("COV-UI", failed_ids(run_gate(cases)))
+
     def test_s0_blocks_downstream(self):
         cases = load(CASES_12)
         del cases["testcases"][0]["assertions"]

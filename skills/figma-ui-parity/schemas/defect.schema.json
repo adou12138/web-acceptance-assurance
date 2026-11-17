@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "parity defect",
+  "type": "object",
+  "required": [
+    "fingerprint",
+    "dimension",
+    "severity",
+    "confidence",
+    "status",
+    "symptom",
+    "expected",
+    "actual",
+    "element"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "fingerprint": {
+      "type": "string",
+      "minLength": 8,
+      "description": "page|scenario|element|dimension|viewport，跨层合并同一问题"
+    },
+    "dimension": {
+      "type": "string",
+      "description": "检查维度编号 7.x，取自 references/check-dimensions.md"
+    },
+    "severity": {
+      "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "status": {
+      "enum": [
+        "confirmed",
+        "pending",
+        "notRun",
+        "dataMissing"
+      ]
+    },
+    "page": {
+      "type": "string"
+    },
+    "scenario": {
+      "type": "string"
+    },
+    "viewport": {
+      "type": [
+        "string",
+        "number",
+        "null"
+      ]
+    },
+    "module": {
+      "type": "string",
+      "description": "缺陷所在功能区块，对应缺陷表 D 列"
+    },
+    "category": {
+      "type": "string",
+      "description": "缺陷类型，对应缺陷表 C 列，建议格式 dimension|属性族"
+    },
+    "symptom": {
+      "type": "string",
+      "minLength": 4,
+      "description": "用户可见现象，必须成句，不能只写指标"
+    },
+    "expected": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual": {
+      "type": "string",
+      "minLength": 1
+    },
+    "delta": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "tolerance": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "suggestion": {
+      "type": "string",
+      "description": "可执行的修复建议"
+    },
+    "sourceClass": {
+      "type": "string",
+      "description": "问题来源分类：规范缺陷（网页忠实还原设计稿但设计稿自身不达标，修复入口在设计侧）/ 实现缺陷（设计稿达标或不承载此定义，前端实现引入，修复入口在前端）/ 规范+实现共同缺失（设计稿缺规范且前端无兜底）。无对照数据时留空，不猜"
+    },
+    "sourceNote": {
+      "type": "string",
+      "description": "问题来源判定依据（设计稿侧证据或缺失说明）"
+    },
+    "element": {
+      "type": "object",
+      "required": [
+        "selector",
+        "bbox"
+      ],
+      "properties": {
+        "selector": {
+          "type": "string"
+        },
+        "nth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bbox": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "w": {
+              "type": "number"
+            },
+            "h": {
+              "type": "number"
+            }
+          }
+        },
+        "anchor": {
+          "type": "string"
+        },
+        "frame": {
+          "type": "string"
+        },
+        "locatorQuality": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "semi",
+            "fragile",
+            "none"
+          ],
+          "description": "如何稳住这条元素定位：stable=语义锚点(data-testid/role/aria-label)，semi=单段 id 或语义 class，fragile=纯标签/生成类名/依赖 nth，none=页面级缺陷无定位。不参与缺陷判定，用于跨轮对比时提示'同一缺陷可能被误判为新增'。"
+        },
+        "locatorSignals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "判定 locatorQuality 的依据（命中的锚点类型或脆弱特征）。"
+        },
+        "locatorAdvice": {
+          "type": "string",
+          "description": "定位脆弱时给前端的可执行建议（补 data-testid / 语义 role）。"
+        }
+      }
+    },
+    "designRef": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "fileKey": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "artifact": {
+            "type": "string"
+          },
+          "property": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "reproduction": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "acceptedDeviation": {
+      "type": "object",
+      "description": "已确认偏差，必须带到期时间，过期自动失效",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "reviewedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "screenshots": {
+      "type": "array",
+      "description": "缺陷位置附图。由 scripts/node/capture_defect_shots.cjs 在**同一次运行**内落盘——bbox 是采集时刻的坐标，跨视口/改版后补图会指错位置。页面级缺陷只有 kind=page；定位不到元素时给一条 kind=none 并写明原因。",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "path"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "crop",
+              "page",
+              "design",
+              "compare",
+              "region",
+              "none"
+            ],
+            "description": "crop=缺陷元素局部（或元素过小的页面区域）；page=整页（红框标位）；design=设计稿局部；compare=左网页右设计稿并排对比；region=元素周边页面区域；none=未取到图"
+          },
+          "path": {
+            "type": "string",
+            "description": "图片路径（相对报告目录或绝对路径）；kind=none 时为空"
+          },
+          "note": {
+            "type": "string",
+            "description": "这张图说明什么（如「页面级缺陷，无元素定位」）"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "shotError": {
+      "type": "string",
+      "description": "未能取到缺陷位置图的原因（元素未找到 / 裁图失败 / 选择器无法求值）。为空表示无需附图或已取到。留空等于把「没取到」伪装成「不需要」，必须写明。"
+    },
+    "shotNote": {
+      "type": "string",
+      "description": "附图相关的说明（元素过小改用整页图、超出 --max 上限未附图等）。"
+    }
+  }
+}

@@ -48,4 +48,48 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **行为改造（3 处，剥离适配）**：`flow.py` 默认 adapter `sojump`→`rest`；sojump 分支 ImportError 友好提示（自装可用）；写操作门禁通用化（适配器声明 `is_write_allowed` 即生效，随包适配器均未实现，写保护由 R2 授权与环境配置承担）。
 - **已知局限**：信封键仍为问卷星口径（`common_params.py` 硬编码，其它项目接入需按 `envelope_keys` 扩展）；`WJX_*` 命名空间保留兼容。
 - **剥离依据**：import 闭包（AST 遍历 4 入口）41 脚本 + 判路/文档配套 4 脚本；引用面改写 59 处（references 中被排除资产的裸引用清零）。
-- **双维护**：源 wjx 升级时按本表人工对照；冻结版本 5.0.2。- **离线示例与链路补全（v1.12.2）**：新增 `assets/smoke_cases.example.json`（通用 2 例，含提取/依赖链 skip_if）——此前 `smoke_cases_wjx` 被排除后判路 4 的 dry-run 无示例可走；`contract.md` 的 M13 行补真实用法（`dependency_scan --contract/--out`、`precondition_scan --prep/--confirm`，均已实跑验证）；SKILL.md 判路 3 注明“未配置 KB 时 `--action` 以校验错误 exit 2 属预期”。自建测试增至 17 例（新增冒烟 dry-run / 依赖扫描 / 回读错误路径三条链路）。
+- **双维护**：源 wjx 升级时按本表人工对照；冻结版本 5.0.2。
+- **离线示例与链路补全（v1.12.2）**：新增 `assets/smoke_cases.example.json`（通用 2 例，含提取/依赖链 skip_if）——此前 `smoke_cases_wjx` 被排除后判路 4 的 dry-run 无示例可走；`contract.md` 的 M13 行补真实用法（`dependency_scan --contract/--out`、`precondition_scan --prep/--confirm`，均已实跑验证）；SKILL.md 判路 3 注明“未配置 KB 时 `--action` 以校验错误 exit 2 属预期”。自建测试增至 17 例（新增冒烟 dry-run / 依赖扫描 / 回读错误路径三条链路）。
+
+## figma-ui-parity 包内 skill 对照表（v1.13.0，2026-11-17）
+
+- **剥离源**：figma-ui-parity **4.47.0**（版本冻结）。源 skill **零改动**（源 git 零 WIP + 对照快照证明零写入）。
+- **搬入**：SKILL.md（**源复制 + 头部插入砺衡段**，frontmatter `version: 4.47.0` 原样保留——`test_environment_contract` 强制 frontmatter 与 `check_environment.VERSION` 一致）、references **35** 份、scripts **34 py + 16 cjs**、scripts/tests **35 py + 2 cjs**、schemas 3、assets **3（含 `dimension_manifest.json`）**、skill-dependencies.json（宿主依赖矩阵）、test-prompts.json（触发回归基线）、README、.gitignore。
+- **不搬**：`.git/`（1322 文件）、`.codeartsdoer/`（IDE 元数据 22）、`.pytest_cache/`、`parity-test/`（源运行工作区 + 认证目录，安全）。
+- **剥离适配（2 处行为级）**：① `check_environment.local_playwright_core()` 候选链新增 **`PLAYWRIGHT_CORE_PATH`**（与 `scripts/node/browser.cjs` 候选链对齐；专家包内无 `cdp_driver` 布局）；② 砺衡段声明 Windows 中文环境跑测试需 **`PYTHONUTF8=1`**（测试依赖 UTF-8 默认编码，GBK 环境下 32 errors 的实测教训）。
+- **运行前提**：Python ≥3.10、Node + `playwright-core`（已装于 `D:\TestCase\.tools\pwcore`，经 `PLAYWRIGHT_CORE_PATH` 引用）、Windows 测试跑 `PYTHONUTF8=1`；完整采集能力依赖 Figma/Playwright/visual-parity **MCP（宿主）**，未就绪时按官方降级链（页面走查/静态 DOM/截图+样式，不得写“还原度”）。
+- **验收状态**：**365 py tests + 2 node --test 全绿**（PYTHONUTF8=1 + PLAYWRIGHT_CORE_PATH）；`check_environment` 四态实测（needs_setup → 适配后 playwright-core ready）；单 stage 实跑（浏览器启动/登录态注入 ✓）；回链 orphan=0。**未完成**：完整 pipeline 双跑对照（真实页面采集长时测试，超预算终止——由 365 单测覆盖，列为待办）。
+- **边界**：两套质量体系不混用（45 维度覆盖率/validate_defects/smoke_chain 自治）；无设计稿走砺衡 visual-usability 五视角；借鉴 A1–A4 已落地（结论红线→visual-usability、写操作台账→execution-management、必问矩阵 2 行→agents、报告链自检→output-templates）。
+- **双维护**：源 figma 升级时按本表人工对照；冻结版本 4.47.0。
+- **复审修复（v1.13.1，2026-11-17）**：`scripts/tests/test_start_gate.py` 的 `test_url_pair_start_writes_manifest_after_policy` 只断言 ready/blocked 两分支，**未覆盖 needs_setup/partial 环境下 start_test 合法返回的 `degraded` 分支**（`start_test.py:293-298`：仅 unavailable 才 blocked）——源作者环境 playwright-core 常备故未暴露；剥离后无 PLAYWRIGHT_CORE_PATH 的环境实测暴露。修复：按同文件既有【审查修复·环境耦合】先例扩为三态分段断言（rc=0 → ready/degraded；rc=3 → blocked），manifest/策略断言保留。验证：口径 A（无变量）365 OK / 口径 B（带变量）365 OK。
+- **复审修复 2（v1.13.2，2026-11-17）**：`compare_fields.py` 缺输入/坏 JSON 直接抛裸 Traceback（rc=1），与同包 `render_reports`/`validate_defects` 的 **rc=2 + 友好消息**契约不一致（跨脚本编排会把“用法/数据错误”误读为“判定不通过”）。修复：入口加存在性检查 + 解析 try/except → rc=2 + 中文消息；新增 `test_compare_input_errors.py` 2 例锁定。验证：**367 py tests OK**（两口径）、**`smoke_chain` 61/61 全绿**（官方端到端全链冒烟，首次实跑）、异常矩阵 compare/render/extract/validate 四项 rc 语义一致。
+
+## 整合轮（v1.14.0，2026-11-17）
+
+四 skill 并存后的路由/流程/授权/报告整合（审查→方案 I1–I12+P1–P6→三轮审核→执行；方案见 v2.4 方案文档与对话内三轮审核）：
+
+- **I1 figma 主入口收窄**：description/R0 行改“须提供设计稿；无设计稿走主体五视角；专家主动升级或显式要求才走页面侧”（N2：改后 367 OK + 判路 14 ok 命中不降）。
+- **I2 生成边界互斥**：case-generator/api-test 双向互斥句 + layer=api 执行归属（接口执行，结果由主体会话回填单写者台账）。
+- **I3 判路表补 2 行**：无设计稿专项走查→主体；多 skill 串行→流水线逐跳。
+- **I4/I5 标准流水线**：三跳进门条件/交接路径（`<task>/` 约定）/主动引导/跳过降级；layer=api 执行归接口、结果由主体会话回填单写者台账。
+- **I6 默认档位**：默认 safe + 5 类风险必问；四档口径权威=figma setup-guide；安全论证登记（不构成缺口）。
+- **I7 报告汇总**：主链 HTML+CSV 为总报告，api/figma 报告为附件；一屏交付摘要模板（output-templates）。
+- **I9/I10 检出率整合**：新增 `references/bug-detection-map.md`（三套维度交叉索引 + 主动升级映射；衍生对照物声明）；methodology 异常四问扩共享清单（figma/api 引用）。
+- **I11/I12 主动升级与反向引用**：信号→维度映射 6 行 + N1 门禁联动（编排层传 `--safety-policy safe`）；三 SKILL 反向引用总图。
+- 验证：四入口回归全绿（123/68/17/367）+ figma TestPromptContract 判路 14 ok 命中不降 + validate ✅ + 路由 8 条静态落表。
+
+## 集成修复轮（v1.15.0，2026-11-17）
+
+基于本轮真实需求实跑的集成审查（9 条发现 E1–E9）逐项修复：
+
+- **E1 Skill 解析污染**：新建 `backup/web-acceptance-assurance.backup.v1.14.0/`；备份目录 18 个与旧版缓存 4 个启用态 `SKILL.md` 全部改 `.disabled`；新增 `tests/test_skill_registration.py` 锁定“备份/旧缓存不得有启用态 SKILL.md”与“plugin.json 四个 skill 与正文一致”。会话内注册表仍缓存旧路径（实测仍解析到 cache/1.14.0），**须重开会话后复验解析到 1.15.0**。
+- **E2 门禁假通过**：`exploration_state` 的 `views` 保留全量，`executed_views` 仅 PASS/FAIL，`skipped_views` 仅 BLOCKED/SKIPPED；`missing_views` 与 `verdict_ceiling` 按实测计算；`EXP-TRAV-` 只有非 NOT_RUN 才算已记录。同步 `exploration-runtime.md` 与 agents「批次结论门禁」。
+- **E3 生成链路消歧**：case-generator description 加“需求级不要改走 qa-req2testcase-generator”；agents 判路表增两行；台账 schema 不符时给定向提示。
+- **E4 UI 口径汇流**：agents 增“升级后的回写契约”，figma 六态映射在 `bug-detection-map.md` 固化；新门禁 `COV-UI`（visual/accessibility 零用例须在 applicability 逐类裁定）落到 `gate_checks.py` + `policy.json.gate_rules.cov_ui`。
+- **E5 第 3 跳机械门**：`execution_ledger init` 新增 `--batches` / `--gate-report`，批次未全 done 或门禁 fail 拒绝建台账，baseline 记 `gate_precondition`；三跳表第 3 跳改为“门禁无 failed + 探索清单已初始化”，明确 exploration gate 属批次结论门禁而非执行前门禁。
+- **E6 五视角 CSV**：新增 `skills/case-generator/scripts/render_csv.py`，视角映射复用 `exploration_state.VIEWS`、列头复用 `policy.views.columns`，utf-8-sig + 回读校验；SKILL.md 输出路由与命令速查已接入。
+- **E7 缺陷 ID 命名空间**：台账 `_bugs()` 接受 `source`/`external_id`；agents 与 `bug-detection-map.md` 固化 `BUG-`/`API-`/`FIG-` 前缀。
+- **E8 文档对齐**：agents “三个 skill”改“四个”并补 figma 条目；项目级与包内 figma description 统一（设计稿走本 skill，无设计稿常规走查走主体五视角，页面侧仅升级/显式要求）。
+- **E9 发布治理**：版本 1.15.0 同步到 `plugins/cache/.../1.15.0`，旧缓存禁用；本轮改动提交 git。
+
+**验证**：专家包根 132 OK；case-generator 74 OK；figma 367 OK；合计 573 Python 测试通过。注入复验：五视角 4 项 SKIPPED/BLOCKED 时 gate 从“通过”改判“待核实”，`missing_views` 含 4 项。

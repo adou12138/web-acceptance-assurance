@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Normalize a Figma node dump into a comparable design model.
+
+Input: the JSON returned by Figma `get_file_nodes` / REST `/v1/files/:key/nodes`
+(or any object containing a `nodes` map). Output: a normalized model whose
+values are already in CSS-comparable units, so comparison needs no ad-hoc math.
+
+Offline only: reads a local JSON file, writes a local JSON file.
+"""
+from __future__ import annotations
+import argparse, json, math, sys
+from pathlib import Path
+
+WEIGHT_BY_NAME = {
+    "thin": 100, "extralight": 200, "ultralight": 200, "light": 300,
+    "regular": 400, "normal": 400, "book": 400, "medium": 500,
+    "semibold": 600, "demibold": 600, "bold": 700,
+    "extrabold": 800, "ultrabold": 800, "black": 900, "heavy": 900,
+}
+STYLE_SUFFIXES = ("italic", "oblique")
+
+
+def round2(value: float) -> float:
+    return round(float(value) + 0.0, 2)
+
+
+def parse_px_number(value):
+    """把数字或 "Npx" 形式的字符串解析为像素浮点数；不可解析返回 None。
+
+    历史 MCP 导出里 strokeWeight/fontSize 等常带显式 "px" 单位。只接受
+    纯数字与 "Npx" 两种可靠形态，其它单位（em/%）语义依赖上下文，不在
+    这里猜测，由调用方记 unknown。
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        t = value.strip().lower()
+        if t.endswith("px"):
+            t = t[:-2].strip()
+        try:
+            return float(t)
+        except ValueError:
+            return None
+    return None
+
+
+def color_to_css(color: dict) -> dict:
+    r = int(round(color.get("r", 0) * 255))
+    g = int(round(color.get("g", 0) * 255))
+    b = int(round(color.get("b", 0) * 255))
+    a = round2(color.get("a", 1))
+    return {
+        "rgb": [r, g, b],
+        "hex": "#{:02x}{:02x}{:02x}".format(r, g, b),
+        "alpha": a,
+        "css": "rgba({}, {}, {}, {})".format(r, g, b, a),
+    }
+
+
+def gradient_angle(handles: list) -> float | None:
+    """Convert Figma gradient handles to a CSS linear-gradient angle."""
+    if not isinstance(handles, list) or len(handles) < 2:
+        return None
+    start, end = handles[0], handles[1]
+    dx = end.get("x", 0) - start.get("x", 0)
+    dy = end.get("y", 0) - start.get("y", 0)
+    if dx == 0 and dy == 0:
+        return None
+    return round2((math.degrees(math.atan2(dx, -dy)) + 360) % 360)
+
+
+def paint(p: dict) -> dict:
+    out = {"type": p.get("type"), "visible": p.get("visible", True), "opacity": round2(p.get("opacity", 1))}
+    if p.get("type") == "SOLID" and isinstance(p.get("color"), dict):
+        out["color"] = color_to_css(p["color"])
+    stops = p.get("gradientStops")
+    if isinstance(stops, list):
+        out["angle"] = gradient_angle(p.get("gradientHandlePositions", []))
+        out["stops"] = [
+            {"position": round2(s.get("position", 0)), "color": color_to_css(s.get("color", {}))}
+            for s in stops if isinstance(s, dict)
+        ]
+    if p.get("imageRef"):
+        out["imageRef"] = p["imageRef"]
+        out["scaleMode"] = p.get("scaleMode")
+    return out
+
+
+def font_weight(text_style: dict) -> int | None:
+    """字重取值：优先 Figma API 的数值 fontWeight 字段，名称映射只作回退。
+
+    英文名称映射覆盖不到数字/本地化 style（如 "W6"），映射失败返回 None
+    会让字重比对静默跳过形成漏报；API 的 style.fontWeight 数值始终可靠。
+    """
+    if not isinstance(text_style, dict):
+        return None
+    numeric = text_style.get("fontWeight")
+    if isinstance(numeric, (int, float)) and not isinstance(numeric, bool) and 100 <= numeric <= 900:
+        return int(numeric)
+    font_name = text_style.get("fontName")
+    if not isinstance(font_name, dict):
+        return None
+    style = str(font_name.get("style", "")).lower().replace(" ", "")
+    for suffix in STYLE_SUFFIXES:
+        style = style.replace(suffix, "")
+    if style in WEIGHT_BY_NAME:
+        return WEIGHT_BY_NAME[style]
+    for name, weight in WEIGHT_BY_NAME.items():
+        if style.startswith(name):
+            return weight
+    return None
+
+
+def line_height(lh: dict, font_size: float) -> dict:
+    if not isinstance(lh, dict):
+        return {"css": "normal", "px": None, "ratio": None, "unit": "AUTO"}
+    unit = lh.get("unit", "AUTO")
+    value = lh.get("value")
+    if unit == "PIXELS" and value is not None:
+        return {"css": "{}px".format(round2(value)), "px": round2(value), "ratio": round2(value / font_size) if font_size else None, "unit": unit}
+    if unit == "PERCENT" and value is not None:
+        px = value / 100.0 * font_size if font_size else None
+        return {"css": "{}%".format(round2(value)), "px": round2(px) if px else None, "ratio": round2(value / 100.0), "unit": unit}
+    return {"css": "normal", "px": None, "ratio": None, "unit": unit}
+
+
+def letter_spacing(ls: dict, font_size: float) -> dict:
+    if not isinstance(ls, dict):
+        return {"css": "normal", "px": 0.0, "unit": "PIXELS"}
+    unit = ls.get("unit", "PIXELS")
+    value = ls.get("value", 0) or 0
+    if unit == "PERCENT":
+        px = value / 100.0 * font_size if font_size else 0.0
+        return {"css": "{}em".format(round2(value / 100.0)), "px": round2(px), "unit": unit}
+    return {"css": "{}px".format(round2(value)), "px": round2(value), "unit": unit}
+
+
+def stroke(strokes: list) -> list:
+    out = []
+    for s in strokes or []:
+        if not isinstance(s, dict) or not s.get("visible", True):
+            continue
+        align = s.get("strokeAlign", "CENTER")
+        raw_weight = s.get("strokeWeight", 1)
+        # 字符串描边宽度归一：历史 MCP 导出里 strokeWeight 常写成 "1px"，
+        # 直接 round2() 会抛 ValueError 使整条提取链路中断。px 数字可换算；
+        # 其它单位/格式不可靠，记 unknown 说明，不用默认值硬判。
+        weight = parse_px_number(raw_weight)
+        unknown_weight = weight is None and raw_weight not in (None, 1, 1.0)
+        # 【F16】按 align 换算 CSS 边框宽度：CENTER 描边一半在盒外，
+        # 页面 CSS border 对应 1/2 可视宽度；INSIDE 才是 1:1。
+        # 旧代码两分支相同（复制粘贴 bug），与注释「CENTER 应取 1/2」矛盾。
+        css_weight = round2(weight / 2.0) if align == "CENTER" else weight
+        out.append({
+            "paint": paint(s),
+            "weightPx": weight,
+            "align": align,
+            "cssBorderPx": css_weight,
+            **({"weightUnknown": "不可解析的 strokeWeight 值: " + str(raw_weight)[:40]} if unknown_weight else {}),
+            "note": {
+                "INSIDE": "border 计入盒内，等价 box-sizing:border-box（cssBorderPx=weightPx）",
+                "OUTSIDE": "border 在盒外，页面常用 outline 或额外占位实现",
+                "CENTER": "border 居中绘制，页面上应取 1/2 可视宽度（cssBorderPx=weightPx/2）",
+            }.get(align, "border 居中绘制"),
+        })
+    return out
+
+
+def _radius_of(node: dict):
+    """【F15】设计节点的「生效圆角」：corners（独立四角）优先取最大值，
+    否则回落 uniform；cornerRadius 键真缺失时返回 None（不伪造 0.0）。"""
+    corners = node.get("rectangleCornerRadii")
+    if isinstance(corners, list) and corners:
+        try:
+            return round2(max(float(v) for v in corners))
+        except (TypeError, ValueError):
+            pass
+    if "cornerRadius" in node:
+        return round2(node.get("cornerRadius") or 0)
+    return None
+
+
+def effects(items: list) -> list:
+    out = []
+    for e in items or []:
+        if not isinstance(e, dict) or not e.get("visible", True):
+            continue
+        kind = e.get("type")
+        if kind not in ("DROP_SHADOW", "INNER_SHADOW"):
+            continue
+        offset = e.get("offset", {}) or {}
+        out.append({
+            "kind": kind,
+            "x": round2(offset.get("x", 0)),
+            "y": round2(offset.get("y", 0)),
+            "blur": round2(e.get("radius", 0)),
+            "spread": round2(e.get("spread", 0)),
+            "color": color_to_css(e.get("color", {})),
+            "css": "{}{}px {}px {}px {}px {}".format(
+                "inset " if kind == "INNER_SHADOW" else "",
+                round2(offset.get("x", 0)), round2(offset.get("y", 0)),
+                round2(e.get("radius", 0)), round2(e.get("spread", 0)),
+                color_to_css(e.get("color", {}))["css"],
+            ),
+        })
+    return out
+
+
+def node_model(node: dict, frame_origin: dict | None = None, parent_visible: bool = True) -> dict:
+    provenance = node.get("pluginData") or {}
+    is_mcp = provenance.get("source") == "figma-mcp-yaml-ish"
+    visible = node.get("visible", True)
+    if is_mcp:
+        visible = parent_visible and visible is not False and node.get("opacity") != 0
+    rect = node.get("absoluteBoundingBox") or node.get("bbox") or {}
+    origin = frame_origin or {"x": 0, "y": 0}
+    style = node.get("style") or {}
+    font_size = float(style.get("fontSize", node.get("fontSize", 0)) or 0)
+    model = {
+        "id": node.get("id"),
+        "name": node.get("name"),
+        "type": node.get("type"),
+        "visible": visible,
+        "opacity": round2(node.get("opacity", 1) if node.get("opacity", 1) is not None else 1),
+        "rect": {
+            "x": round2(rect.get("x", 0) - origin.get("x", 0)),
+            "y": round2(rect.get("y", 0) - origin.get("y", 0)),
+            "w": round2(rect.get("width", 0)),
+            "h": round2(rect.get("height", 0)),
+        },
+        "rotation": round2(node.get("rotation", 0) or 0),
+        "constraints": node.get("constraints") or {},
+        "layout": {
+            "mode": node.get("layoutMode"),
+            "itemSpacing": round2(node.get("itemSpacing", 0) or 0),
+            "counterAxisSpacing": round2(node.get("counterAxisSpacing", 0) or 0) if node.get("counterAxisSpacing") is not None else None,
+            "padding": {
+                "top": round2(node.get("paddingTop", 0) or 0),
+                "right": round2(node.get("paddingRight", 0) or 0),
+                "bottom": round2(node.get("paddingBottom", 0) or 0),
+                "left": round2(node.get("paddingLeft", 0) or 0),
+            },
+            "primaryAxisAlign": node.get("primaryAxisAlignItems"),
+            "counterAxisAlign": node.get("counterAxisAlignItems"),
+        },
+        "fills": [paint(p) for p in (node.get("fills") or []) if isinstance(p, dict) and p.get("visible", True)],
+        "strokes": stroke([
+            {**{k: node[k] for k in ("strokeWeight", "strokeAlign") if k in node}, **p}
+            for p in (node.get("strokes") or []) if isinstance(p, dict)
+        ] if is_mcp else node.get("strokes")),
+        # 【F15】独立四角圆角优先：uniform 恒存在（缺省 0.0），旧比较逻辑直接取
+        # uniform → 设计用独立四角（rectangleCornerRadii=[8,8,0,0]，卡片/半屏弹层
+        # 极常见）时设计侧恒 0、页面侧取 8 → 报 confirmed 圆角假缺陷。
+        # 比较端消费的是本模块的 radius 值——这里把「生效圆角」直接算好：
+        # corners 存在时取四角最大值（与 compare_fields 的取 max 口径一致），
+        # uniform 真缺失（键不存在）返回 None 而非 0.0。
+        "radius": _radius_of(node),
+        "effects": effects(node.get("effects")),
+        "clipsContent": node.get("clipsContent"),
+    }
+    if node.get("type") == "TEXT" or style:
+        model["text"] = {
+            "characters": node.get("characters"),
+            "fontFamily": style.get("fontFamily") or (style.get("fontName") or {}).get("family"),
+            # 【审查修复·P2 回落值错误】旧版缺失时回落到 fontName.family——family
+            # 是字体族名（"PingFang SC"），不是 PostScript 名（"PingFangSC-Semibold"），
+            # 拿族名冒充 PostScript 名会误导下游字体核对。缺失就留 None：
+            # 真实缺失可见，优于错误值冒充。
+            "fontPostScriptName": style.get("fontPostScriptName"),
+            "fontWeight": font_weight(style),
+            "fontSize": round2(font_size),
+            "lineHeight": line_height(style.get("lineHeight") or {}, font_size),
+            "letterSpacing": letter_spacing(style.get("letterSpacing") or {}, font_size),
+            "textCase": style.get("textCase", "ORIGINAL"),
+            "textAlignHorizontal": style.get("textAlignHorizontal"),
+            "textAlignVertical": style.get("textAlignVertical"),
+            "paragraphSpacing": round2(style.get("paragraphSpacing", 0) or 0),
+        }
+    provenance = node.get("pluginData") or {}
+    if provenance.get("source") == "figma-mcp-yaml-ish":
+        # MCP 的未知项不能继承 REST 分支的渲染默认值；否则未知 x/y、字距、透明度
+        # 会被补成 0/1，再变成确定的样式缺陷。标记贯穿提取与比较，不只是注释。
+        model["sourceEvidence"] = dict(provenance)
+        available = provenance.get("propertyAvailability") or {}
+        # 旧版转换器产物没有 propertyAvailability（全字段无标记）。此时不能一刀切
+        # 判「全部不可用」——实测会把真实存在的 characters 全部清空、对比度维度
+        # 整体瘫痪。fallback：availability 缺失时按字段**实际存在性**判定
+        #（存在即保留真实值；缺失仍留 None，不补默认值）。坐标除外：
+        # MCP 语法上就不提供绝对坐标，任何出现都是假值。
+        legacy = not available
+        for key in ("x", "y", "w", "h"):
+            if legacy or not available.get("rect." + key):
+                model["rect"][key] = None
+        for key in ("opacity", "rotation", "radius"):
+            if not legacy and not available.get(key):
+                model[key] = None
+        if not legacy and not available.get("layout.padding"):
+            model["layout"]["padding"] = {k: None for k in ("top", "right", "bottom", "left")}
+        if not legacy and not available.get("layout.itemSpacing"):
+            model["layout"]["itemSpacing"] = None
+        text = model.get("text")
+        if text:
+            for key in list(text):
+                if not legacy and not available.get("text." + key):
+                    if key in ("lineHeight", "letterSpacing"):
+                        text[key] = {"css": None, "px": None, "unit": None}
+                    else:
+                        text[key] = None
+    children = node.get("children") or []
+    if children:
+        model["children"] = [node_model(c, origin, visible if is_mcp else True) for c in children]
+    return model
+
+
+def flatten(nodes: list, out: list | None = None) -> list:
+    out = out if out is not None else []
+    for n in nodes:
+        out.append(n)
+        flatten(n.get("children") or [], out)
+    return out
+
+
+def pick_root(payload: dict, node_id: str | None) -> dict | None:
+    nodes = payload.get("nodes")
+    if isinstance(nodes, dict) and nodes:
+        if node_id is not None and node_id not in nodes:
+            return None
+        key = node_id if node_id is not None else next(iter(nodes))
+        entry = nodes[key]
+        return entry.get("document", entry) if isinstance(entry, dict) else None
+    if isinstance(payload.get("document"), dict):
+        root = payload["document"]
+        return root if node_id is None or root.get("id") == node_id else None
+    if payload.get("id") and payload.get("type"):
+        return payload if node_id is None or payload.get("id") == node_id else None
+    return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="把 Figma 节点 dump 规范化为可比设计模型")
+    ap.add_argument("--input", required=True, type=Path, help="get_file_nodes 返回的 JSON")
+    ap.add_argument("--node-id", default=None, help="指定根节点，缺省取 nodes 里的第一个")
+    ap.add_argument("--output", required=True, type=Path)
+    args = ap.parse_args()
+
+    if not args.input.exists():
+        print("输入不存在: {}".format(args.input), file=sys.stderr)
+        return 2
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    root = pick_root(payload, args.node_id)
+    if root is None:
+        print("未找到节点树：期望顶层含 nodes / document，或本身是 node", file=sys.stderr)
+        return 3
+
+    rect = root.get("absoluteBoundingBox") or root.get("bbox") or {}
+    origin = {"x": rect.get("x", 0), "y": rect.get("y", 0)}
+    model = node_model(root, origin)
+    flat = flatten([model])
+    text_nodes = [n for n in flat if "text" in n]
+    result = {
+        "source": str(args.input),
+        "rootId": root.get("id"),
+        "frame": {"name": root.get("name"), "w": round2(rect.get("width", 0)), "h": round2(rect.get("height", 0))},
+        "stats": {"nodes": len(flat), "textNodes": len(text_nodes), "withFills": len([n for n in flat if n["fills"]])},
+        "tree": model,
+        "flat": flat,
+    }
+    if isinstance(payload.get("meta"), dict):
+        result["meta"] = dict(payload["meta"])
+    result["unavailableProperties"] = [
+        {"nodeId": n.get("id"), "coordinateBasis": "unavailable",
+         "propertyAvailability": n["sourceEvidence"].get("propertyAvailability", {}),
+         "uncertainties": n["sourceEvidence"].get("uncertainties", [])}
+        for n in flat if n.get("sourceEvidence")]
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"ok": True, "nodes": len(flat), "textNodes": len(text_nodes), "output": str(args.output)}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

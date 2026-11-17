@@ -155,7 +155,10 @@ class ObservationBridgeTests(unittest.TestCase):
         self.assertEqual(item["attributes"], ["performance"])
         self.assertEqual(item["status"], "NOT_RUN")
         self.assertEqual(item["observation"], "")
-        self.assertNotIn("性能", report["gate"]["missing_views"])
+        # 采集候选进台账 ≠ 已实测：NOT_RUN 不得让性能视角计为覆盖
+        self.assertIn("性能", report["gate"]["missing_views"])
+        self.assertEqual(report["gate"]["executed_views"]["性能"], [])
+        self.assertEqual(report["gate"]["skipped_views"]["性能"], [])
         self.assertIn("界面样式", report["gate"]["missing_views"])
 
     def test_performance_item_names_uncollected_families_for_followup(self):

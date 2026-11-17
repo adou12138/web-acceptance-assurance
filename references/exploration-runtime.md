@@ -25,7 +25,7 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 使用绝对路径或以专家包根为当前目录；输出父目录必须存在，拒绝覆盖。退出码0仅表示校验/导出完成，2表示数据或工具错误，不是网站质量门禁。
 
-摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中没有任何记录的视角，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无记录或清单中没有任何控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-`）时上限为“待核实”，报告不得写“通过”；`traversal_pending`单列仍为 NOT_RUN 的遍历条目数；SKIPPED/BLOCKED因必须带原因，视为该视角已记录。门禁只约束结论上限，不代替缺陷、断言与证据判定。
+摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录或清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）时上限为“待核实”，报告不得写“通过”；`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
 
 根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`。每个item必填：
 
@@ -50,7 +50,7 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 控件遍历是对本次需求触达的每个页面/弹窗做一次系统性控件清点（输入项、按钮、开关、链接、下拉），逐个记录可交互性与当前态，ID 使用 `EXP-TRAV-` 前缀以便门禁识别。属性用 `functional+visual+usability` 组合（遍历同时服务功能可用性、界面样式与交互易用性三个视角）。每个产出技术结论的批次，清单中必须至少有一条已记录（非 NOT_RUN）的遍历条目：没有时 `gate.traversal_recorded` 为假，`verdict_ceiling` 上限为待核实；仍为 NOT_RUN 的遍历条目数单列在 `gate.traversal_pending`。确无控件可遍历（如纯接口批次）时写一条 SKIPPED 遍历条目并给出原因，不静默缺席。遍历条目是观察记录，不替代逐控件断言用例，也不把“清点过”当作“测过”。
 
-摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
+摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/executed_views/skipped_views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
 
 CSV派生“界面样式”“交互易用性”“基础无障碍”“功能”“性能”视角，一条记录可属于多个视角，planned与总量按唯一id去重。CSV采用标准引号转义，疑似公式单元格加前导单引号避免表格应用执行，原始JSON不改。此视图不自动生成BUG严重度、UX评分或AC满足率；业务判断仍用实际断言与证据。正式执行结果不要直接从可编辑清单反向覆盖events.jsonl。
 

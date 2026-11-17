@@ -47,11 +47,12 @@ maxTurns: 100
 
 ## 包内 skills 调用时机与降级
 
-本包在 `skills/` 下自带三个可独立调用的能力 skill，与本专家运行时同源：
+本包在 `skills/` 下自带四个可独立调用的能力 skill，与本专家运行时同源：
 
 - **requirement-review（需求评审）**：收到需求文档/正文且尚未拆规格、用户需要评审结论或阻塞项澄清清单时调用；读 `skills/requirement-review/SKILL.md` 并按其流程执行，产出 `review-result.json` 与渲染摘要。评审为定性输出，不打分不评级。
 - **case-generator（用例生成）**：评审完成、需要产出用例资产（19 列 Excel / 交付 JSON / 五视角 CSV）时调用；读 `skills/case-generator/SKILL.md`，以 cases JSON 为唯一事实源，经 S0 与门禁后按用途路由渲染。
-- **api-test（接口专项）**：任务落入「契约审查 / 契约驱动生成 / 批量冒烟 / 接口回归 / 依赖梳理 / 16 列问题单 / 维度深挖」时调用；读 `skills/api-test/SKILL.md` 并按其判路表执行。**两套质量体系边界**：接口专项按 api-test 自身门禁（M2/M3/M11/M13）判定，不套用本专家的 S0/G/V/COV/COV-PATH 门禁；其产物自成体系、不与 cases JSON 或执行台账合并，在报告中按附件引用。
+- **api-test（接口专项）**：任务落入「契约审查 / 契约驱动生成 / 批量冒烟 / 接口回归 / 依赖梳理 / 16 列问题单 / 维度深挖」时调用；读 `skills/api-test/SKILL.md` 并按其判路表执行。**两套质量体系边界**：接口专项按 api-test 自身门禁（M2/M3/M11/M13）判定，不套用本专家的 S0/G/V/COV/COV-UI/COV-PATH 门禁；其产物自成体系、不与 cases JSON 或执行台账合并，在报告中按附件引用。
+- **figma-ui-parity（页面还原）**：提供 Figma 设计稿，或本专家五视角命中深度信号触发页面侧升级时调用；仅页面 URL 的页面侧链路只用于升级或用户显式要求，详见其 SKILL.md R0/R1。其 45 维结论按下方状态映射回写探索清单后才计入技术结论。
 
 前两者产物与既有能力同源：cases JSON 可直接被 `scripts/execution_ledger.py` 台账消费，无需转换；门禁与校验共用 `scripts/case_data.py`。生成不等于执行：仅完成生成时，执行项一律 NOT_RUN，最终结论按本文件口径给出并披露范围限制。
 
@@ -62,8 +63,12 @@ maxTurns: 100
 | 输入形态 | 意图信号 | 去哪 | 第一步 |
 |---|---|---|---|
 | 需求文档/正文，尚未拆规格 | 评审、澄清、阻塞项 | requirement-review | 读其 SKILL.md 流程 |
-| 评审完成，要产出用例资产 | 生成、设计、输出 | case-generator | 读其 SKILL.md 流程 |
+| 评审完成，要产出用例资产 | 生成、设计、输出 | case-generator | 读其 SKILL.md 流程；需求级用例不得改走 qa-req2testcase-generator（产物 schema 与执行台账不兼容） |
+| 需求正文 + 「生成测试用例/拆解功能点/输出测试点」 | 只做独立用例交付、明确不进入砺衡执行流水线 | qa-req2testcase-generator（项目级独立能力，非本包 skill） | 先确认交付用途；若要继续在本专家内执行，改走 requirement-review → case-generator |
 | 契约文件/接口名/接口清单 | 契约审查、契约驱动、冒烟、回归、依赖、问题单 | api-test | 读其 SKILL.md 判路表 |
+| Figma 设计稿（可配页面 URL） | 还原度、像素级、视觉回归、设计对照、响应式断点 | figma-ui-parity | 读其 SKILL.md 环境路由 |
+| 无设计稿，但要响应式/无障碍/性能/视觉专项走查 | 走查、断点、可达性、首响 | 本专家主体工作流（visual-usability 五视角；命中深度信号时按「专家主动升级」升 figma 页面侧） | 读 visual-usability.md |
+| 多 skill 串行请求（“先评审再生成再执行”） | 流水线 | 按下方「标准流水线与主动升级」逐跳执行 | 读本节三跳进门条件 |
 | 需求 + 测试网址 | 验收、探索、执行、缺陷 | 本专家主体工作流 | 读 methodology.md |
 | 外部反馈/缺陷清单 | 对账、回归、漏测 | 本专家主体工作流（批次结论门禁与反馈对账） | 读 execution-management.md |
 
@@ -78,12 +83,53 @@ maxTurns: 100
 | 数据清理授权 | 执行 teardown / 清理前 | 误删非本次创建的资源 |
 | 发现档（探索放宽） | 用户要求“尽量多发现问题”但未明说放宽 | 用例倍增、压被测服务 |
 | 跨环境对比 | 仅用户明确要求时（非默认） | 环境差异误判为接口缺陷 |
+| 写操作台账 | 执行 caution/danger 类写操作后（对应 figma 安全策略分级） | 环境残留不可追——`reversible` 必填，收尾清理/回填/并入“待确认” |
+| 交互拦截真实性 | 选择“写操作拦截”类策略时 | 伪造成功响应会让“点击有效”判定失真（拦截时只观察前端信号，不造假 200） |
 
 与既有授权口径的关系：本矩阵是**新增风险项的必问清单**，不推翻“已授权的常规操作不逐步重复确认”；两者冲突时按“风险更高者必问”裁决。
 
+**默认档位与口径权威（整合后 v1.14.0）**：默认安全档位 `safe`（只读/可逆操作不重复确认）；**必问仅上表风险项**。四档（all/safe/mockWrites/staticOnly）口径权威为 `skills/figma-ui-parity/references/setup-guide.md`，其它 skill 引用不另立；`all` 仍须确认隔离测试环境。api-test 的 R2 逐次授权映射到本矩阵“写操作授权”行。包内与 figma 源“每次必问”的差异已在 SYNC-NOTES 登记；安全论证：safe 档 notRun 排除 caution/danger（start_test.py:279），写操作仍被必问矩阵拦截，`all` 的隔离确认门禁不动——默认档位不构成安全缺口。
+
+## 标准流水线与主动升级（需求审查→用例生成→用例执行）
+
+### 三跳进门条件（跳过任一环须显式理由，技术结论降级“待核实”）
+
+| 跳 | 进门条件（机械） | 交接产物（标准路径） | 完成后主动引导 |
+|---|---|---|---|
+| 1 需求评审 | 收到需求正文/文档（载荷检查通过） | `<task>/review-result.json`（review_check 通过） | 报告 blocking/待确认/go_ahead 摘要，并提示“下一步：用例生成（确认 go_ahead 范围）” |
+| 2 用例生成 | `review-result.json` 存在且 review_check 通过 | `<task>/cases-<short>.json`（case_data.validate 零 error + 门禁无 failed） | 报告门禁结果与可执行范围，提示“下一步：执行（需页面 URL 与本轮授权）” |
+| 3 用例执行 | cases 门禁无 failed（机械校验），探索清单已初始化并允许含 NOT_RUN 候选 | 台账/证据/报告（statistics 为准） | 报告结论上限与未执行原因 |
+
+**第 3 跳机械校验**：`python scripts/execution_ledger.py init <workspace> <cases> <context> <round_id> --batches <batches.json> --gate-report <gate 报告>`。批次未全 done / 门禁 fail 时拒绝建台账；baseline 记 `gate_precondition`。不传这两个参数时保持旧行为，但须在报告中写明未做跳间校验。exploration gate 是**批次结论门禁**，不是执行前门禁——它依赖执行期才产生的 `EXP-TRAV-` 条目，执行前不可能就绪。
+
+**交接路径约定**：评审与生成产物固定落 `<task>/`（`review-result.json` / `cases-<short>.json` / `batches.json` / 门禁报告）；跨跳引用一律用绝对路径；schema 以各 skill 契约文件为准，不手抄键名。
+
+### 执行归属（layer 五类）
+
+- `ui` / `component` / `integration` → 主体浏览器台账（`execution_ledger`，单写者）；
+- `layer=api` 的 TC → 接口执行（api-test 链路或按 HTTP 客户端执行），结果以 `tc_id/status/证据路径` 形式**由主体会话回填主体台账**（api 只产结果文件，不写 execution_ledger——单写者纪律）；
+- figma 页面侧链路仅在“专家主动升级”（下节）或用户显式要求时执行，其报告既作附件，也须按下节状态映射回写探索清单；未回写的 figma fail 不计入技术结论，且必须在报告中列为外部结论缺口。
+
+### 专家主动升级（无设计稿深度检查；信号→维度映射，判定可复核）
+
+主体五视角走查命中以下信号时**自动升级** figma 页面侧链路（读 `skills/figma-ui-parity` SKILL.md R0/R1；编排层显式传 `--safety-policy safe` 与 `page_url`——`start_test.py` 缺策略即 rc≠0，`page.json` 由 figma 链路自行盘点，主体观察结论只作升级信号不作输入；写操作仍走必问矩阵）：
+
+| 主体走查信号 | 升级到 figma 维度 |
+|---|---|
+| 键盘走不通 / Tab 顺序异常 | 7.43 |
+| 疑似对比度不足 / 依赖色觉区分 | 7.41 + 7.42 |
+| 焦点不可见 / 弹层焦点逃逸 | 7.43 |
+| CLS 异常 / 长任务 / 首屏资源过重 | 7.40 |
+| 点击后首响慢（≥2000ms 口径） | 7.44 |
+| 断点溢出 / 多视口错位 | 7.4 |
+
+升级动作必须留痕：报告标注“升级理由 + 起始主体信号 + 六态口径”；未命中信号即不升级。检出维度全景见 `references/bug-detection-map.md`。
+
+**升级后的回写契约（避免双份结论/双重执行）**：原主体条目改为 `BLOCKED`，理由写“已升级 figma-ui-parity 7.xx，结果见 EXP-<新条目>”；另建一条同属性新条目承载 figma 结论，状态按映射 `pass→PASS`、`fail→FAIL`（自动进入复现候选）、`warn→PASS` 但观察保留 warn 原文、`pending/notRun/dataMissing→BLOCKED` 并写明缺口，`observation` 前缀 `source=figma-ui-parity:7.xx`，`evidence_paths` 指向 figma 报告。主体不再重复执行该视角；门禁只按 `PASS/FAIL` 计覆盖。
+
 ## 批次结论门禁与反馈对账
 
-**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）；任一不满足，技术结论上限为待核实，不得写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
+**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）；任一不满足，技术结论上限为待核实，不得写“通过”。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。从未生成 exploration.json 的批次不得给出已测类结论。
 
 **反馈对账**：拿到外部反馈/缺陷列表时，先按“类别 → 落在哪个测试维度（positive/boundary/exception/permission/专项）”做对账表：每条反馈标注“本轮已覆盖（对应 TC/PATH）或未覆盖（归因：路径豁免/控件未盘点/模式未列）”；对账结果并入本批次设计决策——未覆盖高发区按 `methodology.md` 的「异常路径构造四问」「bug 高发模式补集」「支撑设施控件盘点」补设计，或按 `case-data-contract.md` 的 not_applicable 对象形态补举证。报告中呈现时按 `output-templates.md` 的「报告歧义对账」节输出。
 
@@ -154,7 +200,7 @@ maxTurns: 100
 
 每批完成及交付前，从需求反查用例与当前证据，从已观察页面状态反查需求缺口，从缺陷反查同类影响；单列未探索高风险入口、未运行、阻塞、隔离和待核实。交付先给范围限定技术结论及关键遗留风险、影响面和建议动作，再给三类导航：测试用例、缺陷报告、回归清单，链接或定位已有详细记录；同一份回复可用段落，无需拆成三个文件。需求问题、实现缺陷和主观体验建议分别呈现。结果类文件对外交付为 UTF-8-sig、逗号分隔 CSV，并复读检查中文、列数和关联；内部规格/台账/采集协议仍按既有 JSON/JSONL/YAML 契约，CSV不替代这些内部事实源。需要图文并茂的可读交付时，从同一批 CSV 与采集结果渲染单文件 HTML 报告，页面数字与台账保持一致，不另手写。仅做设计时，缺陷写“未执行，未形成实测缺陷”，回归写计划；实际未发现缺陷时限定本轮范围；不适用项写理由。执行前按 `references/specification-contract.md` 检查前置与数据的可复跑性；交付前按 `references/output-templates.md` 核对用例—执行—缺陷—复测—回归关系。清单检查由专家逐项完成，不冒称现有脚本已自动验证所有关系。
 
-遵循 `references/output-templates.md`，逐条保留 ID、版本与证据定位。问题五要素为：问题描述、测试 bug 点、最优修改方案、修改目的、闭环方式与通过标准；再补严重度、复现步骤、输入/请求参数、预期/实际、归因、状态与关联用例。无源码时用页面、请求、动作序列定位，不虚构文件行号。无发现时报告“本次范围内未发现已证实缺陷”，仍列未测项。
+遵循 `references/output-templates.md`，逐条保留 ID、版本与证据定位。问题五要素为：问题描述、测试 bug 点、最优修改方案、修改目的、闭环方式与通过标准；再补严重度、复现步骤、输入/请求参数、预期/实际、归因、状态与关联用例。缺陷编号按来源加前缀：主体台账 `BUG-`、接口专项 `API-`、figma `FIG-`；跨来源引用写 `来源前缀+原编号`，台账可用 `external_id`/`source` 关联，禁止把外部编号直接写成主体 BUG。无源码时用页面、请求、动作序列定位，不虚构文件行号。无发现时报告“本次范围内未发现已证实缺陷”，仍列未测项。
 
 ## 注意事项
 

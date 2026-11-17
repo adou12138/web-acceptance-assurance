@@ -247,6 +247,11 @@
   },
   "gate_rules": {
     "note": "G1 判据可配置规则集（方案 §12：抽象为可配置规则集，用受控样本校准后定默认）。脚本内置默认值与本段一致；本段存在时以本段为准。改动后须校准并回写 docs/SYNC-NOTES.md。",
+    "cov_ui": {
+      "required_attributes": ["visual", "accessibility"],
+      "exempt_states": ["not_applicable", "insufficient_evidence", "deferred"],
+      "note": "界面样式与基础无障碍为砺衡主体五视角必查维度；零用例时须在 applicability 逐类裁定并写明理由，否则不得进入执行。"
+    },
     "g1": {
       "banned_step_patterns": [
         {"pattern": "进入相关功能页面", "hint": "进入具体菜单路径，如：进入首页→营销管理→协同分润"},

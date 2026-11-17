@@ -197,6 +197,32 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["counts"]["NOT_RUN"], 2)
 
+    def test_init_rejects_unclosed_batches_and_failed_gate_report(self):
+        target = self.folder / "blocked-run"
+        good_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass"}]}
+        bad_batches = {"batches": [{"unit_id": "M01", "status": "doing", "gate": "not_run"}]}
+        good_gate = {"status": "warning", "checks": [{"id": "V09", "status": "warning"}]}
+        bad_gate = {"status": "fail", "checks": [{"id": "S0", "status": "failed"}]}
+        for batches, gate in [(bad_batches, None), (good_batches, bad_gate),
+                              (good_batches, {"status": "pass", "checks": [{"id": "S0", "status": "failed"}]})]:
+            with self.subTest(batches=batches, gate=gate), self.assertRaises(ValueError):
+                self.tool.initialize(target, self.design, self.context, "ROUND-BLOCKED", [], batches, gate)
+            self.assertFalse(target.exists(), "拒绝初始化时不得留下空工作区")
+        baseline = self.tool.initialize(target, self.design, self.context, "ROUND-OK", [], good_batches, good_gate)
+        self.assertEqual(baseline["gate_precondition"], {"batches_closed": True, "gate_report_status": "warning"})
+
+    def test_bug_ledger_accepts_source_namespace_but_rejects_empty_external_id(self):
+        valid = [{"id": "BUG-1", "severity": "major", "status": "open",
+                  "source": "figma-ui-parity", "external_id": "FIG-7.41-1"}]
+        self.assertEqual(self.tool._bugs(valid), valid)
+        with self.assertRaises(ValueError):
+            self.tool._bugs([dict(valid[0], external_id="")])
+
+    def test_init_hints_qa_pipeline_when_design_shape_is_wrong(self):
+        with self.assertRaises(ValueError) as raised:
+            self.tool.initialize(self.folder / "qa-run", {"test_cases": [{"id": "TP-1"}]}, self.context, "ROUND-QA")
+        self.assertIn("qa-req2testcase-generator", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
