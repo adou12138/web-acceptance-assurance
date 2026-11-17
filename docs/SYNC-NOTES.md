@@ -53,7 +53,7 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 ## figma-ui-parity 包内 skill 对照表（v1.13.0，2026-11-17）
 
-- **剥离源**：figma-ui-parity **4.47.0**（版本冻结）。源 skill **零改动**（源 git 零 WIP + 对照快照证明零写入）。
+- **剥离源**：figma-ui-parity **4.48.0**（版本冻结；初次搬入为 4.47.0，v1.18.1 对齐到 4.48.0）。源 skill **零改动**（源 git 零 WIP + 对照快照证明零写入）。
 - **搬入**：SKILL.md（**源复制 + 头部插入砺衡段**，frontmatter `version: 4.47.0` 原样保留——`test_environment_contract` 强制 frontmatter 与 `check_environment.VERSION` 一致）、references **35** 份、scripts **34 py + 16 cjs**、scripts/tests **35 py + 2 cjs**、schemas 3、assets **3（含 `dimension_manifest.json`）**、skill-dependencies.json（宿主依赖矩阵）、test-prompts.json（触发回归基线）、README、.gitignore。
 - **不搬**：`.git/`（1322 文件）、`.codeartsdoer/`（IDE 元数据 22）、`.pytest_cache/`、`parity-test/`（源运行工作区 + 认证目录，安全）。
 - **剥离适配（2 处行为级）**：① `check_environment.local_playwright_core()` 候选链新增 **`PLAYWRIGHT_CORE_PATH`**（与 `scripts/node/browser.cjs` 候选链对齐；专家包内无 `cdp_driver` 布局）；② 砺衡段声明 Windows 中文环境跑测试需 **`PYTHONUTF8=1`**（测试依赖 UTF-8 默认编码，GBK 环境下 32 errors 的实测教训）。
@@ -130,3 +130,14 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **接入点**：agents「参考规范读取契约」增加“取设计数据前读取”，入口判路表 figma 行改为“先判定取数来源再读其环境路由”；README 文件清单登记；`tests/test_reference_links.py` 扩展为同时守卫 browser-connection 与 design-data 的路由及关键约束。
 - **figma-ui-parity 同步修（4.47.0 → 4.48.0）**：通道 A 改为按能力判定，兼容 figma-developer-mcp（`get_figma_data` / `download_figma_images`）与官方远程 MCP（`get_file_nodes` / `get_images`）两族；通道 B 的 token 读取兼容 `headers.X-Figma-Token` 与 `env.FIGMA_API_KEY`/`FIGMA_TOKEN`（原先只读 headers，本机实测 `KeyError`）；`extraction.md`/`figma-fields.md`/`error-handling.md`/`real-env-verification.md` 的工具名表述一并统一。
 - **实测**：修复后令牌脚本实跑成功、`/v1/me` 返回 200；`mcp__figma__get_figma_data` 已加载，用假 fileKey 探活返回 404（链路通、非 401）；figma 技能 365 测试 OK。
+
+## figma 副本漂移对齐（v1.18.1，2026-11-17）
+
+起因：核实「包内 figma-ui-parity 是否为全量集成的剥离副本」时逐文件比对，发现 **快照同步只做了一半**——`SKILL.md` 与 `README.md` 已升到 4.48.0，但承载 4.48.0 操作口径的 5 份 `references` 仍是 4.47.0 文本。
+
+- **漂移证据**（源 `ab76825` 的 8 个文件里，包内缺 5 份）：`tooling.md` 88 行 vs 源 100 行，缺「通道 A 两族工具名能力表」（`get_figma_data`/`download_figma_images` ↔ `get_file`/`get_file_nodes`/`get_images`）、「`get_figma_data` 返回 YAML-ish 文本须经 `figma_mcp_to_json.py` 转换」、「`download_figma_images` 的 `localPath` 限制」、「取不到 token 的判据行」；`extraction.md`/`figma-fields.md`/`error-handling.md`/`real-env-verification.md` 各 1 处取数与工具名口径停在 4.47.0（`real-env-verification.md` 甚至只写 `get_file_nodes`）。
+- **后果**：包内执行时仍按工具名猜族，只有 figma-developer-mcp 时会被判成「通道 A 不可用」白白降级到 REST；即便取到数据也会把 YAML-ish 文本当 REST JSON 直接喂 `extract_design_fields.py`。SKILL.md 头部却已声明「4.48.0 起按能力判定」——声明与操作口径自相矛盾。
+- **修复**：5 份按源文件整体覆盖。覆盖前确认三者皆无（包内无剥离适配注记、无测试断言其文本、无被排除资产引用），故整份覆盖不会冲掉适配。
+- **复核**：与源逐文件 `cmp` 后，剩余 4 处差异均为**预期剥离适配**——`SKILL.md`（+10 行包内版声明与整合标注）、`check_environment.py`（`PLAYWRIGHT_CORE_PATH` 候选）、`compare_fields.py`（缺输入/坏 JSON → rc=2）、`test_start_gate.py`（三态断言）；另有包内独有 `test_compare_input_errors.py`。
+- **判据补强**：此前「快照同步至 4.48.0」的验收只看 `SKILL.md` 版本号，版本号升了即认为同步完成。此后同步验收必须按**源提交涉及的文件清单**逐份 `cmp`，不能只看入口文件的 frontmatter。
+- **验证**：包根 139 测试 OK；包内 figma 367 测试 OK（`PYTHONUTF8=1` + `PLAYWRIGHT_CORE_PATH`）。缓存 `1.18.1` 与工作区 `diff` 为空，旧缓存 `1.16.0`/`1.17.0`/`1.18.0` 的 `SKILL.md` 全部转为 `.disabled`。

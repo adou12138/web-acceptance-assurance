@@ -82,7 +82,7 @@
 - 先比 `characters` 原始值 ↔ 页面 `textContent`；
 - 若不一致，再检查是否因 `textCase` 变换导致——是则判"通过（大小写由样式控制）"，否则判"文案不一致缺陷"。
 
-#### 设计稿尺寸提取脚本（从节点数据读取；官方 `get_file_nodes` 与 figma-developer-mcp `get_figma_data` 节点结构同源）：
+#### 设计稿尺寸提取脚本（从节点数据读取；官方 `get_file_nodes` 与 figma-developer-mcp `get_figma_data` 的节点结构同源）：
 
 ```javascript
 // 假设 node 是 get_file_nodes / get_figma_data 返回的节点对象

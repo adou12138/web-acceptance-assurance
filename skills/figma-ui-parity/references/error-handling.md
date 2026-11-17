@@ -36,7 +36,7 @@
 1. 立即停止当前工具调用。
 2. 告知用户"token 在获取数据过程中失效"。
 3. 使用 `AskUserQuestion` 询问是否提供新 token 继续。
-4. 如用户提供新 token：按 `tooling.md` 1.2 口径写回 `mcp.json`（`headers.X-Figma-Token` 或 `env.FIGMA_API_KEY`，与现有形态一致）→ 从失败的工具调用处重试（无需重新执行已成功的步骤）。
+4. 如用户提供新 token：按 `tooling.md` 1.2 的令牌口径写回 `mcp.json`（`headers.X-Figma-Token` 或 `env.FIGMA_API_KEY`，与现有形态一致）→ 从失败的工具调用处重试（无需重新执行已成功的步骤）。
 5. 如用户拒绝：保存已获取的数据，生成部分报告并标注"因 token 失效，部分数据缺失"。
 
 ---

@@ -16,7 +16,7 @@
 # 1. 建工作目录与凭据隔离
 python scripts/init_workdir.py --root .
 
-# 2. 设计侧：把真实 get_file_nodes 产物规整为 design_model.json
+# 2. 设计侧：把真实节点产物（get_file_nodes / get_figma_data，或 REST nodes 响应）规整为 design_model.json
 python scripts/extract_design_fields.py --input ./parity-test/figma_raw.json --output ./parity-test/design_model.json
 
 # 3. 页面侧（二选一）
