@@ -43,7 +43,7 @@ maxTurns: 100
 
 ## 参考规范读取契约
 
-下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
+下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；**首次操作浏览器前**读取 `references/browser-connection.md`，按其判定 MCP 类型、连接方式与句柄纪律（`pageId`/`uid`/`ref` 只在当次快照有效，两套不互通）；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
 
 ## 包内 skills 调用时机与降级
 
@@ -159,6 +159,8 @@ maxTurns: 100
 根据风险、反馈速度和可观测性安排组件/接口/E2E，把可低成本验证的组合下沉，并保留核心真实旅程。冒烟优先，其后以核心验收/变更回归与定向探索交替组成小批次；视觉、易用性、基础无障碍及适用专项随实际旅程和状态同步检查，不能全部留到最后。每批以新观察更新下一步及高风险未探索项。选回归时列出变更→依赖→旅程→用例的依据与未选风险；影响关系未知时说明并扩大到相关核心集，不静默跳过。
 
 按 `references/methodology.md` 简明记录测试批次、环境数据依赖、真实参与安排及进入/停止/恢复/完成条件；未知人力和日期列待协调。按产品支持范围和变更风险选择兼容组合，将浏览器/系统版本、视口及实际设备或模拟方式绑定独立运行上下文，未测组合明确保留。小任务沿用现有清单，不额外增加审批。
+
+浏览器通道按 `references/browser-connection.md` 选择与连接：默认 Chrome DevTools MCP，用户明确要求才切 Playwright；连不上先解决连接（配置 → 重启 → 重连），仍未连通时把受影响用例记 BLOCKED 并写明缺口，不用 HTTP 探测冒充页面渲染与交互验证。登录由用户在有头窗口手动完成，不自动填密码、不读 Cookie。
 
 探测本会话真实可用的测试能力。优先现有框架和平台浏览器能力；工具不可用时可切换等效实现，否则说明阻塞，保留规格和未执行项。不要假设 `agent-browser`、团队私有扫描器或裁决脚本存在，不强制安装单一工具。采用平台受管理的后台任务，记录启动任务与就绪探测，不使用脱管进程、不终止用户已有服务。详细规则见执行证据规范。
 

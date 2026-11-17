@@ -112,3 +112,12 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **R12 执行文档缺新参数**：`execution-management.md` 补 `init --batches/--gate-report` 命令与全部拒绝条件。
 
 **验证**：专家包根 134 OK；case-generator 78 OK；figma 367 OK；合计 579 Python 测试通过。真实产物复验：真实 batches+gate 建台账成功（`gate_report_case_count=30`）、最小载荷 rc=2、少登记一条用例 rc=2、真实 30 条用例 CSV 摘要 `view_rows=38 / unique_cases=30`、非法 task_id rc=2、存量用例集 COV-UI 为 warning。
+
+## 浏览器通道文档（v1.17.0，2026-11-17）
+
+此前执行期只有 `browser_observer.js` 等采集脚本，没有「用哪套 MCP、怎么连、句柄怎么用」的约定，实测中登录、截图落盘、白屏归因都是临时摸索。本轮按 `web-agent-stream-capture` 技能的连接方式提炼稳定部分，新增包级文档并接入路由：
+
+- **新增 `references/browser-connection.md`**：MCP 判定表（默认 Chrome DevTools，Playwright 为备选）；三种连法与 `--isolated` 禁令；登录由用户手动完成、不读 Cookie、多信号判定；机器人检测两层参数（信息栏开关 + Blink 特性）；`pageId`/`uid`/`ref` 当次有效且两套不互通；`fill` 用 `value`、`wait_for` 无「等消失」；截图需 `--filesystemRoot`；双通道协同（驱动归 Playwright、观察归 DevTools）与未对齐不采信；证据边界（空 issues/成功退出不算通过）。
+- **接入点**：agents「参考规范读取契约」增加“首次操作浏览器前读取”与工作流程第 3 步的通道选择段；`exploration-runtime.md` 责任分层指向该文档；README 文件清单登记。
+- **新增 `tests/test_reference_links.py`**：校验文档提到的 references 真实存在（按包级/skill 级同名解析，跳过缓存溯源行）、每个 reference 都有回链、agents 与 README 必须路由浏览器通道文档、该文档保留关键约束。变异验证：删除该文档后测试变红。
+- 外部技能的深层排障（跨域 iframe、审批卡、流式结束判定）以“本机装有该技能时按其 references 处理”表述，不在本包复制，避免两份说法漂移。
