@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "flow_id": "survey_create_publish_cleanup",
+  "name": "问卷创建、发布、回读与清理（示例）",
+  "resource_type": "survey",
+  "sources": [
+    {
+      "source": "showdoc_api_docs",
+      "evidence": "请替换为知识库契约中的连续原文证据",
+      "confidence": "candidate",
+      "note": "示例流程仅用于设计计划，不代表已确认的真实 action。"
+    },
+    {
+      "source": "wjx-cli-process-reference",
+      "evidence": "仅作为业务流程参考，不作为执行依据",
+      "confidence": "candidate"
+    }
+  ],
+  "steps": [
+    {
+      "id": "create",
+      "action": "<create-action>",
+      "operation": "create",
+      "produces": {
+        "survey_id": "data.survey_id"
+      },
+      "verifies": [
+        "resource.exists == true"
+      ],
+      "cleanup": {
+        "action": "<delete-action>",
+        "operation": "delete",
+        "verify_absent": true
+      }
+    },
+    {
+      "id": "publish",
+      "action": "<publish-action>",
+      "operation": "publish",
+      "requires": [
+        "${create.survey_id}"
+      ],
+      "preconditions": [
+        "resource.state == draft"
+      ],
+      "verifies": [
+        "resource.state == published"
+      ]
+    },
+    {
+      "id": "read",
+      "action": "<read-action>",
+      "operation": "read",
+      "requires": [
+        "${create.survey_id}"
+      ],
+      "verifies": [
+        "resource.exists == true",
+        "resource.state == published"
+      ]
+    }
+  ],
+  "approval": {
+    "approved": false
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "_readme": "排除参数配置示例（复制为 exclude_params.json 或 exclude_params_<project>.json 后填写）。四级回退：--exclude-config 显式 > exclude_params_<project>.json > exclude_params.json > exclude_params.default.json（出厂兜底）；第一个存在的文件即基底清单（替换语义，层间不合并），CLI --exclude-params 只追加、同名值覆盖。条目语法与 --exclude-params 完全一致：name 表示该参数不参与用例生成、值走请求示例/契约默认值/引擎注入；name=value 表示固定值进每条请求。以 _ 开头的键会被忽略，可留作说明。",
+  "exclude_params": []
+}

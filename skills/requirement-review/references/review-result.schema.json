@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "review-result.json 交接契约 schema 1.0",
+  "description": "requirement-review 产出、case-generator（review_bridge.py）消费的唯一交接事实源。字段定义与集成方案 §5 一致：features/acceptance/requirements 为方案 §3B 扩展。",
+  "type": "object",
+  "required": ["schema_version", "requirement", "requirements", "features", "acceptance", "modules", "confirmed_rules", "blocking", "pending", "go_ahead", "coverage_gaps", "not_reviewed"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "requirement": {
+      "type": "object",
+      "required": ["id", "title", "version", "fingerprint", "reviewed_at"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^REQ-\\d{2,}$"},
+        "title": {"type": "string", "minLength": 1},
+        "version": {"type": "string"},
+        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "reviewed_at": {"type": "string", "description": "带时区的 ISO8601 时间"}
+      }
+    },
+    "requirements": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "source", "description", "confirmation"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "pattern": "^REQ-\\d{2,}$"},
+          "name": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "confirmation": {"enum": ["confirmed", "provisional", "ambiguous"]}
+        }
+      }
+    },
+    "features": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["feature_id", "module_code", "name", "description", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "feature_id": {"type": "string", "pattern": "^FP-\\d{2,}$"},
+          "module_code": {"type": "string", "pattern": "^M\\d{2}$"},
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "acceptance": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["acceptance_id", "requirement_id", "feature_id", "required", "confirmation", "elements", "oracle"],
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_id": {"type": "string", "pattern": "^AC-\\d{2,}$"},
+          "requirement_id": {"type": "string", "pattern": "^REQ-\\d{2,}$"},
+          "feature_id": {"type": "string", "pattern": "^FP-\\d{2,}$"},
+          "required": {"type": "boolean"},
+          "confirmation": {"enum": ["confirmed", "provisional", "ambiguous"]},
+          "elements": {
+            "type": "object",
+            "required": ["scene", "object", "condition", "focus"],
+            "additionalProperties": false,
+            "properties": {
+              "scene": {"type": "string", "minLength": 1},
+              "object": {"type": "string", "minLength": 1},
+              "condition": {"type": "string", "minLength": 1},
+              "focus": {"type": "string", "minLength": 1}
+            }
+          },
+          "oracle": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "modules": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["module_code", "name", "feature_ids", "estimated_case_count"],
+        "additionalProperties": false,
+        "properties": {
+          "module_code": {"type": "string", "pattern": "^M\\d{2}$"},
+          "name": {"type": "string", "minLength": 1},
+          "feature_ids": {"type": "array", "items": {"type": "string", "pattern": "^FP-\\d{2,}$"}, "minItems": 1},
+          "estimated_case_count": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "confirmed_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "feature_id", "text", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {"type": "string", "pattern": "^R-\\d{2,}$"},
+          "feature_id": {"type": "string", "pattern": "^FP-\\d{2,}$"},
+          "text": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "blocking": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["issue_id", "feature_id", "question", "impact"],
+        "additionalProperties": false,
+        "properties": {
+          "issue_id": {"type": "string", "pattern": "^B-\\d{2,}$"},
+          "feature_id": {"type": "string", "pattern": "^FP-\\d{2,}$"},
+          "question": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "pending": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["issue_id", "feature_id", "question", "assumption"],
+        "additionalProperties": false,
+        "properties": {
+          "issue_id": {"type": "string", "pattern": "^P-\\d{2,}$"},
+          "feature_id": {"type": "string", "pattern": "^FP-\\d{2,}$"},
+          "question": {"type": "string", "minLength": 1},
+          "assumption": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "go_ahead": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^FP-\\d{2,}$"}
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["area", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "area": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "not_reviewed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dimension", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "dimension": {"enum": ["completeness", "consistency", "clarity", "testability", "performance_security", "state_coverage", "acceptance_mapping", "historical_consistency"]},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

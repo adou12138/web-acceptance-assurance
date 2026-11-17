@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "execution result",
+  "description": "执行产物（*_report_full.json）契约。本 schema 覆盖两种生产者形态：① case_runner.py 形态——results/findings/coverage_plan/flaky 四键；② api_test_runner.py 形态——同一份数据放在 cases 键（历史键名），另带 base_url/fixed_params/creater/summary/timestamp，无 coverage_plan。消费方读取时须做 report.get('results') or report.get('cases') 双键兼容（既有消费方均已如此）。required 只列两种形态共有的 findings；results/coverage_plan 仅 case_runner 形态必备。",
+  "type": "object",
+  "required": ["findings"],
+  "properties": {
+    "results": {"type": "array", "description": "case_runner 形态的用例结果列表"},
+    "cases": {"type": "array", "description": "api_test_runner 形态的用例结果列表（与 results 同义，二选一）"},
+    "findings": {"type": "array", "description": "问题记录（两种形态都有）"},
+    "coverage_plan": {"type": "array", "items": {"type": "string"}, "description": "case_runner 形态的覆盖计划"},
+    "flaky": {"type": "array", "description": "case_runner 形态的不稳定用例"},
+    "base_url": {"type": "string"},
+    "fixed_params": {"type": "object"},
+    "creater": {"type": "object"},
+    "summary": {"type": "object"},
+    "timestamp": {"type": "string"}
+  },
+  "additionalProperties": true
+}

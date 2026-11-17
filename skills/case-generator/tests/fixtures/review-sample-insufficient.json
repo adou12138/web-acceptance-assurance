@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "requirement": {
+    "id": "REQ-03",
+    "title": "问卷回收站批量恢复与彻底删除（材料不足样本）",
+    "version": "v0.9",
+    "fingerprint": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+    "reviewed_at": "2026-11-16T18:40:00+08:00"
+  },
+  "requirements": [
+    {
+      "id": "REQ-03",
+      "name": "回收站管理（材料不足）",
+      "source": "需求正文第1节",
+      "description": "范围同 REQ-01；性能与历史行为材料缺失",
+      "confirmation": "provisional"
+    }
+  ],
+  "features": [
+    {"feature_id": "FP-21", "module_code": "M01", "name": "回收站列表查询", "description": "按类型筛选已删除问卷", "source": "需求正文第2.1节"},
+    {"feature_id": "FP-22", "module_code": "M01", "name": "批量恢复", "description": "勾选多份问卷一键恢复", "source": "需求正文第2.2节"},
+    {"feature_id": "FP-23", "module_code": "M01", "name": "彻底删除", "description": "二次确认后彻底删除", "source": "需求正文第2.3节"}
+  ],
+  "acceptance": [
+    {
+      "acceptance_id": "AC-21", "requirement_id": "REQ-03", "feature_id": "FP-21",
+      "required": true, "confirmation": "provisional",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "类型筛选器",
+        "condition": "回收站内已有已删除问卷",
+        "focus": "筛选结果与条数正确"
+      },
+      "oracle": "列表分页统计与类型标签一致"
+    },
+    {
+      "acceptance_id": "AC-22", "requirement_id": "REQ-03", "feature_id": "FP-22",
+      "required": true, "confirmation": "provisional",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "恢复按钮",
+        "condition": "勾选 2 份问卷",
+        "focus": "恢复后回到原文件夹"
+      },
+      "oracle": "恢复提示与原文件夹列表可核对"
+    },
+    {
+      "acceptance_id": "AC-23", "requirement_id": "REQ-03", "feature_id": "FP-23",
+      "required": true, "confirmation": "provisional",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "删除确认弹窗",
+        "condition": "勾选 1 份问卷",
+        "focus": "确认后记录消失"
+      },
+      "oracle": "弹窗文案与删除后列表可核对"
+    }
+  ],
+  "modules": [
+    {"module_code": "M01", "name": "回收站管理", "feature_ids": ["FP-21", "FP-22", "FP-23"], "estimated_case_count": 10}
+  ],
+  "confirmed_rules": [
+    {"rule_id": "R-21", "feature_id": "FP-22", "text": "恢复后问卷回到原文件夹", "source": "需求正文第2.2节"}
+  ],
+  "blocking": [],
+  "pending": [
+    {"issue_id": "P-21", "feature_id": "FP-21", "question": "时间筛选的粒度是天还是小时？", "assumption": "暂按天粒度"}
+  ],
+  "go_ahead": ["FP-21", "FP-22", "FP-23"],
+  "coverage_gaps": [
+    {"area": "空态", "reason": "需求未定义回收站为空时的展示"}
+  ],
+  "not_reviewed": [
+    {"dimension": "historical_consistency", "reason": "未检索到可对照的历史需求或已上线行为材料"},
+    {"dimension": "performance_security", "reason": "需求未提供性能基线与安全约束材料"},
+    {"dimension": "state_coverage", "reason": "需求未描述加载态与异常态，缺少设计参考"}
+  ]
+}

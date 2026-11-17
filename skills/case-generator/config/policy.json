@@ -1,0 +1,294 @@
+{
+  "schema_version": "1.1",
+  "meta": {
+    "source_skill": "qa-req2testcase-generator",
+    "source_version": "4.17.0",
+    "frozen_at": "2026-11-16T18:12:05+08:00",
+    "sync_mode": "manual",
+    "sync_notes": "docs/SYNC-NOTES.md",
+    "runtime_dependency": false,
+    "data_form": "cases_json_single_source",
+    "note": "专家包内唯一判据源，所有条目为一次性复制件，运行时不读取源 skill 的路径、版本或配置。数据形态为方案 A：cases JSON 是唯一事实源，其余视图派生。"
+  },
+  "authority": {
+    "enum_authority": "case_data.py",
+    "why": "生成结果要直接通过 case_data.validate，硬编码常量即为权威；本文件只存副本并标注 frozen 版本，冲突时以校验器为准。",
+    "mirrored_constants": {
+      "NONCOMMITTAL": ["正常", "成功", "符合预期", "无异常", "功能可用", "正常显示", "功能正常", "工作正常", "无问题", "没问题", "ok", "OK"],
+      "PLACEHOLDERS": ["TODO", "TBD", "FIXME", "待补充", "待完善", "待落实", "待填写", "占位符", "xxx", "XXX"],
+      "METHOD_CLAIMS": ["边界值", "边界条件", "等价类", "状态迁移", "判定表", "组合覆盖", "Pairwise", "pairwise"]
+    }
+  },
+  "thresholds": {
+    "smoke": {
+      "target_ratio": {
+        "min": 0.1,
+        "max": 0.15,
+        "role": "guidance",
+        "note": "生成期的引导区间，用于决定冒烟标注意向，不参与门禁判定。"
+      },
+      "batch_warn_ratio": {
+        "max": 0.3,
+        "role": "warn_only",
+        "note": "单批浓度提示线。超过时只提示（多为该模块 P0 过密），不自动取消冒烟标记，交人工判断。"
+      },
+      "delivery_ratio": {
+        "min": 0.05,
+        "max": 0.2,
+        "role": "gate",
+        "note": "导出与全量汇总的判定线，越界即门禁不通过；用例数低于 small_sample.case_count_below 时降为告警。"
+      }
+    },
+    "p0": {
+      "delivery_max_ratio": {
+        "max": 0.2,
+        "role": "gate"
+      },
+      "recommended_ratio": {
+        "min": 0.1,
+        "max": 0.15,
+        "role": "guidance"
+      },
+      "budget_cap": {
+        "expr": "min(estimated_case_count * 0.15, 20)",
+        "role": "generation_budget",
+        "note": "生成期 P0 预算上限，超出时写入 deferred 并保留未覆盖义务，不静默丢弃。"
+      },
+      "batch_warn_ratio": {
+        "max": 0.35,
+        "role": "warn_only"
+      }
+    },
+    "dedupe": {
+      "reject_over": 0.5,
+      "warn_over": 0.15,
+      "metric": "jaccard",
+      "compare_fields": ["title", "steps", "assertions.expect"],
+      "role": "gate",
+      "note": "跨批汇总时按合并后全集重算，不得各批独立计算。"
+    },
+    "small_sample": {
+      "case_count_below": 20,
+      "effect": "ratio_checks_warn_only",
+      "applies_to": ["smoke.delivery_ratio", "p0.delivery_max_ratio"],
+      "absolute_rules": {
+        "smoke_per_module_min": 1,
+        "smoke_per_requirement_min": 1
+      },
+      "note": "小样本下比率无判别力（4 条里 1 条即 25%），改用绝对数判定；比率越界仅记录提示。"
+    },
+    "batch": {
+      "split_over_cases": 30,
+      "single_batch_below_cases": 15,
+      "single_batch_cap": 30,
+      "module_count_hint_over": 5,
+      "module_count_role": "split_only",
+      "calibration": {
+        "stage": 3,
+        "step": 5,
+        "status": "mechanism_ready",
+        "note": "A 方案每例字段更多，生成量约 +40~60%。门禁耗时已由 gate_checks 报告的 elapsed_ms 自动采集并汇入 aggregate-report.json；生成 token 由主会话在任务记录中登记。两者待阶段 3 真实样本回填，逼近上下文上限时按步长 5 下调。"
+      }
+    },
+    "path_coverage": {
+      "exception_coverage_min": 0.5,
+      "note": "E7：有异常路径的场景数/场景总数低于 0.5 判 BLOCK；小样本（用例 <20）整条降为告警。分级阈值（异步/文件/网络依赖场景 1.0、纯展示场景 0）留阶段 3 校准。"
+    }
+  },
+  "prd_review": {
+    "evaluation": "qualitative_only",
+    "score_allowed": false,
+    "grade_allowed": false,
+    "note": "源文档以百分制与扣分项描述，本包只取维度清单与阻塞判定；分数与等级不作为放行依据。",
+    "levels": ["blocking", "pending", "go_ahead"],
+    "not_reviewed_rule": "材料不足的维度记 not_reviewed 并写明缺什么，不得凭常识补全历史行为。",
+    "dimensions": [
+      {"id": "completeness", "name": "完整性", "checks": ["触发条件与前置条件", "字段类型/格式/取值范围", "业务规则适用条件", "异常场景处理方式", "数据口径来源与单位"]},
+      {"id": "consistency", "name": "一致性", "checks": ["同一概念跨位置描述一致", "术语统一", "页面路径与菜单层级一致", "端差异（PC/移动）描述完整"]},
+      {"id": "clarity", "name": "清晰度", "checks": ["规则可唯一理解", "数值有明确单位", "状态条件有明确边界", "默认值已定义"]},
+      {"id": "testability", "name": "可测试性", "checks": ["每个功能点可设计确定步骤", "预期结果可观测", "判定条件不含主观词"]},
+      {"id": "performance_security", "name": "性能与安全", "checks": ["性能基线是否声明", "安全约束是否声明"]},
+      {"id": "state_coverage", "name": "状态覆盖", "checks": ["空态", "加载态", "异常态", "边界态"]},
+      {"id": "acceptance_mapping", "name": "验收映射", "checks": ["验收标准与功能点一一对应", "验收标准可判定"]},
+      {"id": "historical_consistency", "name": "历史一致", "checks": ["与已上线行为是否矛盾", "与历史需求是否矛盾"], "not_reviewed_when": "无对照材料"}
+    ]
+  },
+  "structure": {
+    "four_elements": {
+      "required_keys": ["scene", "object", "condition", "focus"],
+      "labels": {"scene": "场景", "object": "对象", "condition": "条件", "focus": "关注点"},
+      "description": "场景=在哪个页面或业务域；对象=哪个字段、功能或元素；条件=前置、边界、角色、状态；关注点=要验证什么可观察行为。",
+      "strict_note": "四键缺任意一个即 case_data 校验失败（非 warning）"
+    },
+    "assessment_states": [
+      {"id": "confirmed", "name": "已确认", "description": "有需求原文或用户确认作为依据，可作为确定断言。"},
+      {"id": "needs_confirmation", "name": "待确认", "description": "存在未裁定歧义或缺关键信息，只能作为待确认项，不得当确定结论。"},
+      {"id": "exploratory", "name": "探索性", "description": "基于风险假设提出，未成为确定业务规则，需单独标注。"}
+    ],
+    "applicability_states": [
+      {"id": "applicable", "name": "适用", "description": "有对象、触发条件与检查关注点的依据，应生成用例。"},
+      {"id": "not_applicable", "name": "不适用", "description": "有理由说明该维度不适用于本需求。"},
+      {"id": "insufficient_evidence", "name": "证据不足", "description": "缺材料，需写明缺什么；不得计为已覆盖。"},
+      {"id": "deferred", "name": "本轮暂缓", "description": "有依据但受预算或范围限制，必须列入未覆盖义务。"}
+    ],
+    "coverage_layers": [
+      {"id": "L1", "name": "主流程", "requirement": "每个核心 feature 至少一条可追溯到正向路径的用例。"},
+      {"id": "L2", "name": "业务分层", "requirement": "适用的界面元素、字段约束与元素组合均有对应用例或显式未覆盖记录。"},
+      {"id": "L3", "name": "设计方法", "requirement": "按适用复杂度使用多种方法，且每种方法有实际见证，不以类别名称计数。"},
+      {"id": "L4", "name": "探索性", "requirement": "有具体风险假设时可提出，须单独标注，不计入已确认规则覆盖。"}
+    ],
+    "attributes": [
+      {"id": "functional", "name": "功能", "origin": "qa+expert", "forbidden_claims": []},
+      {"id": "security", "name": "安全", "origin": "qa+expert", "forbidden_claims": ["未声明加密方式时断言具体加密算法", "未声明会话策略时断言超时时长"]},
+      {"id": "performance", "name": "性能", "origin": "qa+expert", "forbidden_claims": ["自行编造响应时间阈值", "无指标时断言并发上限"]},
+      {"id": "reliability", "name": "可靠性", "origin": "qa+expert", "forbidden_claims": ["未声明重试策略时断言自动重试次数"]},
+      {"id": "compatibility", "name": "兼容性", "origin": "qa+expert", "forbidden_claims": ["自行列出需求未承诺的浏览器版本矩阵"]},
+      {"id": "accessibility", "name": "无障碍", "origin": "expert", "forbidden_claims": ["未做实测即宣称达到 WCAG 等级"]},
+      {"id": "visual", "name": "界面样式", "origin": "expert", "forbidden_claims": ["无设计基线与客观依据时把审美偏好判为缺陷"]}
+    ],
+    "layers": ["ui", "api", "component", "integration", "e2e"],
+    "suites": ["feature", "smoke", "regression", "exploratory", "e2e"],
+    "priority_values": ["P0", "P1", "P2"],
+    "priority_note": "case_data 仅接受 P0/P1/P2；qa 的 P3 场景并入 P2，19 列的「优先级」列同步只出现这三个值。",
+    "qa_type_mapping": [
+      {"qa_type": "state_transition", "maps_to": {"attributes": ["functional"], "method_evidence": "state_transition"}, "reason": "状态迁移是设计方法/路径，不是质量属性", "forbidden_claims": ["断言需求未声明的非法迁移必须被拒绝"]},
+      {"qa_type": "api", "maps_to": {"layer": "api", "attributes": ["functional"]}, "reason": "接口是测试层级，不是质量属性", "forbidden_claims": ["契约未给出时断言具体错误码数值"]}
+    ],
+    "design_methods": [
+      {"id": "scenario", "name": "场景法", "evidence_kind": "scenario_path", "evidence_requirement": "用例须对应一条完整业务路径（主流程、分支或异常路径），并有来源场景。"},
+      {"id": "boundary", "name": "边界分析", "evidence_kind": "boundary_sets", "evidence_requirement": "须给出具体边界取值集合（最小值、最大值、越界值），不能只写“边界条件”。"},
+      {"id": "equivalence", "name": "等价类划分", "evidence_kind": "equivalence_classes", "evidence_requirement": "须给出有效类与无效类的具体取值或取值规则。"},
+      {"id": "state_transition", "name": "状态迁移", "evidence_kind": "state_edges", "evidence_requirement": "须给出源状态、目标状态与触发条件的实际边。"},
+      {"id": "decision_table", "name": "判定表", "evidence_kind": "decision_table", "evidence_requirement": "须给出条件项与动作项的对应关系，覆盖条件组合。"},
+      {"id": "pairwise", "name": "Pairwise", "evidence_kind": "pair_witness", "evidence_requirement": "须给出参数值对覆盖见证：参数、值域、组合与已覆盖参数对数量。"}
+    ],
+    "exception_types": [
+      {"id": "input", "name": "输入异常", "signals": ["格式", "长度", "空值", "特殊字符", "取值范围", "校验"]},
+      {"id": "flow", "name": "流程异常", "signals": ["中断", "回退", "重复提交", "跳过", "取消"]},
+      {"id": "environment", "name": "环境异常", "signals": ["网络", "超时", "服务", "并发", "依赖", "不可用", "兜底", "降级"]},
+      {"id": "permission", "name": "权限异常", "signals": ["未登录", "越权", "角色", "无权限", "受限", "不可见"]},
+      {"id": "data", "name": "数据异常", "signals": ["不存在", "重复", "已删除", "脏数据", "为空", "无效", "历史数据", "未完成", "未评分"]},
+      {"id": "state", "name": "状态异常", "signals": ["非法状态", "重复操作", "过期", "已关闭"]}
+    ],
+    "budget_policy": {
+      "description": "预算用于控制成本，不允许隐藏缺口。超出预算时写入 deferred，并保留未覆盖义务。",
+      "state_edges_per_module": 4,
+      "permission_points_per_module": 3,
+      "exception_points_per_feature": 3,
+      "exploratory_ratio_limit": 0.2
+    },
+    "forbidden_patterns": {
+      "vague_focus": ["正常", "成功", "符合预期", "无异常", "功能可用"],
+      "internal_markers": ["[S0", "核心正向流程", "异常场景处理", "前置条件:"],
+      "unresolved_placeholder": ["TODO", "待补充", "示例说明", "XX"],
+      "note": "生成期拦截清单 = authority.mirrored_constants 三份 + 本文件 internal_markers 的并集；internal_markers 为 qa 独有补充。"
+    },
+    "smoke_labeling": {
+      "allowed": ["页面入口能否正常打开", "核心数据能否加载展示", "核心操作能否完成（提交/查询/导出）"],
+      "forbidden": ["异常场景（权限不足/数据为空/超时）", "删除或禁用操作", "次要字段验证", "UI 细节核对"]
+    }
+  },
+  "case_fields": {
+    "note": "case_data 的硬要求，缺任一项校验即失败；required 指布尔字段，非字符串。",
+    "required": ["id", "title", "feature_ids", "acceptance_ids", "layer", "attributes", "suites", "classification_reason", "priority", "required", "role", "preconditions", "data", "steps", "assertions", "dependency_mode"],
+    "conditional": {
+      "scenario_id": "flow_kind ∈ {workflow, stateful} 时必填，且其 feature 必须属于该场景",
+      "path_id": "同上，且必须属于该 scenario 的 paths"
+    },
+    "steps_item": ["action", "expected"],
+    "assertions_item": ["check", "oracle", "expect"],
+    "extension_fields": ["project", "menu_path", "case_class", "smoke_source", "method_evidence", "coverage_flags", "risk_flag", "pci_flag", "remarks", "screenshot", "test_suite", "assignee"],
+    "extension_note": "校验器只对 acceptance.elements 拒未知键，对用例对象不拒，因此扩展字段可直接写进 testcases[]，不需要 design-meta.json。"
+  },
+  "id_rules": {
+    "module": {"pattern": "^M\\d{2}$", "example": "M01", "assigned_by": "requirement-review", "note": "评审阶段分配，一经确定不得重排；需求变更导致模块增删时按新增追加，不重编号（否则 case_id 集体失效）。"},
+    "requirement": {"pattern": "^REQ-\\d{2,}$", "example": "REQ-01"},
+    "feature": {"pattern": "^FP-\\d{2,}$", "example": "FP-01"},
+    "acceptance": {"pattern": "^AC-\\d{2,}$", "example": "AC-01"},
+    "scenario": {"pattern": "^SCN-\\d{2,}$", "example": "SCN-01"},
+    "path": {"pattern": "^PATH-\\d{2,}$", "example": "PATH-01"},
+    "case": {
+      "pattern": "^TC-[A-Z0-9]{2,8}-\\d{3}$",
+      "example": "TC-M01-001",
+      "unique_scope": "requirement",
+      "note": "跨批全局唯一；汇总时校验重复，重复则整份交付判不通过。"
+    }
+  },
+  "views": {
+    "note": "19 列是 cases JSON 的渲染视图，取值规则固定如下，渲染脚本不得引入额外判定。",
+    "artifact": {
+      "filename_pattern": "测试用例_{task_id}.xlsx",
+      "sheet_name": "测试用例",
+      "encoding_for_csv_derivative": "UTF-8-sig",
+      "source": "export_excel.py:COLUMNS（列名与顺序逐字对齐）"
+    },
+    "columns": [
+      {"field": "project", "header": "项目", "from": "testcases[].project", "required": true},
+      {"field": "case_type", "header": "类型", "from": "testcases[].layer", "required": true},
+      {"field": "case_id", "header": "用例编号", "from": "testcases[].id", "required": true},
+      {"field": "requirement", "header": "需求", "from": "testcases[].project（抽取源 export_excel 即取 project 值，勿按列名直取）", "required": true},
+      {"field": "priority", "header": "优先级", "from": "testcases[].priority", "required": true, "values": ["P0", "P1", "P2"]},
+      {"field": "title", "header": "标题", "from": "testcases[].title", "required": true},
+      {"field": "menu_path", "header": "用例菜单", "from": "testcases[].menu_path", "required": true},
+      {"field": "preconditions", "header": "预置条件", "from": "testcases[].preconditions[]（逐条换行）", "required": true},
+      {"field": "steps", "header": "步骤", "from": "testcases[].steps[]（序号. action → expected）", "required": true},
+      {"field": "expected_results", "header": "期望结果", "from": "testcases[].assertions[].expect（合并；断言拆分只在 JSON 中）", "required": true},
+      {"field": "is_smoke", "header": "是否冒烟用例", "from": "suites 含 smoke 则为“是”", "required": true, "values": ["是", "否"]},
+      {"field": "creator", "header": "创建者", "from": "固定值 AI", "required": true, "fixed": "AI"},
+      {"field": "assignee", "header": "经办人", "from": "testcases[].assignee", "required": false},
+      {"field": "test_case_type", "header": "用例类型", "from": "testcases[].attributes[]（逗号连接）", "required": true},
+      {"field": "test_category", "header": "测试类别", "from": "testcases[].suites[]（逗号连接）", "required": true},
+      {"field": "status", "header": "执行结果", "from": "生成阶段留空；执行事实在台账，不回写", "required": false},
+      {"field": "screenshot", "header": "截图", "from": "生成阶段留空", "required": false},
+      {"field": "test_suite", "header": "测试用例集", "from": "testcases[].test_suite", "required": false},
+      {"field": "remarks", "header": "备注", "from": "testcases[].remarks（不得承载门禁结论或未覆盖义务）", "required": false}
+    ],
+    "consistency_gate": "渲染后 19 列 case_id 集合必须与 cases JSON 完全相等，否则视图作废重渲。"
+  },
+  "gate_rules": {
+    "note": "G1 判据可配置规则集（方案 §12：抽象为可配置规则集，用受控样本校准后定默认）。脚本内置默认值与本段一致；本段存在时以本段为准。改动后须校准并回写 docs/SYNC-NOTES.md。",
+    "g1": {
+      "banned_step_patterns": [
+        {"pattern": "进入相关功能页面", "hint": "进入具体菜单路径，如：进入首页→营销管理→协同分润"},
+        {"pattern": "进入相关页面", "hint": "进入具体菜单路径，如：进入首页→营销管理→协同分润"},
+        {"pattern": "进入对应页面", "hint": "进入具体菜单路径，如：进入首页→营销管理→协同分润"},
+        {"pattern": "执行相关操作", "hint": "替换为具体操作动词+目标，如：点击「提交」按钮"}
+      ],
+      "menu_path_pattern": "[\\u4e00-\\u9fa5a-zA-Z0-9]+(?:→|->)[\\u4e00-\\u9fa5a-zA-Z0-9]+(?:→|->)[\\u4e00-\\u9fa5a-zA-Z0-9]+",
+      "action_verbs": ["点击", "输入", "填写", "选择", "勾选", "上传", "下载", "导出", "导入", "删除", "提交", "打开", "进入", "切换", "搜索", "滚动", "双击", "右键"],
+      "confirm": {
+        "bare_pattern": "^确认$",
+        "note": "qa 源另有确认分级豁免（确认+具体对象放行），本包简化为纯「确认」步拦截；如需恢复分级豁免，扩展 allowed_pattern 并在 gate_checks 接线。"
+      }
+    }
+  },
+  "gates": {
+    "note": "判据来源 gate_checker.py / p5_validate.py / case_data.py；本包只读判定、只报不改。S0 先跑，结构不过则不计算后续文本门禁。",
+    "items": [
+      {"id": "S0", "name": "结构校验", "depends_on": "cases_json", "rule": "case_data.validate(cases) 无 errors（含每个 requirement 至少一个 required 用例、case_ids 双向登记、四要素齐全、场景路径引用有效）"},
+      {"id": "G1", "name": "步骤具体性", "depends_on": "cases_json", "rule": "steps[].action 须含具体路径、按钮与输入值"},
+      {"id": "G1.5", "name": "末位步骤可观测", "depends_on": "cases_json", "rule": "末位步骤须引用可观测对象"},
+      {"id": "G2", "name": "期望断言性", "depends_on": "cases_json", "rule": "assertions[].check/oracle/expect 不得命中 NONCOMMITTAL 或 PLACEHOLDERS"},
+      {"id": "G3", "name": "业务流程覆盖", "depends_on": "extension_fields", "rule": "case_class=A 的用例不少于 3 步；case_class=B 不得标冒烟"},
+      {"id": "G4", "name": "冒烟来源可追溯", "depends_on": "extension_fields", "rule": "suites 含 smoke 的用例须有 smoke_source 且指向 A 类来源"},
+      {"id": "G5", "name": "禁止模式与去重", "depends_on": "cases_json", "rule": "Jaccard 相似度去重 + forbidden_patterns 并集"},
+      {"id": "G6", "name": "步骤原子性", "depends_on": "cases_json", "rule": "不得在一个 step 内塞入多个操作"},
+      {"id": "G7", "name": "用例到场景可追溯", "depends_on": "cases_json", "rule": "feature_ids / acceptance_ids / scenario_id / path_id 逐级可追溯"},
+      {"id": "V05", "name": "描述完整度", "depends_on": "cases_json", "rule": "title + steps + assertions 合成长度不低于下限（原 p5_validate V05 的用例化改写）"},
+      {"id": "V07", "name": "优先级有效值", "depends_on": "cases_json", "rule": "priority ∈ {P0,P1,P2}"},
+      {"id": "V08", "name": "预置条件三要素", "depends_on": "cases_json", "rule": "preconditions[] 须覆盖环境、账号、数据"},
+      {"id": "V09", "name": "步骤连贯性", "depends_on": "cases_json", "rule": "步骤序号连续、操作链无跳跃"},
+      {"id": "V11", "name": "无矛盾", "depends_on": "cases_json", "rule": "menu_path 与步骤操作不冲突"},
+      {"id": "V12", "name": "风险点已识别", "depends_on": "extension_fields", "rule": "risk_flag 为真；缺失判待核实"},
+      {"id": "V13", "name": "PCI 已识别", "depends_on": "extension_fields", "rule": "pci_flag 为真；缺失判待核实"},
+      {"id": "COV", "name": "四层覆盖与方法见证", "depends_on": "cases_json", "rule": "method_evidence 声明的方法须有实际见证（boundary_sets/equivalence_classes/state_edges/decision_table/pair_witness）；只有方法名没有见证不计入覆盖"},
+      {"id": "COV-PATH", "name": "异常与权限路径配比", "depends_on": "cases_json+scenarios", "rule": "E7：exception_coverage 低于 thresholds.path_coverage.exception_coverage_min 或场景 exception/permission 为空且未按对象形态举证 → BLOCK；flow_kind=simple 不适用；小样本（用例 <20）整条降告警"},
+      {"id": "RATIO-SMOKE", "name": "冒烟占比", "depends_on": "cases_json", "rule": "交付冒烟占比在 thresholds.smoke.delivery_ratio 区间；小样本改用绝对数（每模块/每需求 ≥1 条）；批内超告警线仅提示，不自动降级"},
+      {"id": "RATIO-P0", "name": "P0 占比", "depends_on": "cases_json", "rule": "P0 交付占比不超过 thresholds.p0.delivery_max_ratio；小样本每模块 ≥1 条 P0；批内超告警线仅提示"}
+    ],
+    "not_migrated": {
+      "ids": ["V01", "V02", "V03", "V04", "V10"],
+      "reason": "属 P5 测试点字段级检查（page_path / operations_chain / field_specs / business_rules），本包不生成测试点，无对应数据。"
+    }
+  }
+}

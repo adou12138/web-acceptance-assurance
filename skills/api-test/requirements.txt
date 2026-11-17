@@ -1,0 +1,10 @@
+# wjx-api-test 运行依赖
+# 核心链路（REST 适配器 + ShowDoc / OpenAPI JSON 契约）只用 Python 标准库（>= 3.9），
+# 不装任何第三方包也能跑。以下为按需依赖，缺哪个装哪个：
+pyyaml>=5.4
+#   YAML / OpenAPI 3.x / Swagger 2.0 契约解析（scripts/contract_parser.py 懒加载；
+#   缺失时对 YAML 契约报 SystemExit 并提示本行命令）。
+# grpcio>=1.50
+# grpcio-tools>=1.50
+#   仅 gRPC 适配器需要（adapters/grpc.py 懒加载，缺依赖实例化即报错）；
+#   注释状态：默认不装，用 gRPC 时手动 pip install grpcio grpcio-tools。

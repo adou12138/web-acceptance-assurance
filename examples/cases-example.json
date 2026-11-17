@@ -1,0 +1,23 @@
+{
+  "meta": {"schema_version": "1.0", "id": "DESIGN-EXAMPLE", "title": "教学示例：修改项目名称", "application_version": "not_deployed", "flow_kind": "stateful", "example_only": true},
+  "requirements": [{"id": "REQ-01", "name": "修改项目名称", "source": "教学假设，非用户真实需求", "description": "编辑者可修改项目名，名称长度为1至20，保存后重新打开仍显示新名称。", "confirmation": "provisional"}],
+  "features": [{"id": "FUNC-01", "name": "项目设置", "description": "维护项目基本信息", "children": [{"id": "FP-01", "name": "编辑项目名称", "description": "校验并保存名称，重新打开可读回", "requirement_ids": ["REQ-01"], "apis": [{"method": "PATCH", "path": "/example/projects/{id}", "source": "教学假设"}]}]}],
+  "acceptance": [{"id": "AC-01", "requirement_id": "REQ-01", "description": "合法名称可保存和读回，空名称拒绝保存", "required": true, "reason": "示例核心规则", "confirmation": "provisional", "oracle": "重新打开项目读取名称", "elements": {"scene": "项目设置页面，编辑者修改单个项目的名称", "object": "项目名称输入框与项目详情名称展示", "condition": "编辑者角色，名称长度为0、1、20、21或含空白", "focus": "合法名称保存后重开读回新值；非法名称被拒绝且原名称保持不变"}, "case_mode": "AND", "case_ids": ["TC-NAME-001", "TC-NAME-002"]}],
+  "scenarios": [{"id": "SCN-01", "name": "编辑者修改并重新查看名称", "goal": "验证名称修改和拒绝非法修改后的持久化结果", "feature_ids": ["FP-01"], "paths": {"positive": [{"id": "PATH-01", "description": "保存合法名称后重开读回"}], "boundary": [{"id": "PATH-02", "description": "空名称被拒绝且原名称保留"}], "exception": [], "permission": []}, "not_applicable": {"exception": {"reason": "示例未列接口失败，真实测试需按风险补充", "business_object": "接口失败", "checked_at": "2026-11-17"}, "permission": {"reason": "示例仅编辑者；真实测试需另行评估角色", "business_object": "角色", "checked_at": "2026-11-17"}}}],
+  "testcases": [
+    {"id": "TC-NAME-001", "title": "合法名称保存后重开读回", "feature_ids": ["FP-01"], "acceptance_ids": ["AC-01"], "scenario_id": "SCN-01", "path_id": "PATH-01", "layer": "e2e", "attributes": ["functional"], "suites": ["feature", "regression"], "classification_reason": "目标是完整业务修改及读回，不以出现接口名决定类别", "priority": "P0", "required": true, "role": "编辑者", "preconditions": ["具有编辑权限的独立示例项目，原名为原名称"], "data": {"name": "新名称"}, "steps": [{"action": "打开项目设置并输入新名称后保存", "expected": "提示保存成功"}, {"action": "离开页面后重新打开同一项目", "expected": "名称显示为新名称"}], "assertions": [{"check": "项目重新打开后的名称", "expect": "新名称", "oracle": "项目详情名称字段"}], "dependency_mode": "real", "cleanup": "恢复本次创建的示例项目名称，按测试环境授权处理"},
+    {"id": "TC-NAME-002", "title": "空名称拒绝且原名称不变", "feature_ids": ["FP-01"], "acceptance_ids": ["AC-01"], "scenario_id": "SCN-01", "path_id": "PATH-02", "layer": "ui", "attributes": ["functional"], "suites": ["feature"], "classification_reason": "验证长度下界与保存拒绝后的数据状态", "priority": "P1", "required": true, "role": "编辑者", "preconditions": ["独立示例项目原名为原名称"], "data": {"name": ""}, "steps": [{"action": "清空名称并尝试保存", "expected": "提示名称必填，保存不生效"}, {"action": "重新打开该项目", "expected": "仍显示原名称"}], "assertions": [{"check": "项目重新打开后的名称", "expect": "原名称", "oracle": "项目详情名称字段"}], "dependency_mode": "real", "cleanup": "确认原名称保留"}
+  ],
+  "diagrams": [{"id": "DIA-01", "scenario_ids": ["SCN-01"], "mermaid": "flowchart TD\n  A[编辑者修改名称] --> B{长度合法}\n  B -->|是| C[保存并重开读回]\n  B -->|否| D[拒绝保存并保留原值]"}],
+  "applicability": {
+    "functional": {"state": "applicable", "reason": "需求包含可验证的编辑、保存与读回业务操作"},
+    "security": {"state": "not_applicable", "reason": "教学示例未声明鉴权、敏感数据或越权规则；真实测试需按角色权限重新裁定"},
+    "performance": {"state": "not_applicable", "reason": "教学假设未给出响应时间、并发量或吞吐指标"},
+    "accessibility": {"state": "insufficient_evidence", "reason": "示例未包含无障碍验收要求，缺键盘与语义标签的可观测判据"},
+    "compatibility": {"state": "not_applicable", "reason": "教学示例未声明端差异、浏览器或分辨率范围"},
+    "visual": {"state": "insufficient_evidence", "reason": "示例未提供设计基线，无法做视觉一致性对照"},
+    "reliability": {"state": "not_applicable", "reason": "示例不涉及外部依赖、异步计算、重试或数据恢复要求"}
+  },
+  "decisions": [{"topic": "范围", "reason": "此文件仅演示字段与校验，不是完整边界用例或真实业务验收"}],
+  "open_questions": ["真实需求的长度、异常和权限规则待业务确认；本文件不得用于声称已完成测试。"]
+}

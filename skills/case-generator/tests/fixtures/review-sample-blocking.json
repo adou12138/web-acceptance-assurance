@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "requirement": {
+    "id": "REQ-02",
+    "title": "问卷回收站批量恢复与彻底删除（全阻塞样本）",
+    "version": "v1.2",
+    "fingerprint": "sha256:88d912f88c9793e369ebce27995f416d2bfc4084da9f5a14014f9be2c7ee8bd7",
+    "reviewed_at": "2026-11-16T18:35:00+08:00"
+  },
+  "requirements": [
+    {
+      "id": "REQ-02",
+      "name": "回收站管理（阻塞态）",
+      "source": "需求正文第1节",
+      "description": "同 REQ-01 范围，但全部功能点的关键规则未定义",
+      "confirmation": "confirmed"
+    }
+  ],
+  "features": [
+    {"feature_id": "FP-11", "module_code": "M01", "name": "回收站列表查询", "description": "按类型/时间筛选已删除问卷", "source": "需求正文第2.1节"},
+    {"feature_id": "FP-12", "module_code": "M01", "name": "批量恢复", "description": "勾选多份问卷一键恢复", "source": "需求正文第2.2节"},
+    {"feature_id": "FP-13", "module_code": "M01", "name": "彻底删除", "description": "二次确认后彻底删除", "source": "需求正文第2.3节"}
+  ],
+  "acceptance": [
+    {
+      "acceptance_id": "AC-11", "requirement_id": "REQ-02", "feature_id": "FP-11",
+      "required": true, "confirmation": "ambiguous",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "筛选器",
+        "condition": "筛选条件未定义",
+        "focus": "筛选行为无法确定"
+      },
+      "oracle": "待澄清后补充可判定观测入口"
+    },
+    {
+      "acceptance_id": "AC-12", "requirement_id": "REQ-02", "feature_id": "FP-12",
+      "required": true, "confirmation": "ambiguous",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "恢复按钮",
+        "condition": "恢复后归属未定义",
+        "focus": "恢复行为无法确定"
+      },
+      "oracle": "待澄清后补充可判定观测入口"
+    },
+    {
+      "acceptance_id": "AC-13", "requirement_id": "REQ-02", "feature_id": "FP-13",
+      "required": true, "confirmation": "ambiguous",
+      "elements": {
+        "scene": "回收站列表页",
+        "object": "删除确认弹窗",
+        "condition": "确认文案未定义",
+        "focus": "删除确认行为无法确定"
+      },
+      "oracle": "待澄清后补充可判定观测入口"
+    }
+  ],
+  "modules": [
+    {"module_code": "M01", "name": "回收站管理", "feature_ids": ["FP-11", "FP-12", "FP-13"], "estimated_case_count": 8}
+  ],
+  "confirmed_rules": [],
+  "blocking": [
+    {"issue_id": "B-11", "feature_id": "FP-11", "question": "筛选支持哪些类型维度？", "impact": "无法设计筛选用例的期望结果"},
+    {"issue_id": "B-12", "feature_id": "FP-12", "question": "恢复到原文件夹还是统一文件夹？", "impact": "无法设计恢复后归属断言"},
+    {"issue_id": "B-13", "feature_id": "FP-13", "question": "彻底删除是否需要二次确认？", "impact": "无法设计删除确认链路用例"}
+  ],
+  "pending": [],
+  "go_ahead": [],
+  "coverage_gaps": [
+    {"area": "异常态", "reason": "依赖失败时的展示未定义"}
+  ],
+  "not_reviewed": [
+    {"dimension": "historical_consistency", "reason": "未检索到可对照的历史材料"}
+  ]
+}

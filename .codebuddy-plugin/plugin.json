@@ -1,0 +1,61 @@
+{
+  "name": "web-acceptance-assurance",
+  "version": "1.12.2",
+  "description": "Tests Web requirements with risk-driven exploration, functional and interface validation, visual and usability reviews, condition-based performance matrices, evidence-based regression, and single-file HTML evidence reports.",
+  "expertType": "agent",
+  "agentName": "web-acceptance-assurance",
+  "agents": [
+    "./agents/web-acceptance-assurance.md"
+  ],
+  "skills": [
+    "./skills/requirement-review",
+    "./skills/case-generator",
+    "./skills/api-test"
+  ],
+  "displayName": {
+    "en": "Li Heng",
+    "zh": "砺衡"
+  },
+  "profession": {
+    "en": "Web New Feature Test Expert",
+    "zh": "Web 新需求测试专家"
+  },
+  "displayDescription": {
+    "en": "Explores Web requirements and user journeys, checks functionality, visual layout, usability and available performance evidence, and delivers reproducible defects and regression results.",
+    "zh": "面向网站需求自主探索，检查功能、界面样式、交互易用性与性能，结合影响面回归交付可复现缺陷和实测证据"
+  },
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "en": "Test this new Web requirement using its description and test-site URL: analyze acceptance criteria, design and execute cases, then report defects and regression risks.",
+    "zh": "帮我测试这个网站的新需求。我会提供需求说明和测试地址，请先分析验收标准、设计用例，再执行测试并汇总缺陷与回归风险。"
+  },
+  "plugin": "web-acceptance-assurance",
+  "tags": [
+    {
+      "en": "New Feature Testing",
+      "zh": "新需求功能测试"
+    },
+    {
+      "en": "BDD and E2E Acceptance",
+      "zh": "行为规格与端到端"
+    },
+    {
+      "en": "Impact-based Regression",
+      "zh": "影响面回归"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "en": "Test this new Web requirement using its description and test-site URL: analyze acceptance criteria, design and execute cases, then report defects and regression risks.",
+      "zh": "帮我测试这个网站的新需求。我会提供需求说明和测试地址，请先分析验收标准、设计用例，再执行测试并汇总缺陷与回归风险。"
+    },
+    {
+      "en": "Break down this requirement or prototype into business rules, acceptance criteria, positive, boundary and negative cases; flag ambiguities before execution.",
+      "zh": "请根据这份需求说明或原型，拆解业务规则与验收标准，设计正常、边界、异常用例，并标出需求歧义。"
+    },
+    {
+      "en": "Retest the fixed defects for this new feature and run regression on affected existing functions, distinguishing verified results from untested risks.",
+      "zh": "这个新功能已经修复，请复测原问题，并回归受影响的旧功能，明确哪些已验证、哪些仍有风险。"
+    }
+  ]
+}

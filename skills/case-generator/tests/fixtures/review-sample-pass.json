@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "requirement": {
+    "id": "REQ-01",
+    "title": "问卷回收站批量恢复与彻底删除",
+    "version": "v1.2",
+    "fingerprint": "sha256:3b5d2f8a1c9e4d7b6a0f8e2d1c4b7a9e6f3d5c8b0a2e4f6d8c1b3a5e7f9d0c2b",
+    "reviewed_at": "2026-11-16T18:30:00+08:00"
+  },
+  "requirements": [
+    {
+      "id": "REQ-01",
+      "name": "回收站管理",
+      "source": "需求正文第1节",
+      "description": "已删除问卷进入回收站，支持按类型筛选、批量恢复与二次确认的彻底删除",
+      "confirmation": "confirmed"
+    }
+  ],
+  "features": [
+    {"feature_id": "FP-01", "module_code": "M01", "name": "回收站列表查询", "description": "按类型/时间筛选回收站内的已删除问卷", "source": "需求正文第2.1节"},
+    {"feature_id": "FP-02", "module_code": "M01", "name": "批量恢复", "description": "勾选一份或多份问卷一键恢复到原文件夹", "source": "需求正文第2.2节"},
+    {"feature_id": "FP-03", "module_code": "M01", "name": "彻底删除", "description": "二次确认后彻底删除，不可再恢复", "source": "需求正文第2.3节"},
+    {"feature_id": "FP-04", "module_code": "M01", "name": "保留期自动清理", "description": "超过保留期的问卷自动清理", "source": "需求正文第2.4节"}
+  ],
+  "acceptance": [
+    {
+      "acceptance_id": "AC-01", "requirement_id": "REQ-01", "feature_id": "FP-01",
+      "required": true, "confirmation": "confirmed",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "类型筛选器与列表",
+        "condition": "回收站内预置 2 份普通问卷与 1 份考试",
+        "focus": "筛选后列表只显示匹配类型且条数正确"
+      },
+      "oracle": "列表分页统计与每行类型标签与筛选条件一致"
+    },
+    {
+      "acceptance_id": "AC-02", "requirement_id": "REQ-01", "feature_id": "FP-02",
+      "required": true, "confirmation": "confirmed",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "勾选复选框与「恢复」按钮",
+        "condition": "勾选 2 份已删除问卷",
+        "focus": "恢复后问卷回到原文件夹且原状态保留"
+      },
+      "oracle": "恢复提示与原文件夹列表、回收站剩余条数可核对"
+    },
+    {
+      "acceptance_id": "AC-03", "requirement_id": "REQ-01", "feature_id": "FP-03",
+      "required": true, "confirmation": "confirmed",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "「彻底删除」按钮与确认弹窗",
+        "condition": "勾选 1 份已删除问卷",
+        "focus": "二次确认后记录消失且不可恢复"
+      },
+      "oracle": "确认弹窗文案写明不可恢复；删除后回收站与问卷列表均查不到该问卷"
+    }
+  ],
+  "modules": [
+    {"module_code": "M01", "name": "回收站管理", "feature_ids": ["FP-01", "FP-02", "FP-03", "FP-04"], "estimated_case_count": 12}
+  ],
+  "confirmed_rules": [
+    {"rule_id": "R-01", "feature_id": "FP-02", "text": "恢复后问卷回到原文件夹并恢复删除前状态", "source": "需求正文第2.2节"},
+    {"rule_id": "R-02", "feature_id": "FP-03", "text": "彻底删除前必须二次确认，确认框写明不可恢复", "source": "需求正文第2.3节"}
+  ],
+  "blocking": [
+    {"issue_id": "B-01", "feature_id": "FP-04", "question": "自动清理的保留期是多久？到期问卷是自动删除还是标记？", "impact": "无法设计保留期到期行为的期望结果"}
+  ],
+  "pending": [
+    {"issue_id": "P-01", "feature_id": "FP-02", "question": "单次批量恢复是否有数量上限？", "assumption": "暂按无上限处理，恢复按钮对全选同样可用"},
+    {"issue_id": "P-02", "feature_id": "FP-01", "question": "回收站列表分页大小是多少？", "assumption": "暂按每页 20 条处理"}
+  ],
+  "go_ahead": ["FP-01", "FP-02", "FP-03"],
+  "coverage_gaps": [
+    {"area": "空态", "reason": "需求未定义回收站为空时的展示"}
+  ],
+  "not_reviewed": [
+    {"dimension": "historical_consistency", "reason": "未检索到可对照的历史需求或已上线行为材料"}
+  ]
+}

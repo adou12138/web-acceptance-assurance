@@ -1,0 +1,546 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "id": "REQ-01",
+    "title": "问卷回收站批量恢复与彻底删除",
+    "flow_kind": "simple"
+  },
+  "requirements": [
+    {
+      "id": "REQ-01",
+      "name": "回收站管理",
+      "source": "需求正文第1节",
+      "description": "已删除问卷进入回收站，支持按类型筛选、批量恢复与二次确认的彻底删除",
+      "confirmation": "confirmed"
+    }
+  ],
+  "features": [
+    {
+      "id": "M01",
+      "name": "回收站管理",
+      "description": "回收站管理（评审模块 M01 拆解的功能组）",
+      "children": [
+        {"id": "FP-01", "name": "回收站列表查询", "description": "按类型/时间筛选回收站内的已删除问卷", "requirement_ids": ["REQ-01"]},
+        {"id": "FP-02", "name": "批量恢复", "description": "勾选一份或多份问卷一键恢复到原文件夹", "requirement_ids": ["REQ-01"]},
+        {"id": "FP-03", "name": "彻底删除", "description": "二次确认后彻底删除，不可再恢复", "requirement_ids": ["REQ-01"]}
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "AC-01",
+      "requirement_id": "REQ-01",
+      "description": "列表分页统计与每行类型标签与筛选条件一致",
+      "reason": "评审阶段确认（来源功能点 FP-01）",
+      "required": true,
+      "confirmation": "confirmed",
+      "oracle": "列表分页统计与每行类型标签与筛选条件一致",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "类型筛选器与列表",
+        "condition": "回收站内预置 2 份普通问卷与 1 份考试",
+        "focus": "筛选后列表只显示匹配类型且条数正确"
+      },
+      "case_mode": "OR",
+      "alternative_reason": "单条 AC 先按任一必要用例登记；必要时组合由生成阶段按 AND 补登",
+      "case_ids": ["TC-M01-001", "TC-M01-002"]
+    },
+    {
+      "id": "AC-02",
+      "requirement_id": "REQ-01",
+      "description": "恢复提示与原文件夹列表、回收站剩余条数可核对",
+      "reason": "评审阶段确认（来源功能点 FP-02）",
+      "required": true,
+      "confirmation": "confirmed",
+      "oracle": "恢复提示与原文件夹列表、回收站剩余条数可核对",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "勾选复选框与「恢复」按钮",
+        "condition": "勾选 2 份已删除问卷",
+        "focus": "恢复后问卷回到原文件夹且原状态保留"
+      },
+      "case_mode": "OR",
+      "alternative_reason": "单条 AC 先按任一必要用例登记；必要时组合由生成阶段按 AND 补登",
+      "case_ids": ["TC-M01-005", "TC-M01-007"]
+    },
+    {
+      "id": "AC-03",
+      "requirement_id": "REQ-01",
+      "description": "确认弹窗文案写明不可恢复；删除后回收站与问卷列表均查不到该问卷",
+      "reason": "评审阶段确认（来源功能点 FP-03）",
+      "required": true,
+      "confirmation": "confirmed",
+      "oracle": "确认弹窗文案写明不可恢复；删除后回收站与问卷列表均查不到该问卷",
+      "elements": {
+        "scene": "问卷管理→回收站列表页",
+        "object": "「彻底删除」按钮与确认弹窗",
+        "condition": "勾选 1 份已删除问卷",
+        "focus": "二次确认后记录消失且不可恢复"
+      },
+      "case_mode": "OR",
+      "alternative_reason": "单条 AC 先按任一必要用例登记；必要时组合由生成阶段按 AND 补登",
+      "case_ids": ["TC-M01-009", "TC-M01-010"]
+    }
+  ],
+  "testcases": [
+    {
+      "id": "TC-M01-001",
+      "title": "回收站列表按类型筛选显示匹配问卷",
+      "feature_ids": ["FP-01"],
+      "acceptance_ids": ["AC-01"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature", "smoke"],
+      "classification_reason": "覆盖核心查询路径的正向行为验证",
+      "priority": "P0",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷：2 份普通问卷、1 份考试"
+      ],
+      "data": {
+        "recycle_items": [{"type": "普通问卷", "count": 2}, {"type": "考试", "count": 1}],
+        "filter_options": ["普通问卷", "考试"]
+      },
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "回收站列表加载并显示预置的 3 份问卷"},
+        {"action": "点击类型筛选器并选择「普通问卷」", "expected": "列表刷新后仅剩 2 条普通问卷"},
+        {"action": "切换筛选器为「考试」", "expected": "列表显示 1 条考试类型记录"}
+      ],
+      "assertions": [
+        {"check": "筛选「普通问卷」后的列表条目数", "oracle": "列表页分页统计数字", "expect": 2},
+        {"check": "筛选「考试」后的列表条目数", "oracle": "列表页分页统计数字", "expect": 1},
+        {"check": "行类型标签与所选筛选器的一致性", "oracle": "每行右侧类型标签文本", "expect": "全部与所选类型一致"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "只读查询，无需清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "A",
+      "smoke_source": "A",
+      "method_evidence": {"scenario": {"source": "回收站查询主流程", "path": "进入回收站→筛选→核对条数"}},
+      "coverage_flags": ["L1", "L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-002",
+      "title": "筛选无匹配类型时回收站空态展示",
+      "feature_ids": ["FP-01"],
+      "acceptance_ids": ["AC-01"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证筛选条件无匹配时的空态展示行为",
+      "priority": "P1",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站仅预置 1 份考试问卷，无普通问卷"
+      ],
+      "data": {"recycle_items": [{"type": "考试", "count": 1}], "filter_target": "普通问卷"},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成且仅显示 1 条考试记录"},
+        {"action": "在类型筛选器中选择「普通问卷」", "expected": "列表进入空态并显示「暂无问卷」占位"}
+      ],
+      "assertions": [
+        {"check": "空态占位图与引导文案", "oracle": "列表中央占位区域文本", "expect": "显示「暂无问卷」与新建引导"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "只读查询，无需清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "method_evidence": {"boundary": {"boundary_sets": {"empty_set": "回收站仅含考试时筛选普通问卷", "non_empty": "回收站含普通问卷时筛选"}}},
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-003",
+      "title": "回收站列表翻页后内容不重复",
+      "feature_ids": ["FP-01"],
+      "acceptance_ids": ["AC-01"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证列表分页翻页的展示连续性",
+      "priority": "P2",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置超过 20 条记录的问卷数据"
+      ],
+      "data": {"per_page": 20, "pages": 2},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成，页脚显示分页控件"},
+        {"action": "点击「下一页」按钮", "expected": "第 2 页内容加载且与第 1 页无重复问卷"}
+      ],
+      "assertions": [
+        {"check": "翻页后条目与第 1 页的重复情况", "oracle": "两页列表问卷 ID 对比", "expect": "无重复问卷"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "只读查询，无需清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-004",
+      "title": "类型与时间范围组合筛选结果正确",
+      "feature_ids": ["FP-01"],
+      "acceptance_ids": ["AC-01"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证多条件组合筛选的交集行为",
+      "priority": "P2",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置删除时间分布在不同月份的普通问卷数据"
+      ],
+      "data": {"type": "普通问卷", "time_range_days": 7},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成"},
+        {"action": "先选类型「普通问卷」再选时间范围「近 7 天」", "expected": "仅显示类型「普通问卷」且删除时间在近 7 天内的记录"}
+      ],
+      "assertions": [
+        {"check": "组合筛选后每条记录的类型与删除时间", "oracle": "行内类型标签与删除时间列", "expect": "类型为普通问卷且删除时间在近 7 天内"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "只读查询，无需清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-005",
+      "title": "勾选两份问卷批量恢复到原文件夹",
+      "feature_ids": ["FP-02"],
+      "acceptance_ids": ["AC-02"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature", "smoke"],
+      "classification_reason": "覆盖批量恢复核心路径的正向验证",
+      "priority": "P0",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份属于「我的问卷」文件夹的普通问卷"
+      ],
+      "data": {"to_restore": 2, "remaining_after": 1, "original_folder": "我的问卷"},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表显示预置的 3 份问卷"},
+        {"action": "勾选前 2 份问卷左侧复选框", "expected": "两行进入选中状态且顶部出现「恢复」按钮"},
+        {"action": "点击「恢复」按钮", "expected": "提示「恢复成功」且回收站剩余 1 条"}
+      ],
+      "assertions": [
+        {"check": "恢复后回收站剩余条数", "oracle": "列表分页统计", "expect": 1},
+        {"check": "恢复的问卷出现在原文件夹", "oracle": "「我的问卷」文件夹列表", "expect": "2 份问卷均在列表中"},
+        {"check": "恢复操作的结果提示", "oracle": "页面顶部 toast 文本", "expect": "包含「恢复成功」字样"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "恢复操作使数据回到删除前状态，无需额外清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "A",
+      "smoke_source": "A",
+      "method_evidence": {"scenario": {"source": "批量恢复主流程", "path": "勾选→恢复→核对归属"}},
+      "coverage_flags": ["L1", "L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-006",
+      "title": "全选后一次性恢复全部问卷",
+      "feature_ids": ["FP-02"],
+      "acceptance_ids": ["AC-02"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证全选恢复的批量行为",
+      "priority": "P1",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷数据"
+      ],
+      "data": {"all_count": 3, "remaining_after": 0},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成"},
+        {"action": "点击表头「全选」复选框", "expected": "全部 3 行进入选中状态"},
+        {"action": "点击「恢复」按钮", "expected": "全部问卷恢复完成，回收站剩余 0 条"}
+      ],
+      "assertions": [
+        {"check": "全选恢复后回收站剩余条数", "oracle": "列表分页统计", "expect": 0}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "恢复操作使数据回到删除前状态，无需额外清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-007",
+      "title": "原文件夹已删除的问卷恢复后归入根目录",
+      "feature_ids": ["FP-02"],
+      "acceptance_ids": ["AC-02"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证恢复目标的兜底归属规则",
+      "priority": "P1",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 1 份原文件夹「已删除测试文件夹」已被彻底删除的问卷"
+      ],
+      "data": {"deleted_folder": "已删除测试文件夹", "fallback_folder": "我的问卷"},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成"},
+        {"action": "勾选原文件夹已删除的 1 份问卷", "expected": "该行进入选中状态"},
+        {"action": "点击「恢复」按钮", "expected": "恢复完成，问卷出现在「我的问卷」根目录"}
+      ],
+      "assertions": [
+        {"check": "原文件夹已删除问卷的恢复归属", "oracle": "「我的问卷」根目录列表", "expect": "问卷出现在根目录"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "恢复后删除该问卷与临时文件夹，恢复预置状态",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": true,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-008",
+      "title": "恢复后的问卷可再次被删除进入回收站",
+      "feature_ids": ["FP-02"],
+      "acceptance_ids": ["AC-02"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证恢复与删除的循环操作行为",
+      "priority": "P2",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 1 份问卷数据"
+      ],
+      "data": {"cycle": 1},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表加载完成"},
+        {"action": "勾选 1 份问卷", "expected": "该行进入选中状态"},
+        {"action": "点击「恢复」按钮", "expected": "恢复完成，问卷离开回收站"},
+        {"action": "在「我的问卷」中对该问卷执行删除操作", "expected": "该问卷重新出现在回收站列表，页脚统计恢复为 1 条"}
+      ],
+      "assertions": [
+        {"check": "再次删除后问卷回到回收站", "oracle": "回收站列表", "expect": "该问卷出现在回收站列表"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "将问卷恢复回原状态或彻底删除，恢复预置状态",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-009",
+      "title": "彻底删除问卷需二次确认且不可恢复",
+      "feature_ids": ["FP-03"],
+      "acceptance_ids": ["AC-03"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "覆盖彻底删除主链路含二次确认的验证",
+      "priority": "P1",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷数据"
+      ],
+      "data": {"to_delete": 1, "remaining_after": 2},
+      "steps": [
+        {"action": "进入「问卷管理」→「回收站」页面", "expected": "列表显示预置的 3 份问卷"},
+        {"action": "勾选列表第 1 行复选框", "expected": "该行进入选中状态"},
+        {"action": "点击「彻底删除」按钮", "expected": "弹出确认框，正文包含「不可恢复」字样"},
+        {"action": "在确认框中点击「确认删除」按钮", "expected": "提示删除完成，回收站剩余 2 条"}
+      ],
+      "assertions": [
+        {"check": "确认后回收站剩余条数", "oracle": "列表分页统计", "expect": 2},
+        {"check": "删除后问卷在管理列表的可见性", "oracle": "「我的问卷」文件夹内搜索该问卷标题", "expect": "搜索无结果"},
+        {"check": "确认弹窗的不可恢复文案", "oracle": "弹窗正文文本", "expect": "包含「不可恢复」字样"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "该用例产生不可逆删除，仅作用于预置测试问卷，无需恢复",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "A",
+      "method_evidence": {"scenario": {"source": "彻底删除主流程", "path": "勾选→删除→二次确认→核对不可见"}},
+      "coverage_flags": ["L1", "L2"],
+      "risk_flag": true,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-010",
+      "title": "取消彻底删除后问卷保留在回收站",
+      "feature_ids": ["FP-03"],
+      "acceptance_ids": ["AC-03"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证删除确认弹窗取消路径的行为",
+      "priority": "P2",
+      "required": true,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷数据"
+      ],
+      "data": {"cancel": true, "count_before": 3},
+      "steps": [
+        {"action": "从顶部导航进入「问卷管理」下的「回收站」标签页", "expected": "回收站标签页加载完成"},
+        {"action": "点击第 1 行复选框", "expected": "第 1 行进入选中状态"},
+        {"action": "点击「彻底删除」按钮", "expected": "弹出确认框"},
+        {"action": "点击确认框的「取消」按钮", "expected": "弹窗关闭，问卷仍在回收站且总数不变"}
+      ],
+      "assertions": [
+        {"check": "取消后回收站剩余条数", "oracle": "列表分页统计", "expect": "与操作前一致（3 条）"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "只读验证加取消操作，数据无变化，无需清理",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "A",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-011",
+      "title": "彻底删除后页脚统计数字同步更新",
+      "feature_ids": ["FP-03"],
+      "acceptance_ids": ["AC-03"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证删除后统计计数的即时刷新",
+      "priority": "P2",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷数据"
+      ],
+      "data": {"before": 3, "after": 2},
+      "steps": [
+        {"action": "打开「回收站」列表，记录页脚统计数字", "expected": "页脚显示当前回收站共 3 条记录"},
+        {"action": "勾选 1 份问卷", "expected": "该行进入选中状态"},
+        {"action": "点击「彻底删除」按钮", "expected": "弹出确认框"},
+        {"action": "点击「确认删除」按钮", "expected": "删除完成，页脚统计更新为 2 条"}
+      ],
+      "assertions": [
+        {"check": "删除后页脚统计数字", "oracle": "页脚分页统计", "expect": "由 3 变为 2"}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "该用例产生不可逆删除，仅作用于预置测试问卷，无需恢复",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    },
+    {
+      "id": "TC-M01-012",
+      "title": "依次彻底删除两份问卷的逐条生效",
+      "feature_ids": ["FP-03"],
+      "acceptance_ids": ["AC-03"],
+      "layer": "ui",
+      "attributes": ["functional"],
+      "suites": ["feature"],
+      "classification_reason": "验证多份问卷逐条删除的累计行为",
+      "priority": "P2",
+      "required": false,
+      "role": "测试账号（主账号）",
+      "preconditions": [
+        "测试环境已部署本次版本",
+        "账号已登录问卷管理后台",
+        "回收站预置 3 份问卷数据"
+      ],
+      "data": {"delete_count": 2, "remaining": 1},
+      "steps": [
+        {"action": "在「回收站」列表中定位第 1 份目标问卷", "expected": "该行可见"},
+        {"action": "勾选第 1 份问卷", "expected": "该行进入选中状态"},
+        {"action": "点击「彻底删除」按钮", "expected": "弹出确认框"},
+        {"action": "点击「确认删除」按钮", "expected": "第 1 份删除完成"},
+        {"action": "对第 2 份问卷重复以上勾选与确认操作", "expected": "第 2 份删除完成，回收站剩余 1 条"}
+      ],
+      "assertions": [
+        {"check": "依次删除后回收站剩余条数", "oracle": "列表分页统计", "expect": 1}
+      ],
+      "dependency_mode": "real",
+      "cleanup": "该用例产生不可逆删除，仅作用于预置测试问卷，无需恢复",
+      "project": "问卷回收站",
+      "menu_path": "问卷管理→回收站",
+      "case_class": "B",
+      "coverage_flags": ["L2"],
+      "risk_flag": false,
+      "pci_flag": false,
+      "remarks": ""
+    }
+  ],
+  "applicability": {
+    "functional": {"state": "applicable", "reason": "筛选、恢复、删除均为需求声明的核心功能"},
+    "security": {"state": "not_applicable", "reason": "需求未声明加密、鉴权或敏感数据变更，沿用现有登录体系"},
+    "performance": {"state": "not_applicable", "reason": "需求未给出响应时间、并发量等量化指标"},
+    "reliability": {"state": "insufficient_evidence", "reason": "保留期自动清理规则未定义（阻塞项 B-01），数据保留可靠性无法裁定"},
+    "compatibility": {"state": "not_applicable", "reason": "需求未声明端差异或浏览器适配范围"},
+    "visual": {"state": "not_applicable", "reason": "本次无设计基线变更"},
+    "accessibility": {"state": "insufficient_evidence", "reason": "缺少无障碍要求与设计基线材料"}
+  }
+}

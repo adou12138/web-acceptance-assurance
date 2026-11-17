@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 运行产物（专家执行 / api-test 链路输出）
+api_test_out/
+reports/
+api_test_issues.csv
+api_test_observations.csv
+api_test_doc_issues.csv
+api_test_doc_review_report.md
+smoke_results_*.csv
+smoke_issues_*.csv
+smoke_report_*.json
+smoke_summary_*.md
+*_report_full.json
+llm_semantic_prep/
+.workbuddy/
+
+# 真实个人配置（包内只保留 *.example.json）
+skills/api-test/assets/personal_config.json
+
+# 备份与临时
+backup/
+*.zip
+*.log

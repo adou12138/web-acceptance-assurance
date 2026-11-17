@@ -1,0 +1,15 @@
+{
+  "_comment": "自定义请求头（真实值，**不入库**，已在 .gitignore）。环境无关的固定头写 headers；随环境变的头写 by_env。<${ENV}> 形态会被当成占位符（批准门禁不视为凭据）。头值不允许含 CR/LF。",
+  "headers": {
+    "X-Client": "<客户端标识，示例 web / miniapp>",
+    "X-Api-Version": "<接口版本号，示例 2>"
+  },
+  "by_env": {
+    "round1_local": {
+      "X-Client": "<第 1 轮环境的客户端标识>"
+    },
+    "round2_devtest": {
+      "X-Client": "<第 2 轮环境的客户端标识>"
+    }
+  }
+}

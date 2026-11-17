@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "regression_baseline",
+  "description": "回归资产：flow.py 真实执行后写入未批准 snapshot，--retest 时由 regression.load_baseline 读回；只有显式 promote-baseline 且全量实际 PASS、无覆盖缺口后才成为 approved 正式基线。contract_hash 下沉到每条 entry（不同条目可能来自不同契约版本），每条 entry 带 expectations.last_error，REGRESSED 判定就靠它。计划或 dry-run 不得冒充 completed/approved。",
+  "type": "object",
+  "required": ["version", "entries"],
+  "allOf": [{
+    "if": {"required": ["status"], "properties": {"status": {"enum": ["snapshot", "approved"]}}},
+    "then": {"required": ["snapshot", "cases", "cases_hash", "case_statuses", "source_run", "coverage_blocked", "findings_count"]}
+  }],
+  "additionalProperties": true,
+  "properties": {
+    "version": {"type": "integer", "description": "快照格式版本，当前为 1"},
+    "snapshot": {"type": "boolean", "description": "true 表示未批准快照；晋升正式基线后可保留该标记但 status 应为 approved"},
+    "status": {"type": "string", "enum": ["snapshot", "approved"], "description": "资产状态；snapshot 不得当作正式基线"},
+    "approval": {"type": "object", "description": "显式批准信息（approver/approved_at/cases_hash）"},
+    "cases": {"type": "array", "description": "快照中实际执行的完整用例集合"},
+    "cases_hash": {"type": "string", "description": "快照用例 canonical hash"},
+    "coverage_blocked": {"type": "boolean", "description": "覆盖率门禁是否阻塞；为 true 时不得晋升"},
+    "findings_count": {"type": "integer", "minimum": 0},
+    "source_run": {"type": "string"},
+    "case_statuses": {"type": "object"},
+    "entries": {
+      "type": "array",
+      "description": "每条一用例，load_baseline 会转成 {case_id: entry}",
+      "items": {
+        "type": "object",
+        "required": ["case_id", "contract_hash", "expectations"],
+        "additionalProperties": true,
+        "properties": {
+          "case_id": {"type": "string"},
+          "case_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "完整用例 canonical SHA-256；load_baseline 可从 cases 推导并核对。统一 flow 复测中当前内容变化判 STALE_BASELINE，无历史完整内容证明判 UNBASELINED；不因本轮 PASS 假判 FIXED。旧仅 entries 格式仍可读取。"},
+          "last_status": {"type": "string", "enum": ["PASS", "FAIL", "ERROR", "PRECONDITION_UNMET"], "description": "该条在本轮的真实执行状态；只有 PASS 才允许晋升"},
+          "contract_hash": {
+            "type": ["string", "null"],
+            "description": "写入时的契约哈希；与当前契约不一致 ⇒ STALE_BASELINE"
+          },
+          "expectations": {
+            "type": "object",
+            "required": ["last_error"],
+            "additionalProperties": true,
+            "properties": {
+              "priority": {"type": "string"},
+              "dimension": {"type": "string"},
+              "last_error": {
+                "type": "string",
+                "description": "上轮该用例的失败原因（flow 快照仅含实际执行项；通过时为空串）；上轮有值且与本轮值不同 ⇒ REGRESSED"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "requirement_fingerprint": "sha256:3b5d2f8a1c9e4d7b6a0f8e2d1c4b7a9e6f3d5c8b0a2e4f6d8c1b3a5e7f9d0c2b",
+  "task_id": "T-20261116-01",
+  "split_reason": "预估 40 条 > 分批阈值 30，按模块分批（每模块一批）",
+  "batches": [
+    {
+      "unit_id": "M01",
+      "module_code": "M01",
+      "feature_ids": ["FP-01", "FP-02", "FP-03", "FP-04"],
+      "status": "done",
+      "gate": "pass",
+      "case_ids": ["TC-M01-001", "TC-M01-002"],
+      "started_at": "2026-11-16T19:00:00+08:00",
+      "finished_at": "2026-11-16T19:20:00+08:00",
+      "gate_report": "gate-M01.json"
+    },
+    {
+      "unit_id": "M02",
+      "module_code": "M02",
+      "feature_ids": ["FP-05"],
+      "status": "pending",
+      "gate": "not_run",
+      "case_ids": [],
+      "started_at": null,
+      "finished_at": null,
+      "gate_report": null
+    }
+  ],
+  "current": null
+}

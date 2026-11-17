@@ -1,0 +1,32 @@
+{
+  "_comment": "冒烟案例清单【通用示例】。字段定义与全部占位符见 references/smoke_testing.md「三、案例字段」；引擎不读取 contract_file（仅人工关联参考）。演示两条：①单接口冒烟；②依赖链（先创建→extracts 存 id→第二例 skip_if 依赖）。复制后按你的接口改写 action/name/module/params。真实案例请另存包外（如 ~/.workbuddy/wjx-api-test/），不要放入 skill 包内。",
+  "cases": [
+    {
+      "action": "1000107",
+      "name": "创建 AI 主页（冒烟示例）",
+      "module": "AI主页[10001]",
+      "endpoint": "default.aspx",
+      "qps": 10,
+      "na_hints": [],
+      "params": {
+        "title": "冒烟示例标题",
+        "cover": ""
+      },
+      "extracts": {
+        "home_id": "data.id"
+      }
+    },
+    {
+      "action": "1000108",
+      "name": "查询 AI 主页（依赖上一条 extracts）",
+      "module": "AI主页[10001]",
+      "endpoint": "default.aspx",
+      "qps": 10,
+      "na_hints": [],
+      "skip_if": "!ctx.home_id",
+      "params": {
+        "id": "${ctx.home_id}"
+      }
+    }
+  ]
+}

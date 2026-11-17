@@ -1,0 +1,12 @@
+{
+  "_readme": "出厂兜底排除集（四级回退的最后一层，随仓库分发）。替换语义：上级任一配置文件（exclude_params_<project>.json / exclude_params.json，或 --exclude-config 显式指定）存在时整体取代本文件，层间不合并；CLI --exclude-params 只追加。条目语法：name（不参与生成，值走契约默认/引擎注入）或 name=value（固定值进每条请求）。本文件缺失或非法视为安装损坏，直接报错——绝不静默返回空。",
+  "exclude_params": [
+    "encode",
+    "appid",
+    "action",
+    "ts",
+    "sign",
+    "corpid",
+    "sysid"
+  ]
+}
