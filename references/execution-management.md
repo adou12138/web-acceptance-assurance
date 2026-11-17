@@ -73,10 +73,18 @@ summary输出的是整轮当前记录，不具备as_of过滤；正式验收或�
 
 ```bash
 python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --bugs <bugs.json>
+python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --batches <batches.json> --gate-report <gate-<unit>.json>
 python scripts/execution_ledger.py begin <round目录> <cases.json> <context.json> ATT-001 TC-NAME-001 "打开本次隔离项目并保存名称"
 python scripts/execution_ledger.py finish <round目录> <cases.json> <context.json> <result.json>
 python scripts/execution_ledger.py summary <round目录> <cases.json> <context.json> --bugs <bugs.json>
 python -m unittest discover -s tests -v
 ```
+
+**第 2→3 跳机械校验**：传入 `--batches` 与 `--gate-report` 时，以下情形一律拒绝初始化（退出码 2，不保留空工作区）：
+
+- 批次存在未完成状态或 `gate` 非 `pass`/`waived`；批次未登记 `case_ids`（空批次不得计入闭环）；`case_ids` 并集与设计用例不一致（有未登记或设计外 ID）。
+- 门禁报告 `status` 非 `pass`/`warning`；`checks` 缺失或为空；检查项缺 `id` 或状态不在 `passed`/`warning`/`failed`；存在 `failed`；缺 `S0` 通过项；缺 `counts.testcases`；覆盖条数与设计条数不一致。
+
+即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`；不传这两个参数时保持旧行为，但报告须写明未做跳间校验。
 
 result.json必填字段：attempt_id、status、actual、evidence_paths（绝对本地路径数组）、assertions（check/actual/matched数组，与规格check一一对应）、cause、bug_ids、cleanup。PASS要求所有matched为true且cause=none；FAIL至少一个false；BLOCKED/SKIPPED可无断言与证据，但原因不得缺失。退出码0仅表示记录/摘要命令完成，输入/状态错误为2，**不是质量门禁退出码**。

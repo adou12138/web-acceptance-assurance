@@ -93,3 +93,22 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **E9 发布治理**：版本 1.15.0 同步到 `plugins/cache/.../1.15.0`，旧缓存禁用；本轮改动提交 git。
 
 **验证**：专家包根 132 OK；case-generator 74 OK；figma 367 OK；合计 573 Python 测试通过。注入复验：五视角 4 项 SKIPPED/BLOCKED 时 gate 从“通过”改判“待核实”，`missing_views` 含 4 项。
+
+## 改动审查修复轮（v1.16.0，2026-11-17）
+
+针对 v1.15.0 改动审查提出的 R1–R12 逐项修复。
+
+- **R1 跳间门禁可绕过**：`_gate_precondition` 增加 `design_ids` 绑定——批次须登记 `case_ids` 且并集与设计用例一致；门禁报告须含非空 `checks`（每项 id + passed/warning/failed）、`S0` 为 passed、`counts.testcases` 等于设计条数。仅 `{"status":"pass"}` 或空 `checks` 的最小载荷一律拒绝（退出码 2，不留工作区）。`baseline.gate_precondition` 增记 `batches_case_count` / `gate_report_case_count`；新增 CLI 反向用例。
+- **R2 全 FAIL 仍给通过**：`exploration_state` 新增 `failed_items`，存在 FAIL 时上限降为“待核实”且 message 明写不得写“通过”；agents / `exploration-runtime.md` / `output-templates.md` 同步。历史 ROUND-001 报告追加“修订说明”，不改变原“不通过”结论。
+- **R3 必读文档旧口径**：`output-templates.md` 5.4 删除“SKIPPED/BLOCKED 视为已记录”，改为只认 PASS/FAIL。
+- **R4 README 过期**：补齐 api-test、figma-ui-parity 与 `render_csv.py` 条目。
+- **R5 死参数**：`_gate()` 去掉未使用的 `views` 形参（AST 复核）。
+- **R6 计数失真**：`render_csv` 摘要改为 `view_rows` + `unique_cases`（真实 30 条用例：38 / 30）。
+- **R7 渲染器健壮性**：`UsageError`/`VerifyError` 取代中文子串判码（1=回读失败、2=用法/输入）；`task_id` 限 `[A-Za-z0-9._-]{1,64}` 防路径穿越；缺 `case_id` 列给出明确报错，不再抛无消息 `StopIteration`。
+- **R8 COV-UI 破坏性变更**：改为两级——声明 `applicability` 的用例集零用例仍 BLOCK；未声明 `applicability` 的存量用例集降为 WARN 并在报告中强制列缺口。`policy.json.gate_rules.cov_ui.note` 与 case-generator SKILL 同步标注。
+- **R9 提交非原子**：`b6a36a7` 含 192 文件（夹带 v1.14 未提交文档与 figma skill），无法按项回滚；本轮起改为一次逻辑一提交，本版提交范围仅含本轮修复。历史提交不回写。
+- **R10 历史交付物口径**：ROUND-001 执行报告门禁行标注新旧口径差异并附修订说明。
+- **R11 指代不明**：agents “前两者产物”改为“评审与生成两跳的产物”。
+- **R12 执行文档缺新参数**：`execution-management.md` 补 `init --batches/--gate-report` 命令与全部拒绝条件。
+
+**验证**：专家包根 134 OK；case-generator 78 OK；figma 367 OK；合计 579 Python 测试通过。真实产物复验：真实 batches+gate 建台账成功（`gate_report_case_count=30`）、最小载荷 rc=2、少登记一条用例 rc=2、真实 30 条用例 CSV 摘要 `view_rows=38 / unique_cases=30`、非法 task_id rc=2、存量用例集 COV-UI 为 warning。

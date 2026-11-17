@@ -6,7 +6,7 @@
 
 输出：<outdir>/测试用例_<task-id>_<视角>.csv 共 5 个文件（utf-8-sig）。
 --verify：渲染后逐文件读回，核对 BOM、表头、列数与 case_id 集合；不一致退出码 1。
-默认拒绝覆盖已有文件；--force 显式允许。
+默认拒绝覆盖已有文件；--force 显式允许。task_id 限字母数字与 . _ -（作文件名片段）。
 
 退出码：0=成功；1=回读一致性失败；2=用法/输入错误。
 """
@@ -15,8 +15,20 @@ import argparse
 import csv
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
+
+
+class UsageError(Exception):
+    """用法或输入不合法（退出码 2）。"""
+
+
+class VerifyError(Exception):
+    """渲染后回读校验不一致（退出码 1）。"""
+
+
+TASK_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 SCRIPTS = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPTS.parent
@@ -36,22 +48,38 @@ def select(cases, attributes):
 
 
 def verify_view(path, columns, expected):
-    """回读单个视图：BOM、表头、列数与 case_id 集合四项校验。"""
+    """回读单个视图：BOM、表头、列数、case_id 列存在与 id 集合五项校验。"""
     path = Path(path)
     if not path.read_bytes().startswith(b"\xef\xbb\xbf"):
-        raise ValueError(f"{path.name}: 缺少 utf-8-sig BOM")
+        raise VerifyError(f"{path.name}: 缺少 utf-8-sig BOM")
     with path.open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
     headers = [c["header"] for c in columns]
     if not rows or rows[0] != headers or any(len(r) != len(headers) for r in rows[1:]):
-        raise ValueError(f"{path.name}: 表头或列数不一致")
-    id_index = next(i for i, c in enumerate(columns) if c["field"] == "case_id")
+        raise VerifyError(f"{path.name}: 表头或列数不一致")
+    id_columns = [i for i, c in enumerate(columns) if c["field"] == "case_id"]
+    if not id_columns:
+        raise VerifyError(f"{path.name}: 列契约缺少 case_id 字段，无法回读校验")
+    id_index = id_columns[0]
     actual = {r[id_index] for r in rows[1:]}
     if actual != expected:
-        raise ValueError(f"{path.name}: case_id 集合不一致（回读 {len(actual)} / 预期 {len(expected)}）")
+        raise VerifyError(f"{path.name}: case_id 集合不一致（回读 {len(actual)} / 预期 {len(expected)}）")
+
+
+def totals(cases):
+    """视图行数与去重用例数分开统计：同一用例跨视角只计一次。"""
+    rows = 0
+    unique = set()
+    for attributes in es.VIEWS.values():
+        picked = select(cases, attributes)
+        rows += len(picked)
+        unique |= {str(tc.get("id", "")) for tc in picked}
+    return {"view_rows": rows, "unique_cases": len(unique)}
 
 
 def render(cases, task_id, outdir, columns, force=False, verify=False):
+    if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
+        raise UsageError(f"task_id 仅允许字母数字与 . _ -（最长 64 位）：{task_id!r}")
     outdir = Path(outdir)
     if not outdir.parent.is_dir():
         raise ValueError("输出目录的父目录必须已存在")
@@ -89,16 +117,15 @@ def main():
         policy = load(args.policy)
         columns = policy.get("views", {}).get("columns", [])
         if len(columns) != 19:
-            raise ValueError(f"policy.views.columns 应为 19 列，当前 {len(columns)}")
+            raise UsageError(f"policy.views.columns 应为 19 列，当前 {len(columns)}")
         result = render(cases, args.task_id, args.outdir, columns, args.force, args.verify)
-    except (ValueError, OSError, StopIteration) as exc:
-        text = str(exc)
-        code = 2
-        if "回读" in text or "BOM" in text or "不一致" in text:
-            code = 1
+    except VerifyError as exc:
+        print(f"回读校验失败：{exc}", file=sys.stderr)
+        sys.exit(1)
+    except (UsageError, ValueError, OSError) as exc:
         print(f"渲染失败：{exc}", file=sys.stderr)
-        sys.exit(code)
-    print(json.dumps({"views": result, "total": sum(v["count"] for v in result.values())}, ensure_ascii=False, indent=2))
+        sys.exit(2)
+    print(json.dumps({"views": result, **totals(cases)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

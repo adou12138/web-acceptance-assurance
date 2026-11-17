@@ -50,7 +50,7 @@ python scripts/batch.py finish --workdir <工作区> --unit M01 --cases <cases J
 
 ### 3. 门禁（只报不改）
 
-`gate_checks.py` 依次执行：**S0 结构校验先跑**（`case_data.validate` 无 errors，含每个 requirement 至少一个 required 用例、`case_ids` 双向登记、四要素齐全）→ S0 不过直接判**待修订**，不计算后续文本门禁 → G1/G1.5/G2/G3/G4/G5/G6/G7 + V05/V07/V08/V09/V11/V12/V13 + COV（四层覆盖/方法见证）+ COV-PATH（异常与权限路径配比）+ COV-UI（界面样式/无障碍零用例须逐类裁定）+ RATIO-SMOKE / RATIO-P0。
+`gate_checks.py` 依次执行：**S0 结构校验先跑**（`case_data.validate` 无 errors，含每个 requirement 至少一个 required 用例、`case_ids` 双向登记、四要素齐全）→ S0 不过直接判**待修订**，不计算后续文本门禁 → G1/G1.5/G2/G3/G4/G5/G6/G7 + V05/V07/V08/V09/V11/V12/V13 + COV（四层覆盖/方法见证）+ COV-PATH（异常与权限路径配比）+ COV-UI（界面样式/无障碍零用例须逐类裁定；未声明 applicability 的存量用例集降为告警并在报告中列缺口）+ RATIO-SMOKE / RATIO-P0。
 
 - 门禁不通过 → 用例状态标**待修订**（与执行状态 `NOT_RUN` 区分），报告定位到 `case_id` 或批次号；修订后**重跑该批**。不自动改用例、不做超标自动降级。
 - 小样本例外：用例数 < 20 时比率门禁降为告警，改用绝对数（每模块 ≥1 条冒烟、每需求 ≥1 条；P0 同理）。
@@ -70,7 +70,7 @@ python scripts/batch.py aggregate --workdir <工作区> --cases <cases JSON>
 |---|---|
 | 给人看（存档/评审/交付同事） | **19 列 Excel**：`render_xlsx.py --cases <JSON> --out 测试用例_{task_id}.xlsx --verify`（JSON 留在工作区作事实源，不单独交付） |
 | 给程序/下游接着读 | **交付 JSON**：`render_json.py --cases <JSON> --out <路径>`（结构见 `references/output-json.md`） |
-| 由本专家继续执行 | `render_csv.py --cases <JSON> --out <目录> --task-id <...> --verify` 生成五视角 CSV（视角映射复用 `exploration_state.VIEWS`），加可选 HTML + 执行台账（`execution_ledger.py` 直接吃同一份 cases JSON，无需转换） |
+| 由本专家继续执行 | `render_csv.py --cases <JSON> --out <目录> --task-id <...> --verify` 生成五视角 CSV（视角映射复用 `exploration_state.VIEWS`；摘要分列 `view_rows` 与 `unique_cases`，跨视角重复行不作用例数），加可选 HTML + 执行台账（`execution_ledger.py` 直接吃同一份 cases JSON，无需转换） |
 | 明确"两种都要" | 交付 JSON + 19 列 Excel 分别落 `outputs/json/` 与 `outputs/xlsx/`，文件名带时间戳；交付前核对两者 `case_id` 集合与条数一致 |
 | 判不准 | 问一句「给人看还是给程序接着用」，不猜 |
 

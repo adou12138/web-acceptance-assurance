@@ -50,6 +50,16 @@ class TestFullGate(unittest.TestCase):
         cases["applicability"].pop("accessibility")
         self.assertNotIn("COV-UI", failed_ids(run_gate(cases)))
 
+    def test_cov_ui_legacy_set_without_applicability_warns_not_blocks(self):
+        """未声明 applicability 的存量用例集降为告警，报告仍可见覆盖缺口。"""
+        cases = load(CASES_12)
+        cases.pop("applicability")
+        report = run_gate(cases)
+        self.assertNotIn("COV-UI", failed_ids(report))
+        check = next(c for c in report["checks"] if c["id"] == "COV-UI")
+        self.assertEqual(check["status"], "warning")
+        self.assertTrue(check["issues"], "存量缺口必须在报告中可见，不得静默通过")
+
     def test_s0_blocks_downstream(self):
         cases = load(CASES_12)
         del cases["testcases"][0]["assertions"]

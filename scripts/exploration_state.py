@@ -130,16 +130,18 @@ def _evidence(paths, name):
     return result
 
 
-def _gate(rows, views, executed_views):
-    """按已提供清单计算执行门禁：未消费候选、必查视角无实测记录或缺控件遍历条目时降低结论上限。
+def _gate(rows, executed_views):
+    """按已提供清单计算执行门禁：未消费候选、必查视角无实测记录、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
-    SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖。
+    SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
+    FAIL 属"已实测到异常"，同样不得写"通过"。
     """
     ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()]
     missing = [view for view in REQUIRED_VIEWS if not executed_views[view]]
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
     traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
+    failed = [row["id"] for row in rows if row["status"] == "FAIL"]
     if ready:
         ceiling = "待核实"
         message = f"仍有{len(ready)}项可执行未执行，技术结论上限为待核实；需执行或逐项写明未执行理由与影响"
@@ -149,6 +151,9 @@ def _gate(rows, views, executed_views):
     elif not traversal_recorded:
         ceiling = "待核实"
         message = "清单中无控件遍历条目（EXP-TRAV- 前缀）：按 exploration-runtime.md 的控件遍历约定补充条目或写明不适用理由；技术结论上限为待核实"
+    elif failed:
+        ceiling = "待核实"
+        message = f"存在{len(failed)}项FAIL条目：不得写“通过”，须按缺陷必选性与闭环状态判为“不通过”或“待核实”"
     else:
         ceiling = "通过"
         message = "无未消费候选、必查视角均有记录且含控件遍历条目；仍须按缺陷、断言和证据判定，不代表已通过"
@@ -159,6 +164,7 @@ def _gate(rows, views, executed_views):
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
         "missing_views": missing,
         "executed_views": {view: list(ids) for view, ids in executed_views.items()},
+        "failed_items": failed,
         "skipped_views": {view: [row["id"] for row in rows if row["status"] in {"BLOCKED", "SKIPPED"} and set(row["attributes"]) & attrs]
                           for view, attrs in VIEWS.items()},
         "traversal_pending": traversal_pending,
@@ -231,7 +237,7 @@ def summarize(data):
         "items": rows,
         "scope": SCOPE,
     }
-    report["gate"] = _gate(rows, report["views"], report["executed_views"])
+    report["gate"] = _gate(rows, report["executed_views"])
     return report
 
 

@@ -199,17 +199,76 @@ class ExecutionLedgerTests(unittest.TestCase):
 
     def test_init_rejects_unclosed_batches_and_failed_gate_report(self):
         target = self.folder / "blocked-run"
-        good_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass"}]}
-        bad_batches = {"batches": [{"unit_id": "M01", "status": "doing", "gate": "not_run"}]}
-        good_gate = {"status": "warning", "checks": [{"id": "V09", "status": "warning"}]}
+        ids = [tc["id"] for tc in self.design["testcases"]]
+        good_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass", "case_ids": ids}]}
+        bad_batches = {"batches": [{"unit_id": "M01", "status": "doing", "gate": "not_run", "case_ids": ids}]}
+        no_ids_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass"}]}
+        extra_ids_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass", "case_ids": ids + ["TC-NOT-IN-DESIGN"]}]}
+        short_ids_batches = {"batches": [{"unit_id": "M01", "status": "done", "gate": "pass", "case_ids": ids[:1]}]}
+        good_gate = {"status": "warning", "counts": {"testcases": len(ids)},
+                     "checks": [{"id": "S0", "status": "passed"}, {"id": "V09", "status": "warning"}]}
         bad_gate = {"status": "fail", "checks": [{"id": "S0", "status": "failed"}]}
-        for batches, gate in [(bad_batches, None), (good_batches, bad_gate),
-                              (good_batches, {"status": "pass", "checks": [{"id": "S0", "status": "failed"}]})]:
+        cases = [
+            (bad_batches, None),
+            (no_ids_batches, good_gate),
+            (extra_ids_batches, good_gate),
+            (short_ids_batches, good_gate),
+            (good_batches, bad_gate),
+            (good_batches, {"status": "pass", "checks": [{"id": "S0", "status": "failed"}]}),
+            # 最小载荷：只有 status 或空 checks，不能解锁执行
+            (good_batches, {"status": "pass"}),
+            (good_batches, {"status": "pass", "checks": []}),
+            (good_batches, {"status": "pass", "counts": {"testcases": len(ids)},
+                            "checks": [{"id": "V09", "status": "passed"}]}),
+            (good_batches, {"status": "pass", "counts": {"testcases": len(ids) + 99},
+                            "checks": [{"id": "S0", "status": "passed"}]}),
+            (good_batches, {"status": "pass", "counts": {},
+                            "checks": [{"id": "S0", "status": "passed"}]}),
+            (good_batches, {"status": "pass", "counts": {"testcases": len(ids)},
+                            "checks": [{"status": "passed"}]}),
+        ]
+        for batches, gate in cases:
             with self.subTest(batches=batches, gate=gate), self.assertRaises(ValueError):
                 self.tool.initialize(target, self.design, self.context, "ROUND-BLOCKED", [], batches, gate)
             self.assertFalse(target.exists(), "拒绝初始化时不得留下空工作区")
         baseline = self.tool.initialize(target, self.design, self.context, "ROUND-OK", [], good_batches, good_gate)
-        self.assertEqual(baseline["gate_precondition"], {"batches_closed": True, "gate_report_status": "warning"})
+        self.assertEqual(baseline["gate_precondition"],
+                         {"batches_closed": True, "batches_case_count": len(ids),
+                          "gate_report_status": "warning", "gate_report_case_count": len(ids)})
+
+    def test_cli_init_enforces_gate_precondition(self):
+        design_file = self.folder / "cases-gate.json"
+        context_file = self.folder / "context-gate.json"
+        batches_file = self.folder / "batches-gate.json"
+        good_gate_file = self.folder / "gate-good.json"
+        thin_gate_file = self.folder / "gate-thin.json"
+        ids = [tc["id"] for tc in self.design["testcases"]]
+        design_file.write_text(json.dumps(self.design, ensure_ascii=False), encoding="utf-8")
+        context_file.write_text(json.dumps(self.context, ensure_ascii=False), encoding="utf-8")
+        batches_file.write_text(json.dumps({"batches": [{"unit_id": "M01", "status": "done", "gate": "pass", "case_ids": ids}]}), encoding="utf-8")
+        good_gate_file.write_text(json.dumps({"status": "pass", "counts": {"testcases": len(ids)},
+                                              "checks": [{"id": "S0", "status": "passed"}]}), encoding="utf-8")
+        thin_gate_file.write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+        blocked = self.folder / "cli-blocked"
+        blocked_run = subprocess.run([sys.executable, str(SCRIPT), "init", str(blocked), str(design_file), str(context_file),
+                                      "ROUND-CLI-BLOCKED", "--batches", str(batches_file), "--gate-report", str(thin_gate_file)],
+                                     capture_output=True, text=True, encoding="utf-8")
+        self.assertNotEqual(blocked_run.returncode, 0, "仅含 status 的门禁报告不得解锁执行")
+        self.assertFalse(blocked.exists(), "拒绝初始化时不得留下空工作区")
+        short_batches = self.folder / "batches-short.json"
+        short_batches.write_text(json.dumps({"batches": [{"unit_id": "M01", "status": "done", "gate": "pass", "case_ids": ids[:-1]}]}), encoding="utf-8")
+        short_run = subprocess.run([sys.executable, str(SCRIPT), "init", str(self.folder / "cli-short"), str(design_file), str(context_file),
+                                    "ROUND-CLI-SHORT", "--batches", str(short_batches), "--gate-report", str(good_gate_file)],
+                                   capture_output=True, text=True, encoding="utf-8")
+        self.assertNotEqual(short_run.returncode, 0, "批次漏登用例不得解锁执行")
+        self.assertFalse((self.folder / "cli-short").exists())
+        ok = self.folder / "cli-ok"
+        ok_run = subprocess.run([sys.executable, str(SCRIPT), "init", str(ok), str(design_file), str(context_file),
+                                 "ROUND-CLI-OK", "--batches", str(batches_file), "--gate-report", str(good_gate_file)],
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(ok_run.returncode, 0, ok_run.stderr)
+        baseline = json.loads((ok / "baseline.json").read_text(encoding="utf-8"))
+        self.assertEqual(baseline["gate_precondition"]["gate_report_case_count"], len(ids))
 
     def test_bug_ledger_accepts_source_namespace_but_rejects_empty_external_id(self):
         valid = [{"id": "BUG-1", "severity": "major", "status": "open",

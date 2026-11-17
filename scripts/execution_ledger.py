@@ -87,8 +87,17 @@ def _write_json_new(path, value):
         os.fsync(stream.fileno())
 
 
-def _gate_precondition(batches, gate_report):
-    """校验第 2→3 跳进门条件；两者均为可选，未提供时保持旧行为。"""
+REQUIRED_GATE_CHECKS = ("S0",)
+CHECK_STATUSES = {"passed", "warning", "failed"}
+
+
+def _gate_precondition(batches, gate_report, design_ids=None):
+    """校验第 2→3 跳进门条件；两者均为可选，未提供时保持旧行为。
+
+    只接受与设计绑定的完整载荷：仅有 status 的最小 JSON、空 checks、覆盖条数不符、
+    未登记所辖用例的空批次都不能解锁执行。
+    """
+    design = {str(x) for x in design_ids} if design_ids is not None else None
     info = {}
     if batches is not None:
         if not isinstance(batches, dict) or not isinstance(batches.get("batches"), list) or not batches["batches"]:
@@ -97,15 +106,41 @@ def _gate_precondition(batches, gate_report):
                if not isinstance(b, dict) or b.get("status") != "done" or b.get("gate") not in {"pass", "waived"}]
         if bad:
             raise ValueError("design gate not closed: " + ", ".join(bad) + "（批次未完成或门禁未通过）")
+        unregistered = [str(b.get("unit_id", "?")) for b in batches["batches"]
+                        if not [x for x in (b.get("case_ids") or []) if str(x).strip()]]
+        if unregistered:
+            raise ValueError("batches 未登记所辖用例: " + ", ".join(unregistered) + "（空批次不得计入闭环）")
+        covered = {str(x) for b in batches["batches"] for x in b["case_ids"]}
+        if design is not None:
+            uncovered, extra = sorted(design - covered), sorted(covered - design)
+            if uncovered or extra:
+                raise ValueError("batches.case_ids 与设计用例不一致：未登记 " + str(uncovered[:10]) + "，设计外 " + str(extra[:10]))
         info["batches_closed"] = True
+        info["batches_case_count"] = len(covered)
     if gate_report is not None:
         if not isinstance(gate_report, dict) or gate_report.get("status") not in {"pass", "warning"}:
             raise ValueError("gate report must be pass/warning; fail or missing status blocks execution")
-        failed = [str(c.get("id", "?")) for c in gate_report.get("checks", [])
-                  if isinstance(c, dict) and c.get("status") == "failed"]
+        checks = gate_report.get("checks")
+        if not isinstance(checks, list) or not checks:
+            raise ValueError("gate report must carry a nonempty checks array（仅有 status 不足以证明门禁已跑）")
+        malformed = [str(i) for i, c in enumerate(checks)
+                     if not isinstance(c, dict) or not str(c.get("id", "")).strip() or c.get("status") not in CHECK_STATUSES]
+        if malformed:
+            raise ValueError("gate report checks 不完整（需 id 与 passed/warning/failed）：索引 " + ", ".join(malformed))
+        failed = [str(c["id"]) for c in checks if c["status"] == "failed"]
         if failed:
             raise ValueError("gate report has failed checks: " + ", ".join(failed))
+        passed_ids = {str(c["id"]) for c in checks if c["status"] == "passed"}
+        absent = [gid for gid in REQUIRED_GATE_CHECKS if gid not in passed_ids]
+        if absent:
+            raise ValueError("gate report 缺少必过检查项: " + ", ".join(absent) + "（结构校验未通过不得执行）")
+        counts = gate_report.get("counts")
+        if not isinstance(counts, dict) or not isinstance(counts.get("testcases"), int):
+            raise ValueError("gate report 缺少 counts.testcases，无法与设计条数绑定")
+        if design is not None and counts["testcases"] != len(design):
+            raise ValueError(f"gate report 覆盖 {counts['testcases']} 条与设计 {len(design)} 条不一致（可能不是同一份用例）")
         info["gate_report_status"] = gate_report["status"]
+        info["gate_report_case_count"] = counts["testcases"]
     return info
 
 
@@ -114,7 +149,7 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
     _context(context)
     _text(round_id, "round_id")
     _bugs(known_issues)
-    gate_precondition = _gate_precondition(batches, gate_report)
+    gate_precondition = _gate_precondition(batches, gate_report, list(cases))
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")

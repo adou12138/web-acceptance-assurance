@@ -69,7 +69,10 @@ Horizon的执行管理优势用于轻量工作区、逐例持久记录、规格/
 - `scripts/perf_matrix.py`：校验条件格（视口/网络/CPU/冷热）的实测值与追踪文件哈希，按阈值判定并导出UTF-8-sig性能劣化矩阵CSV；证据未通过校验时结论为待核实，不采集数据。
 - `tests/test_exploration_state.py`、`tests/test_observation_bridge.py`、`tests/test_render_report_html.py`、`tests/test_perf_matrix.py`、`tests/test_browser_observer.js`：上述工具的输入、恢复、门禁、CSV、性能条目、报告渲染、矩阵判定和观察候选边界测试；不代表专家实测效果。
 - `skills/requirement-review/`：包内 skill——需求评审（八维度定性评审，产出 review-result.json 与渲染摘要）。
-- `skills/case-generator/`：包内 skill——用例生成（cases JSON 唯一事实源，分批/门禁/19 列 Excel 与交付 JSON 渲染）。
+- `skills/case-generator/`：包内 skill——用例生成（cases JSON 唯一事实源，分批/门禁/19 列 Excel、交付 JSON 与五视角 CSV 渲染）。
+- `skills/case-generator/scripts/render_csv.py`：五视角 CSV 渲染（视角映射复用探索清单、列头复用 19 列策略，utf-8-sig 且回读校验；`view_rows` 与 `unique_cases` 分列，避免跨视角重复计数）。
+- `skills/api-test/`：包内 skill——接口专项（契约审查、契约驱动生成、批量冒烟与回归、16 列问题单），产物自成体系、在报告中按附件引用。
+- `skills/figma-ui-parity/`：包内 skill——页面还原（Figma 设计稿对照与 45 维页面侧深查；升级时按六态口径回写探索清单后再计入技术结论）。
 - `docs/SYNC-NOTES.md`：抽取副本的人工对照清单（开发期使用，运行时不读）。
 - `.codebuddy-plugin/plugin.json`：专家展示与加载配置。
 

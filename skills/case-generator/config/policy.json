@@ -250,7 +250,7 @@
     "cov_ui": {
       "required_attributes": ["visual", "accessibility"],
       "exempt_states": ["not_applicable", "insufficient_evidence", "deferred"],
-      "note": "界面样式与基础无障碍为砺衡主体五视角必查维度；零用例时须在 applicability 逐类裁定并写明理由，否则不得进入执行。"
+      "note": "界面样式与基础无障碍为砺衡主体五视角必查维度；声明了 applicability 的用例集零用例时必须逐类裁定并写明理由，否则阻断（BLOCK）。未声明 applicability 的存量用例集降为告警（WARN），报告须列为覆盖缺口，新用例集一律补齐 applicability。"
     },
     "g1": {
       "banned_step_patterns": [

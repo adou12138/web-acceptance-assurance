@@ -194,6 +194,29 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertTrue(gate["traversal_recorded"])
         self.assertEqual(gate["verdict_ceiling"], "通过")
 
+    def test_gate_never_allows_pass_ceiling_while_fail_items_exist(self):
+        """有 FAIL 条目时不得给“通过”上限：全 FAIL 与混合 PASS/FAIL 两种形态都覆盖。"""
+        all_views = ["visual", "usability", "accessibility", "functional", "performance"]
+        self.data["items"] = [
+            self.item("EXP-ALL-FAIL", status="FAIL", observation="观察到异常", evidence_paths=[str(self.evidence)], attributes=all_views),
+            self.item("EXP-TRAV-1", status="FAIL", observation="控件遍历即异常", evidence_paths=[str(self.evidence)], attributes=["functional"]),
+        ]
+        gate = self.report()["gate"]
+        self.assertEqual(gate["missing_views"], [])
+        self.assertEqual(gate["failed_items"], ["EXP-ALL-FAIL", "EXP-TRAV-1"])
+        self.assertNotEqual(gate["verdict_ceiling"], "通过")
+        self.assertIn("FAIL", gate["message"])
+        mixed = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=[name])
+                 for name in all_views]
+        mixed.append(self.item("EXP-TRAV-1", status="PASS", observation="已清点控件", evidence_paths=[str(self.evidence)], attributes=["functional"]))
+        mixed.append(self.item("EXP-BAD-1", status="FAIL", observation="返回404", evidence_paths=[str(self.evidence)], attributes=["functional"]))
+        self.data["items"] = mixed
+        gate = self.report()["gate"]
+        self.assertEqual(gate["missing_views"], [])
+        self.assertTrue(gate["traversal_recorded"])
+        self.assertEqual(gate["failed_items"], ["EXP-BAD-1"])
+        self.assertEqual(gate["verdict_ceiling"], "待核实")
+
     def test_gate_tracks_skipped_view_with_reason_but_does_not_count_it_as_executed(self):
         self.data["items"] = [
             self.item("EXP-1", status="SKIPPED", blocked_reason="本需求无性能指标", attributes=["performance"]),

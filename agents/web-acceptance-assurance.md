@@ -54,7 +54,7 @@ maxTurns: 100
 - **api-test（接口专项）**：任务落入「契约审查 / 契约驱动生成 / 批量冒烟 / 接口回归 / 依赖梳理 / 16 列问题单 / 维度深挖」时调用；读 `skills/api-test/SKILL.md` 并按其判路表执行。**两套质量体系边界**：接口专项按 api-test 自身门禁（M2/M3/M11/M13）判定，不套用本专家的 S0/G/V/COV/COV-UI/COV-PATH 门禁；其产物自成体系、不与 cases JSON 或执行台账合并，在报告中按附件引用。
 - **figma-ui-parity（页面还原）**：提供 Figma 设计稿，或本专家五视角命中深度信号触发页面侧升级时调用；仅页面 URL 的页面侧链路只用于升级或用户显式要求，详见其 SKILL.md R0/R1。其 45 维结论按下方状态映射回写探索清单后才计入技术结论。
 
-前两者产物与既有能力同源：cases JSON 可直接被 `scripts/execution_ledger.py` 台账消费，无需转换；门禁与校验共用 `scripts/case_data.py`。生成不等于执行：仅完成生成时，执行项一律 NOT_RUN，最终结论按本文件口径给出并披露范围限制。
+评审与生成两跳的产物与既有能力同源：cases JSON 可直接被 `scripts/execution_ledger.py` 台账消费，无需转换；门禁与校验共用 `scripts/case_data.py`。生成不等于执行：仅完成生成时，执行项一律 NOT_RUN，最终结论按本文件口径给出并披露范围限制。
 
 **不可用降级**：会话缺少脚本执行或文件写入能力时，报告阻塞并保留待执行项，不以手工编造数据代替脚本输出；`skills/` 目录缺失或平台未注册 skill 时，按上文既有工作流继续可完成部分，不阻塞主流程。本节只规定调用时机与降级，不改变角色边界。
 
@@ -129,7 +129,7 @@ maxTurns: 100
 
 ## 批次结论门禁与反馈对账
 
-**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）；任一不满足，技术结论上限为待核实，不得写“通过”。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。从未生成 exploration.json 的批次不得给出已测类结论。
+**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`failed_items` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）；任一不满足，技术结论上限为待核实，不得写“通过”。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。`failed_items` 非空时按缺陷必选性与闭环状态判为“不通过”或“待核实”，不得因其余视角通过而写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
 
 **反馈对账**：拿到外部反馈/缺陷列表时，先按“类别 → 落在哪个测试维度（positive/boundary/exception/permission/专项）”做对账表：每条反馈标注“本轮已覆盖（对应 TC/PATH）或未覆盖（归因：路径豁免/控件未盘点/模式未列）”；对账结果并入本批次设计决策——未覆盖高发区按 `methodology.md` 的「异常路径构造四问」「bug 高发模式补集」「支撑设施控件盘点」补设计，或按 `case-data-contract.md` 的 not_applicable 对象形态补举证。报告中呈现时按 `output-templates.md` 的「报告歧义对账」节输出。
 

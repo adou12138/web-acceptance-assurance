@@ -519,13 +519,17 @@ class GateRunner:
         rule = self.policy.get("gate_rules", {}).get("cov_ui", {})
         attrs = rule.get("required_attributes", ["visual", "accessibility"])
         exempt = set(rule.get("exempt_states", ["not_applicable", "insufficient_evidence", "deferred"]))
-        applicability = cases.get("applicability") if isinstance(cases.get("applicability"), dict) else {}
+        zero = [attr for attr in attrs if not any(attr in (tc.get("attributes") or []) for tc in tcs)]
+        raw = cases.get("applicability")
+        if not isinstance(raw, dict):
+            # 存量用例集未声明逐类裁定：告警并强制在报告列缺口，不阻断历史资产重跑
+            issues = [{"case_id": "_ui_", "why": f"{'/'.join(zero)} 用例为 0 且用例集未声明 applicability（存量资产）：报告须列为覆盖缺口，新用例集必须逐类裁定"}] if zero else []
+            self.record("COV-UI", "界面与无障碍零覆盖举证", "WARN", issues,
+                        f"{'/'.join(attrs)} 有用例，无需逐类裁定")
+            return
         issues = []
-        for attr in attrs:
-            count = sum(1 for tc in tcs if attr in (tc.get("attributes") or []))
-            if count:
-                continue
-            entry = applicability.get(attr)
+        for attr in zero:
+            entry = raw.get(attr)
             state = entry.get("state") if isinstance(entry, dict) else None
             reason = entry.get("reason") if isinstance(entry, dict) else None
             if state in exempt and isinstance(reason, str) and reason.strip():
