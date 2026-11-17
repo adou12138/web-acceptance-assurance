@@ -121,3 +121,12 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **接入点**：agents「参考规范读取契约」增加“首次操作浏览器前读取”与工作流程第 3 步的通道选择段；`exploration-runtime.md` 责任分层指向该文档；README 文件清单登记。
 - **新增 `tests/test_reference_links.py`**：校验文档提到的 references 真实存在（按包级/skill 级同名解析，跳过缓存溯源行）、每个 reference 都有回链、agents 与 README 必须路由浏览器通道文档、该文档保留关键约束。变异验证：删除该文档后测试变红。
 - 外部技能的深层排障（跨域 iframe、审批卡、流式结束判定）以“本机装有该技能时按其 references 处理”表述，不在本包复制，避免两份说法漂移。
+
+## 设计数据通道（v1.18.0，2026-11-17）
+
+起因：核实「专家有没有参考 figma-ui-parity 用 figma-mcp 取设计数据」时，实测发现取数链路有三处错位，且专家包对取数没有任何约定。
+
+- **新增 `references/design-data.md`**：三来源判定（Figma MCP / REST + PAT / 用户导出物，**按能力不按工具名**）；`nodeId` 用 `1234:5678`、深链分号串整体算一个节点；多画板必须显式指定、不得默认第一个；MCP 返回的 YAML-ish 文本须先 `figma_mcp_to_json.py` 再 `extract_design_fields.py`；取不到时记 `dataMissing` 而非 `notRun`，报告不得写「还原度/像素级」，禁止截图倒推设计值与编造色值尺寸。
+- **接入点**：agents「参考规范读取契约」增加“取设计数据前读取”，入口判路表 figma 行改为“先判定取数来源再读其环境路由”；README 文件清单登记；`tests/test_reference_links.py` 扩展为同时守卫 browser-connection 与 design-data 的路由及关键约束。
+- **figma-ui-parity 同步修（4.47.0 → 4.48.0）**：通道 A 改为按能力判定，兼容 figma-developer-mcp（`get_figma_data` / `download_figma_images`）与官方远程 MCP（`get_file_nodes` / `get_images`）两族；通道 B 的 token 读取兼容 `headers.X-Figma-Token` 与 `env.FIGMA_API_KEY`/`FIGMA_TOKEN`（原先只读 headers，本机实测 `KeyError`）；`extraction.md`/`figma-fields.md`/`error-handling.md`/`real-env-verification.md` 的工具名表述一并统一。
+- **实测**：修复后令牌脚本实跑成功、`/v1/me` 返回 200；`mcp__figma__get_figma_data` 已加载，用假 fileKey 探活返回 404（链路通、非 401）；figma 技能 365 测试 OK。

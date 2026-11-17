@@ -62,6 +62,7 @@ Horizon的执行管理优势用于轻量工作区、逐例持久记录、规格/
 - `tests/test_change_impact.py`：传递方向、循环、多源、错误输入及命令行CSV链路测试。
 - `references/visual-usability.md`：界面样式、交互易用性、基础无障碍的实际任务与独立视图；专家启发式不冒充用户研究。
 - `references/browser-connection.md`：浏览器通道唯一入口——MCP 判定（默认 Chrome DevTools）、连接与登录态、机器人检测处置、`pageId`/`uid`/`ref` 句柄纪律、双通道协同与证据边界。
+- `references/design-data.md`：设计数据通道——Figma 三来源判定（MCP / REST / 导出物，按能力不按工具名）、`nodeId` 形态与多画板约束、取数失败记 `dataMissing` 且不得写「还原度」。
 - `references/exploration-runtime.md`：探索循环、清单字段、工具调用及采集→台账→CSV的证据边界。
 - `scripts/exploration_state.py`：严格校验同源探索清单，给下一步/复现/副作用核对候选、必查视角与结论门禁及UTF-8-sig CSV；不执行动作或判定业务门禁。
 - `scripts/observation_bridge.py`：把观察器候选按finding code映射为NOT_RUN待复核条目，已实测性能另生成汇总条目并接受外部追踪证据，页面自述为受控夹具时给所有条目加预埋项标记，拒绝阻塞或跨源观察，生成前用清单工具自检；不执行浏览器操作。

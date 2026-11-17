@@ -49,8 +49,16 @@ class ReferenceLinkTests(unittest.TestCase):
     def test_browser_channel_doc_is_routed_from_agent_and_readme(self):
         agent = read(ROOT / "agents" / "web-acceptance-assurance.md")
         readme = read(ROOT / "README.md")
-        self.assertIn("references/browser-connection.md", agent, "agents 必须在执行期指向浏览器通道文档")
-        self.assertIn("references/browser-connection.md", readme, "README 文件清单需登记浏览器通道文档")
+        for name in ("browser-connection.md", "design-data.md"):
+            with self.subTest(doc=name):
+                self.assertIn(f"references/{name}", agent, f"agents 必须在执行期指向 {name}")
+                self.assertIn(f"references/{name}", readme, f"README 文件清单需登记 {name}")
+
+    def test_design_data_doc_keeps_actionable_rules(self):
+        text = read(REFERENCES / "design-data.md")
+        for needle in ("dataMissing", "get_figma_data", "FIGMA_API_KEY", "还原度", "nodeId"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text, f"设计数据文档缺少关键约束：{needle}")
 
     def test_browser_channel_doc_keeps_actionable_rules(self):
         text = read(REFERENCES / "browser-connection.md")

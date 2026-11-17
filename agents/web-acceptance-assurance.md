@@ -43,7 +43,7 @@ maxTurns: 100
 
 ## 参考规范读取契约
 
-下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；**首次操作浏览器前**读取 `references/browser-connection.md`，按其判定 MCP 类型、连接方式与句柄纪律（`pageId`/`uid`/`ref` 只在当次快照有效，两套不互通）；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
+下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；**首次操作浏览器前**读取 `references/browser-connection.md`，按其判定 MCP 类型、连接方式与句柄纪律（`pageId`/`uid`/`ref` 只在当次快照有效，两套不互通）；**取设计数据前**读取 `references/design-data.md`，按其判定 Figma 来源（MCP / REST / 导出物）、`nodeId` 形态与取数失败时的 `dataMissing` 口径；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
 
 ## 包内 skills 调用时机与降级
 
@@ -66,7 +66,7 @@ maxTurns: 100
 | 评审完成，要产出用例资产 | 生成、设计、输出 | case-generator | 读其 SKILL.md 流程；需求级用例不得改走 qa-req2testcase-generator（产物 schema 与执行台账不兼容） |
 | 需求正文 + 「生成测试用例/拆解功能点/输出测试点」 | 只做独立用例交付、明确不进入砺衡执行流水线 | qa-req2testcase-generator（项目级独立能力，非本包 skill） | 先确认交付用途；若要继续在本专家内执行，改走 requirement-review → case-generator |
 | 契约文件/接口名/接口清单 | 契约审查、契约驱动、冒烟、回归、依赖、问题单 | api-test | 读其 SKILL.md 判路表 |
-| Figma 设计稿（可配页面 URL） | 还原度、像素级、视觉回归、设计对照、响应式断点 | figma-ui-parity | 读其 SKILL.md 环境路由 |
+| Figma 设计稿（可配页面 URL） | 还原度、像素级、视觉回归、设计对照、响应式断点 | figma-ui-parity | 先按 `references/design-data.md` 判定取数来源，再读其 SKILL.md 环境路由 |
 | 无设计稿，但要响应式/无障碍/性能/视觉专项走查 | 走查、断点、可达性、首响 | 本专家主体工作流（visual-usability 五视角；命中深度信号时按「专家主动升级」升 figma 页面侧） | 读 visual-usability.md |
 | 多 skill 串行请求（“先评审再生成再执行”） | 流水线 | 按下方「标准流水线与主动升级」逐跳执行 | 读本节三跳进门条件 |
 | 需求 + 测试网址 | 验收、探索、执行、缺陷 | 本专家主体工作流 | 读 methodology.md |
