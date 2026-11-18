@@ -60,6 +60,9 @@ Horizon的执行管理优势用于轻量工作区、逐例持久记录、规格/
 - `tests/test_execution_ledger.py`：执行台账、证据变化、重试、恢复与CLI链路测试。
 - `scripts/change_impact.py`：校验现有设计，追踪直接/间接需求影响及来源路径，生成JSON分析与按需CSV回归候选；不运行测试。
 - `tests/test_change_impact.py`：传递方向、循环、多源、错误输入及命令行CSV链路测试。
+- `references/business-pitfalls.md`：按业务模块的坑点清单（登录/权限/表单/上传/支付/导入导出/异步回调/接口/兼容/弱网/安全基线/无障碍/国际化/时区/AI），与按症状分类的缺陷模式互补。
+- `references/a11y-audit.md`：无障碍人工审计——37 条 A/AA 清单、影响分级、键盘 12 步、VoiceOver/NVDA 读屏脚本与检查点、缩放重排、结论表述边界。
+- `references/security-verification.md`：安全防护外部可验 12 项（响应头/Cookie/密钥/重定向/越权/错误信息/上传/CORS/第三方脚本/敏感数据/认证防滥用/传输），含 OWASP 映射与“不算缺陷”情形。
 - `references/visual-usability.md`：界面样式、交互易用性、基础无障碍的实际任务与独立视图；专家启发式不冒充用户研究。
 - `references/browser-connection.md`：浏览器通道唯一入口——MCP 判定（默认 Chrome DevTools）、连接与登录态、机器人检测处置、`pageId`/`uid`/`ref` 句柄纪律、双通道协同与证据边界。
 - `references/design-data.md`：设计数据通道——Figma 三来源判定（MCP / REST / 导出物，按能力不按工具名）、`nodeId` 形态与多画板约束、取数失败记 `dataMissing` 且不得写「还原度」。

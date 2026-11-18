@@ -23,6 +23,19 @@
 
 > 知识库常见位置（剥离适配）：源设计为与 skill 同级的 `qa-req2testcase-generator/user_knowledge`；本包（skills/api-test）内无该同级目录——请用 `--kb` 显式传入知识库根，或设 `KB_PATH` 环境变量。
 
+### 本机知识库根路径（登记项，2026-11-18 起）
+
+本机已登记的知识库根：`D:\TestCase\MySharedSkills\qa-req2testcase-generator\user_knowledge`（脚本自动扫描其 `project/` 子目录，覆盖 showdoc_api_docs / distilled / business_flows / api_relations / tapd_launched / wjx_help / wjx_site）。`kb_load_contract.py`、`flow.py --action` 与 `business_flow.py` 共用同一解析顺序（`--kb` 参数 > `KB_PATH` 环境变量 > 同级回退）。
+
+**使用纪律**：
+
+1. 接口任务涉及问卷星/WJX/sojump 时，优先从知识库取契约原文作 oracle，引用写出处（如 `showdoc_api_docs/开放接口文档/问卷[1000]/033_2.1.14 创建AI主页[1000107].md`）；
+2. 每次使用前先做**存在性检查**（目录可读、`project/` 存在）；不可用时如实报告"知识库不可用"，降级为 B/C/D 模式（用户提供文档原文），**不得凭记忆补契约**；
+3. 检索为空或与问题无关时写"知识库无记录"，换词重试一次后仍空则保留缺口，不编造；
+4. 题型知识、帮助中心、历史 TAPD 需求等非契约类领域事实，直接调用已注册的 `wjx-knowledge-base` skill 检索，不在本包复制其内容；
+5. 语义向量索引由使用者手动重建（见该 skill 文档）；新鲜度用 `scripts/kb_freshness.py` 检查——**主判据是源-索引漂移**（源文件比索引新才算 stale），墙钟年龄与站点快照 `crawled_at` 只作"数据截至"展示、不参与判定。该检查是建议性的（fail open）：失败或 stale 都不阻断契约定位，只在报告注明"语义通道未更新"并退回关键词通道。
+6. **原文为准，蒸馏只作索引**：`distilled/rules/` 摘要可能与 ShowDoc 原文有偏差（曾出现把响应字段列为"必填参数"、参数表留"待契约补全"占位的情况），凡判定、断言与用例约束必须回到 `showdoc_api_docs/` 原文复核；发现摘要与原文不一致时，作为 KB 质量问题单独记录并反馈维护者，不静默采用任一方。
+
 ## 2. 审查清单（逐项打勾，命中问题挂到维度）
 
 ### 2.1 字段参数说明（请求 + 响应，逐字段）

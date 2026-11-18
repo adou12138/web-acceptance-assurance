@@ -1,0 +1,60 @@
+{
+  "scenario": "异步生成与网络失败：取消、重复点击、5xx、断网、读回一致性",
+  "inputs": "可控注入 5xx/断网；异步任务可取消",
+  "hidden_answers": [
+    {
+      "id": "AN-1",
+      "severity": "major",
+      "description": "5xx 后前端仍显示成功",
+      "oracle": "应显示失败并可重试",
+      "match_all": [
+        "5xx"
+      ],
+      "match_any": [
+        "成功",
+        "成功提示",
+        "显示成功"
+      ]
+    },
+    {
+      "id": "AN-2",
+      "severity": "major",
+      "description": "取消后服务端仍完成写入",
+      "oracle": "取消应终止副作用",
+      "match_all": [
+        "取消"
+      ],
+      "match_any": [
+        "仍",
+        "写入",
+        "完成",
+        "落库"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "LN-1",
+      "description": "网络慢时的加载态提示（非缺陷）",
+      "expect": "不记缺陷",
+      "match_all": [
+        "加载"
+      ],
+      "match_any": [
+        "提示",
+        "骨架",
+        "慢"
+      ],
+      "category": "legit_disabled"
+    }
+  ],
+  "required_branches": [
+    "正常异步",
+    "取消",
+    "重复点击",
+    "5xx",
+    "断网",
+    "恢复后读回"
+  ],
+  "holdout": false
+}

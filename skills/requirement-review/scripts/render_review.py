@@ -106,6 +106,21 @@ def render(data):
         lines.append("无。")
         lines.append("")
 
+    # v3 G07：图片识读结果（含未识读）必须出现在评审摘要，不能只登记不显示
+    visuals = [r for r in (data.get("visual_evidence") or []) if isinstance(r, dict)]
+    lines.append(f"## 原型/截图证据（{len(visuals)}）")
+    lines.append("")
+    if visuals:
+        for row in visuals:
+            understood = row.get("image_understood")
+            state = "已识读" if understood else "未识读"
+            rules = "、".join(str(x) for x in (row.get("extracted_rules") or [])) or "无"
+            lines.append(f"- {row.get('file', '')}（{state}）：{row.get('boundary', '')}；提取规则：{rules}")
+        lines.append("")
+    else:
+        lines.append("无。")
+        lines.append("")
+
     not_rev = [r for r in (data.get("not_reviewed") or []) if isinstance(r, dict)]
     lines.append(f"## 未评审维度（{len(not_rev)}）")
     lines.append("")

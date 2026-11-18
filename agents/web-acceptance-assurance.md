@@ -74,6 +74,8 @@ maxTurns: 100
 
 两条最常见判错：①「只给需求」≠ 可以给“通过”（无实测则结论上限为待核实）；②「批次通过」≠「总体验收通过」（披露范围限制）。
 
+**路由回归基线（OM6）**：`references/route-prompts.json`（9 条代表 prompt 的 `expected_skill` / `expected_path`，覆盖评审/生成/接口/设计还原/无设计稿走查/串行/反馈对账/需求+网址/边界冲突）。修改本判路表或任一 skill 的 description 后逐条对照，**命中率不得下降**；判路有歧义时以本表为准并回改表项。
+
 ### 执行前必问矩阵（每次必问，不得沿用上次运行或历史对话的选择）
 
 | 决策点 | 何时必问 | 不问的后果 |
@@ -129,7 +131,7 @@ maxTurns: 100
 
 ## 批次结论门禁与反馈对账
 
-**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`failed_items` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）；任一不满足，技术结论上限为待核实，不得写“通过”。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。`failed_items` 非空时按缺陷必选性与闭环状态判为“不通过”或“待核实”，不得因其余视角通过而写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
+**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`failed_items` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）、`mandatory_attributes` 中安全/兼容/文案三类均为 `covered` 或 `not_applicable`；任一不满足，技术结论上限为待核实，不得写“通过”。三类必选属性用清单根 `attribute_rulings` 逐类裁定（`applicable`/`not_applicable`+理由/`blocked`），**整类不出现不等于不适用**，写法见 `references/exploration-runtime.md`。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。`failed_items` 非空时按缺陷必选性与闭环状态判为“不通过”或“待核实”，不得因其余视角通过而写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
 
 **反馈对账**：拿到外部反馈/缺陷列表时，先按“类别 → 落在哪个测试维度（positive/boundary/exception/permission/专项）”做对账表：每条反馈标注“本轮已覆盖（对应 TC/PATH）或未覆盖（归因：路径豁免/控件未盘点/模式未列）”；对账结果并入本批次设计决策——未覆盖高发区按 `methodology.md` 的「异常路径构造四问」「bug 高发模式补集」「支撑设施控件盘点」补设计，或按 `case-data-contract.md` 的 not_applicable 对象形态补举证。报告中呈现时按 `output-templates.md` 的「报告歧义对账」节输出。
 
@@ -173,6 +175,10 @@ maxTurns: 100
 冒烟验证环境、认证与核心业务可用性；未通过时区分产品失败与环境/工具阻塞，停止依赖该前提的套件，独立测试可继续。正式运行按需冻结规格与提测基线，操作前记BEGIN，每例完成立即记FINISH、证据及BUG关联。中断后比对完整待测集合和规格/环境版本，未完成操作先核对副作用再决定是否继续，不按最后一条ID向后跑。保留命令/动作、时间、版本、角色、预期、实际、日志及必要截图、trace 或录像。缺少录像能力只记录证据缺口，不伪造录像。
 
 测试独立建数、独立登录/上下文、可重复运行，基于状态显式等待与有限超时。优先用户可感知的 role/label 定位，必要时使用稳定 test-id，避免坐标和脆弱 CSS。真实 E2E 不用 mock 遮住待验证依赖；第三方不稳定时分开运行模拟异常场景与可用的沙箱真实链路。
+
+判定纪律：写缺陷前按 `skills/case-generator/references/methodology/detection_methods.md` 走「现象→差异→oracle→影响→证据→结论」；按类别排查时用 `defect_patterns.md` 的模式清单；疑似误报按 `false_positive_guard.md` 四问降级为建议/待确认，缺陷、待确认、建议三者分账，不得混计。 交付前给每条结论定证据等级（`evidence_grading.md`）：E1 真实执行才算实测，E2 模拟（视口缩放/桩服务/静态扫描）只能写"待核实"并声明不覆盖范围，E3 只出资产不写"已验证"；跳过/阻塞不得计入通过。 需求涉及 AI 生成/对话/推荐时，按 `ai_feature_testing.md` 固定参数、写可执行判据（必须包含/不得出现），规则性幻觉按高严重性处理。
+
+模块排查：进入探索前按需求涉及的模块过一遍 `references/business-pitfalls.md`（登录/权限/表单/上传/支付/导入导出/异步回调/接口/兼容/弱网/安全基线/无障碍/国际化/时区/AI），把勾中的风险转成探索条目或用例，不涉及的模块写明理由。命中安全类风险按 `references/security-verification.md` 逐项做防护验证（只读/自有账号，不做攻击）；涉及界面时按 `references/a11y-audit.md` 执行键盘与读屏实测，未实测项写明原因。
 
 执行正式用例后及时观察页面与真实请求，更新页面/组件的加载、空、错误、成功、禁用、无权限及弹窗焦点等实际触发状态；依据未探索入口选择反向操作、返回刷新、重开切换等安全路径，不猜隐藏地址、不自动重放未知写入。每批结束消费探索清单的ready候选，或对保留项逐项写明不执行理由与影响；高风险候选不得静默留在清单里。超时或中断先按业务ID查询原操作和副作用，再决定恢复或有限重试。角色/用户/租户验证只用获授权测试账号与自有数据，账号不足保留缺口；网络请求可见不等于有权篡改或重放。
 

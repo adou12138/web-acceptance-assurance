@@ -14,11 +14,41 @@
 """
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
 
 P_FP_OK = lambda s: isinstance(s, str) and s.startswith("FP-")
+
+
+def translate_gaps(review_gaps):
+    """评审缺口 {area,reason} → cases 缺口 {gap_id,kind,target,reason,obligation}（v3 G06）。
+
+    评审阶段的 area 是自然语言描述，cases 契约要求稳定 ID 与可核对的补齐义务；
+    这里做机械映射并保留原文，不丢失缺口也不能直接塞入非法结构。
+    """
+    out = []
+    allowed = {"scene_unbound", "element_uncovered", "capability_unsupported",
+               "method_unwitnessed", "budget_exceeded", "data_unavailable"}
+    for i, gap in enumerate(review_gaps or [], 1):
+        if not isinstance(gap, dict):
+            continue
+        if all(str(gap.get(k) or "").strip() for k in ("gap_id", "kind", "target", "reason", "obligation")):
+            out.append(copy.deepcopy(gap))
+            continue
+        kind = str(gap.get("kind") or "scene_unbound")
+        if kind not in allowed:
+            kind = "scene_unbound"
+        area = str(gap.get("area") or gap.get("target") or "评审缺口")
+        out.append({
+            "gap_id": str(gap.get("gap_id") or f"GAP-{i:02d}"),
+            "kind": kind,
+            "target": str(gap.get("target") or area),
+            "reason": str(gap.get("reason") or ""),
+            "obligation": str(gap.get("obligation") or f"补齐评审缺口：{area}（{gap.get('reason', '')}）"),
+        })
+    return out
 
 
 def _load(path):
@@ -112,13 +142,22 @@ def build_skeleton(review, flow_kind):
             continue
         elements = ac.get("elements") or {}
         oracle = str(ac.get("oracle", ""))
+        # v3 G06：保留 AC 原文证据引用；待确认状态降级为 provisional 并显式打标，
+        # 不得用非法 confirmation 值破坏 case_data 契约，也不得冒充已确认。
+        confirmation = str(ac.get("confirmation", "confirmed"))
+        needs_confirmation = fid in pending_flagged or confirmation not in {"confirmed"}
+        if needs_confirmation and confirmation not in {"provisional", "ambiguous"}:
+            # 含非法值（如评审的 pending）一律归一为 case_data 允许的 provisional
+            confirmation = "provisional"
         acceptance_out.append({
+            "needs_confirmation": bool(needs_confirmation),
             "id": str(ac.get("acceptance_id")),
             "requirement_id": str(ac.get("requirement_id")),
             "description": oracle,
             "reason": f"评审阶段确认（来源功能点 {fid}）",
             "required": bool(ac.get("required")),
-            "confirmation": str(ac.get("confirmation", "confirmed")),
+            "confirmation": confirmation,
+            "evidence_refs": copy.deepcopy(ac.get("evidence_refs") or []),
             "oracle": oracle,
             "elements": {
                 "scene": str(elements.get("scene", "")),
@@ -166,6 +205,14 @@ def build_skeleton(review, flow_kind):
         "acceptance": acceptance_out,
         "testcases": [],
     }
+    # v3 G06：评审的缺口、图片证据、未评审项与已确认规则逐跳保留，禁止在桥接处静默丢弃。
+    # coverage_gaps 需从评审的 {area,reason} 机械翻译为 cases 的稳定 ID 结构，
+    # 否则直接透传会触发 case_data 契约校验错误（缺口反而丢得更快）。
+    if review.get("coverage_gaps") is not None:
+        skeleton["coverage_gaps"] = translate_gaps(review["coverage_gaps"])
+    for key in ("visual_evidence", "not_reviewed", "confirmed_rules"):
+        if key in review and review[key] is not None:
+            skeleton[key] = copy.deepcopy(review[key])
     if flow_kind in {"workflow", "stateful"}:
         skeleton["scenarios"] = scenarios
     scope = {

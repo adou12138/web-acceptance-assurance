@@ -1,0 +1,62 @@
+{
+  "scenario": "多角色审批状态流：草稿→提交→通过/驳回，越权与状态残留",
+  "inputs": "管理员/普通用户/访客三角色；本地受控数据",
+  "hidden_answers": [
+    {
+      "id": "RS-1",
+      "severity": "blocker",
+      "description": "普通用户可越权执行通过操作",
+      "oracle": "应返回权限拒绝",
+      "match_all": [
+        "越权"
+      ],
+      "match_any": [
+        "普通用户",
+        "无权",
+        "通过",
+        "审批"
+      ]
+    },
+    {
+      "id": "RS-2",
+      "severity": "major",
+      "description": "驳回后状态仍显示待审批（残留）",
+      "oracle": "状态应更新为已驳回",
+      "match_all": [
+        "驳回"
+      ],
+      "match_any": [
+        "待审批",
+        "残留",
+        "仍显示",
+        "未更新"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "LN-1",
+      "description": "访客看不到提交入口（合法权限隐藏）",
+      "expect": "不记缺陷",
+      "match_all": [
+        "访客"
+      ],
+      "match_any": [
+        "看不到",
+        "隐藏",
+        "不可见"
+      ],
+      "category": "permission_hidden"
+    }
+  ],
+  "required_branches": [
+    "草稿提交",
+    "管理员通过",
+    "管理员驳回",
+    "普通用户越权",
+    "访客越权",
+    "驳回后读回",
+    "状态边全遍历"
+  ],
+  "holdout": false
+}

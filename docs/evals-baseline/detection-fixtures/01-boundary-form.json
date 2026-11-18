@@ -1,0 +1,93 @@
+{
+  "scenario": "名称字段边界表单：保存、读回、失败恢复、重复提交",
+  "inputs": "名称长度约束 1-20 字符；本地受控页面；只读+可回滚写操作授权",
+  "hidden_answers": [
+    {
+      "id": "BA-1",
+      "severity": "major",
+      "description": "长度 21 字符未被拒绝",
+      "oracle": "提交应失败并提示上界",
+      "match_all": [
+        "21"
+      ],
+      "match_any": [
+        "未拒绝",
+        "未拦截",
+        "仍可保存",
+        "超限",
+        "仍然成功"
+      ]
+    },
+    {
+      "id": "BA-2",
+      "severity": "blocker",
+      "description": "重复提交产生两条记录",
+      "oracle": "第二次提交应被幂等拦截",
+      "match_all": [
+        "重复"
+      ],
+      "match_any": [
+        "两条",
+        "幂等",
+        "重复创建",
+        "重复提交成功"
+      ]
+    },
+    {
+      "id": "BA-3",
+      "severity": "normal",
+      "description": "校验失败后输入未保留",
+      "oracle": "失败后原输入值仍在",
+      "match_all": [
+        "输入"
+      ],
+      "match_any": [
+        "未保留",
+        "被清空",
+        "丢失",
+        "需重新输入"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "LN-1",
+      "description": "长度 0 时空值提示文案与预期措辞不同但语义正确",
+      "expect": "不记缺陷",
+      "match_all": [
+        "空值"
+      ],
+      "match_any": [
+        "文案",
+        "措辞",
+        "提示"
+      ],
+      "category": "copy_preference"
+    },
+    {
+      "id": "LN-2",
+      "description": "加载中按钮合理禁用",
+      "expect": "不记缺陷",
+      "match_all": [
+        "加载"
+      ],
+      "match_any": [
+        "禁用",
+        "置灰",
+        "loading"
+      ],
+      "category": "legit_disabled"
+    }
+  ],
+  "required_branches": [
+    "正常保存",
+    "空值",
+    "下界1",
+    "上界20",
+    "上界+1=21",
+    "非法字符",
+    "重复提交",
+    "失败恢复"
+  ],
+  "holdout": false
+}

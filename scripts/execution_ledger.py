@@ -23,8 +23,19 @@ BUG_STATES = {"open", "in_progress", "fixed_pending_deploy", "fixed_pending_rete
 CAUSES = {"none", "product", "environment", "data", "automation", "unknown"}
 
 
+try:
+    from design_fingerprint import fingerprint as _fingerprint
+except ImportError:
+    import importlib.util as _iu
+    _fp_spec = _iu.spec_from_file_location("design_fingerprint", Path(__file__).with_name("design_fingerprint.py"))
+    _fp_module = _iu.module_from_spec(_fp_spec)
+    _fp_spec.loader.exec_module(_fp_module)
+    _fingerprint = _fp_module.fingerprint
+
+
 def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    """内容指纹统一走 scripts/design_fingerprint.py，与 gate_checks 的 binding 同源。"""
+    return _fingerprint(value)
 
 
 def _now():
@@ -89,15 +100,19 @@ def _write_json_new(path, value):
 
 REQUIRED_GATE_CHECKS = ("S0",)
 CHECK_STATUSES = {"passed", "warning", "failed"}
+# 门禁报告内容绑定要求（v3 目标审计 G09）：报告必须携带 binding 声明所依据的
+# design_hash / policy_version / scope / required_checks，否则保持“待核实”，
+# 不得凭“status=pass + 用例数相同”推定是同一份设计。旧报告按兼容模式显式标注。
+BINDING_FIELDS = ("design_hash", "policy_version", "scope", "required_checks")
 
 
-def _gate_precondition(batches, gate_report, design_ids=None):
-    """校验第 2→3 跳进门条件；两者均为可选，未提供时保持旧行为。
+def _gate_precondition(batches, gate_report, design_ids=None, design=None):
+    """校验第 2→3 跳进门条件。design_ids 为用例 ID 集合；design 为完整用例对象（用于内容绑定）。
 
-    只接受与设计绑定的完整载荷：仅有 status 的最小 JSON、空 checks、覆盖条数不符、
-    未登记所辖用例的空批次都不能解锁执行。
+    两者均为可选，未提供时保持旧行为。只接受与设计绑定的完整载荷：仅有 status 的最小
+    JSON、空 checks、覆盖条数不符、未登记所辖用例的空批次都不能解锁执行。
     """
-    design = {str(x) for x in design_ids} if design_ids is not None else None
+    design_id_set = {str(x) for x in design_ids} if design_ids is not None else None
     info = {}
     if batches is not None:
         if not isinstance(batches, dict) or not isinstance(batches.get("batches"), list) or not batches["batches"]:
@@ -111,8 +126,8 @@ def _gate_precondition(batches, gate_report, design_ids=None):
         if unregistered:
             raise ValueError("batches 未登记所辖用例: " + ", ".join(unregistered) + "（空批次不得计入闭环）")
         covered = {str(x) for b in batches["batches"] for x in b["case_ids"]}
-        if design is not None:
-            uncovered, extra = sorted(design - covered), sorted(covered - design)
+        if design_id_set is not None:
+            uncovered, extra = sorted(design_id_set - covered), sorted(covered - design_id_set)
             if uncovered or extra:
                 raise ValueError("batches.case_ids 与设计用例不一致：未登记 " + str(uncovered[:10]) + "，设计外 " + str(extra[:10]))
         info["batches_closed"] = True
@@ -137,11 +152,61 @@ def _gate_precondition(batches, gate_report, design_ids=None):
         counts = gate_report.get("counts")
         if not isinstance(counts, dict) or not isinstance(counts.get("testcases"), int):
             raise ValueError("gate report 缺少 counts.testcases，无法与设计条数绑定")
-        if design is not None and counts["testcases"] != len(design):
-            raise ValueError(f"gate report 覆盖 {counts['testcases']} 条与设计 {len(design)} 条不一致（可能不是同一份用例）")
+        if design_id_set is not None and counts["testcases"] != len(design_id_set):
+            raise ValueError(f"gate report 覆盖 {counts['testcases']} 条与设计 {len(design_id_set)} 条不一致（可能不是同一份用例）")
         info["gate_report_status"] = gate_report["status"]
         info["gate_report_case_count"] = counts["testcases"]
+        # —— 内容绑定校验（G09）——
+        binding = gate_report.get("binding")
+        if not isinstance(binding, dict):
+            info["binding_verdict"] = "待核实"
+            info["binding_missing"] = ["binding（缺内容绑定声明，旧报告兼容模式）"]
+            info["binding_compat"] = True
+        else:
+            missing = [f for f in BINDING_FIELDS if f not in binding]
+            if missing:
+                raise ValueError("gate report binding 缺字段: " + ", ".join(missing))
+            expected_hash = fingerprint(design) if design is not None else None
+            if expected_hash is not None and binding["design_hash"] != expected_hash:
+                raise ValueError("gate report binding.design_hash 与设计内容不一致（不是同一份用例/报告）")
+            _rc = binding["required_checks"]
+            if isinstance(_rc, list):
+                declared_checks = {str(c.get("id")) if isinstance(c, dict) else str(c) for c in _rc}
+            else:
+                raise ValueError("gate report binding.required_checks 必须为数组")
+            if declared_checks != passed_ids:
+                # 声明的必过项必须恰好等于实际 passed 集合的子集关系：报告声明的必过项缺一不可
+                absent = sorted(declared_checks - passed_ids)
+                if absent:
+                    raise ValueError("gate report binding 声明必过项未通过: " + ", ".join(absent))
+            scope = binding.get("scope")
+            if design is not None and not isinstance(scope, list):
+                raise ValueError("gate report binding.scope 必须为数组")
+            info["binding_verdict"] = "已绑定"
+            info["binding_missing"] = []
+            info["binding_compat"] = False
+            info["binding_policy_version"] = binding["policy_version"]
     return info
+
+
+WORKSPACE_GITIGNORE = [
+    "# 砺衡工作区自动生成（凭据与体积产物不入库；需归档的证据请显式 git add -f）",
+    ".auth/",
+    "*.storage.json",
+    "*.png", "*.jpg", "*.jpeg", "*.webm", "*.har", "*.zip", "*.log",
+]
+
+
+def _ensure_gitignore(workspace):
+    """工作区自动写 .gitignore（借鉴 figma init_workdir：只追加缺失行，不覆盖已有内容）。"""
+    path = workspace / ".gitignore"
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines = list(existing)
+    for line in WORKSPACE_GITIGNORE:
+        if line not in existing:
+            lines.append(line)
+    if lines != existing:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None):
@@ -149,7 +214,7 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
     _context(context)
     _text(round_id, "round_id")
     _bugs(known_issues)
-    gate_precondition = _gate_precondition(batches, gate_report, list(cases))
+    gate_precondition = _gate_precondition(batches, gate_report, list(cases), design)
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
@@ -158,6 +223,7 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
+    _ensure_gitignore(workspace)
     return baseline
 
 

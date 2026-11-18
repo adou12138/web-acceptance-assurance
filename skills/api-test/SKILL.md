@@ -37,6 +37,8 @@ description: 接口测试工作流（砺衡包内版，剥离自 wjx-api-test 5.
 | 7 | 契约文件 / 知识库契约 | 依赖梳理、前置条件未满足 | 契约驱动（M13，`dependency_scan.py` / `precondition_scan.py`） | `references/playbooks/contract.md` |
 | 8 | 无法判定 | — | 兜底：问清输入与目标，禁止猜 | — |
 
+**契约/冒烟/回归批次开场自检（固定顺序）**：先跑 `python scripts/kb_freshness.py` 看知识库新鲜度——它是**建议性**检查（fail open）：报告 stale 或自身失败都**不阻断**契约定位，只须在报告注明；再跑 `kb_load_contract.py`/`--action` 定位契约——这一步失败才降级 B/C/D 模式（fail closed）。两级失败都要在报告留痕。
+
 层级说明：四条路径**非平级**——文档审查既是独立交付模式（行 1），也是契约驱动/七步的**前置门禁**（R1）。**两条最常见判错**：①「审文档」≠「执行测试」，判错会把静态审查变成真实调用；②「一批跑一遍」走冒烟（广度优先），不是逐接口七步（深度优先）。
 
 ## 3. 红线 R1–R8（不可让步，全文唯一出处）
@@ -86,6 +88,7 @@ description: 接口测试工作流（砺衡包内版，剥离自 wjx-api-test 5.
 ## 7. 边界
 
 - **通用性**：不绑定具体接口；站点适配器与专属资产未随包（接入见 `generality_boundary.md`）；域名族判定中的问卷星域名仅为 `personal_config.py` 的示例规则。
+- **本地文档优先**：接口契约以本地知识库全文为准（`--contract` / `--kb` 指向的本地文件），**禁止用 WebFetch/WebSearch 抓在线文档替代本地全文**；仅在核对线上版本差异时联网，并在问题单 `remarks` 标注差异；本地缺失时报"本地知识库缺失"，不得默认联网补齐。
 - **UI 边界**：视觉走查不在本 skill 内；接口侧三职责（供数 §11.8、AB 口径 `ui_baseline.md`、失败归属）。
 - **个人配置**：全部外置，包内只有 `*.example.json`；细则见 `references/personal_config.md`。
 - **契约格式**：ShowDoc `.md`、OpenAPI 3.x / Swagger 2.0、极简 JSON 契约——按内容自动分派。

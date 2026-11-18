@@ -41,9 +41,11 @@ python scripts/business_flow.py `
 
 ```powershell
 python scripts/business_flow.py `
-  --kb <KB_ROOT> `
+  --kb <KB_ROOT>`
   --query survey
 ```
+
+`--kb` 省略时回退 `KB_PATH` 环境变量（登记见 `doc_review.md`「本机知识库根路径」节）；两者都缺时报错，不猜测流程。
 
 检索到多个候选时只输出候选清单，不自动选择。检索不到时也不猜测流程。暂时没有 action 的步骤应标记 `status: deferred`、`optional: true`，并说明 `reason`；计划会将其标记为 `deferred`，不会阻塞其他已确认步骤。
 

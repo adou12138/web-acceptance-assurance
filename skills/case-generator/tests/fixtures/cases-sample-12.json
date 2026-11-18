@@ -82,6 +82,14 @@
       "case_ids": ["TC-M01-009", "TC-M01-010"]
     }
   ],
+  "coverage_obligations": [
+    {"id": "OBL-01", "layer": "L1", "kind": "path", "target": "FP-01", "source": "AC-01", "required": true, "tc_ids": ["TC-M01-001"]},
+    {"id": "OBL-02", "layer": "L2", "kind": "element", "target": "FP-01", "source": "AC-01", "required": true, "tc_ids": ["TC-M01-002", "TC-M01-003", "TC-M01-004"]},
+    {"id": "OBL-03", "layer": "L1", "kind": "path", "target": "FP-02", "source": "AC-02", "required": true, "tc_ids": ["TC-M01-005"]},
+    {"id": "OBL-04", "layer": "L2", "kind": "element", "target": "FP-02", "source": "AC-02", "required": true, "tc_ids": ["TC-M01-006", "TC-M01-007", "TC-M01-008"]},
+    {"id": "OBL-05", "layer": "L1", "kind": "path", "target": "FP-03", "source": "AC-03", "required": true, "tc_ids": ["TC-M01-009"]},
+    {"id": "OBL-06", "layer": "L2", "kind": "element", "target": "FP-03", "source": "AC-03", "required": true, "tc_ids": ["TC-M01-010", "TC-M01-011", "TC-M01-012"]}
+  ],
   "testcases": [
     {
       "id": "TC-M01-001",

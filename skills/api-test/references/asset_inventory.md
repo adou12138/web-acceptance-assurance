@@ -16,7 +16,8 @@
 - `common_params.py` — 公共参数 `encode`/`appid`/`action`/`sign`/`ts` 的组装与补齐的单一出处，深度与冒烟共用；`complete_request_body()` 供独立脚本补齐台账报文。
 - `finding_columns.py` — 台账列口径的单一来源：读 `assets/finding_columns.json` 并回退内置默认列。
 - `discovery_profile.py` — 发现档：集中管理探测广度限额。
-- `kb_load_contract.py` — 从知识库按 action / keyword 载入契约。
+- `kb_freshness.py` — 知识库新鲜度检查（只读、建议性）：主判据为源-索引漂移，墙钟与站点快照时间只展示；KB 不可用 exit 2 并给降级提示，不阻断契约定位（fail open）。开场自检顺序见 `SKILL.md` 判路表。
+- `kb_load_contract.py` — 从知识库按 action / keyword 载入契约；`flow.py --action` 与 `business_flow.py` 复用同一解析顺序（`--kb` > `KB_PATH` > 同级回退）。本机 KB 根路径、存在性检查与失效降级见 `doc_review.md`「本机知识库根路径」节（未传 `--kb`/`KB_PATH` 时报错属预期行为）。
 
 ## scripts/ — 生成链
 

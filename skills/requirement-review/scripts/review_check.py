@@ -33,8 +33,12 @@ DIMENSIONS = {
 TOP_KEYS = [
     "schema_version", "requirement", "requirements", "features", "acceptance",
     "modules", "confirmed_rules", "blocking", "pending", "go_ahead",
-    "coverage_gaps", "not_reviewed",
+    "coverage_gaps", "visual_evidence", "not_reviewed", "scenarios",
 ]
+VISUAL_TYPES = {"ui_mockup", "flowchart", "state_diagram", "table_rule",
+                "annotated_screenshot", "api_snapshot", "report_chart", "unknown"}
+# 顶层必填键 = 允许键 - 可选键；visual_evidence 无原型图时不应强制出现
+OPTIONAL_TOP_KEYS = {"visual_evidence", "scenarios"}
 P_REQ = re.compile(r"^REQ-\d{2,}$")
 P_FP = re.compile(r"^FP-\d{2,}$")
 P_AC = re.compile(r"^AC-\d{2,}$")
@@ -65,6 +69,8 @@ def check(data):
         return ["root must be object"], []
 
     for key in TOP_KEYS:
+        if key in OPTIONAL_TOP_KEYS:
+            continue
         if key not in data:
             _err(errors, f"missing top-level key {key}")
     unknown = sorted(set(data) - set(TOP_KEYS))
@@ -231,6 +237,19 @@ def check(data):
             _err(errors, f"{aid or loc}.oracle: 空话，需写出可判定的观测入口或通过标准")
         if oracle and cd.has_placeholder(oracle):
             _err(errors, f"{aid or loc}.oracle: 含未落实占位内容")
+        evidence_refs = row.get("evidence_refs")
+        if evidence_refs is not None:
+            if not isinstance(evidence_refs, list):
+                _err(errors, f"{aid or loc}.evidence_refs: array required")
+            else:
+                for j, ref in enumerate(evidence_refs):
+                    loc_ref = f"{aid or loc}.evidence_refs[{j}]"
+                    if not isinstance(ref, dict):
+                        _err(errors, f"{loc_ref}: object required")
+                        continue
+                    for key in ("source", "quote"):
+                        if not _is_str(ref.get(key)):
+                            _err(errors, f"{loc_ref}.{key}: nonempty string required")
         elements = row.get("elements")
         if elements is None:
             _err(errors, f"{aid or loc}.elements: 四要素必填（缺一即 case_data 校验失败）")
@@ -252,6 +271,42 @@ def check(data):
             ac_by_req.setdefault(rid, []).append(row)
         if row.get("required") is True and row.get("confirmation") != "confirmed":
             _warn(warnings, f"{aid or loc}: required AC 的 confirmation 非 confirmed，必要组合的判据存疑")
+
+    # 原型/截图证据（可选）：读不到就写 false + boundary 说明，禁止凭图猜规则
+    visual = data.get("visual_evidence")
+    if visual is not None:
+        if not isinstance(visual, list):
+            _err(errors, "visual_evidence: array required")
+        else:
+            for i, item in enumerate(visual):
+                loc = f"visual_evidence[{i}]"
+                if not isinstance(item, dict):
+                    _err(errors, f"{loc}: object required")
+                    continue
+                for key in ("file", "boundary"):
+                    if not _is_str(item.get(key)):
+                        _err(errors, f"{loc}.{key}: nonempty string required")
+                digest = item.get("sha256")
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    _err(errors, f"{loc}.sha256: 需 64 位小写十六进制摘要（extract_docx_media.py 产出）")
+                if item.get("type") not in VISUAL_TYPES:
+                    _err(errors, f"{loc}.type: unknown value {item.get('type')}（允许 {sorted(VISUAL_TYPES)}）")
+                conf = item.get("confidence")
+                if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not 0 <= conf <= 1:
+                    _err(errors, f"{loc}.confidence: 0~1 之间的数字必填")
+                rules = item.get("extracted_rules")
+                if not isinstance(rules, list):
+                    _err(errors, f"{loc}.extracted_rules: array required（可空数组，但不得缺）")
+                elif any(not _is_str(rule) for rule in rules):
+                    _err(errors, f"{loc}.extracted_rules: 元素须为非空字符串")
+                understood = item.get("image_understood")
+                if not isinstance(understood, bool):
+                    _err(errors, f"{loc}.image_understood: boolean required")
+                elif understood and not (isinstance(rules, list) and rules):
+                    _warn(warnings, f"{loc}: 标记已识读但未提取任何规则，请确认是否真的读到了内容")
+                elif not understood and isinstance(rules, list) and rules:
+                    # v3 G07：未识读却携带确定规则 = 凭图猜规则，必须拒绝
+                    _err(errors, f"{loc}: image_understood=false 不得携带 extracted_rules（禁止凭未识读图猜规则）")
 
     # 每个 requirement 至少一个 required:true 的 AC（case_data 硬校验等价前置）
     for rid in reqs:
@@ -353,6 +408,36 @@ def check(data):
             _err(errors, f"{loc}.dimension: invalid value {row.get('dimension')!r}")
         if not _is_str(row.get("reason")):
             _err(errors, f"{loc}.reason: nonempty string required")
+
+    # scenarios（v3 G01）：评审阶段可选携带的场景建模交接，结构须合法且与 go_ahead 对齐。
+    # 合法场景可经 review_bridge 原样进入 cases JSON，消除“评审拒收/workflow 又强求”的契约互斥。
+    scenes = data.get("scenarios")
+    if scenes is not None:
+        if not isinstance(scenes, list):
+            _err(errors, "scenarios: array required")
+        else:
+            seen_sid = set()
+            for si, scene in enumerate(scenes):
+                loc = f"scenarios[{si}]"
+                if not isinstance(scene, dict):
+                    _err(errors, f"{loc}: object required")
+                    continue
+                sid = scene.get("id")
+                if not _is_str(sid) or sid in seen_sid:
+                    _err(errors, f"{loc}.id: nonempty unique string required")
+                    continue
+                seen_sid.add(sid)
+                if not _is_str(scene.get("name")) or not _is_str(scene.get("goal")):
+                    _err(errors, f"{loc}.name/.goal: nonempty string required")
+                paths = scene.get("paths")
+                if not isinstance(paths, dict):
+                    _err(errors, f"{loc}.paths: object required")
+                    continue
+                for kind, branch in paths.items():
+                    if kind not in {"positive", "exception", "permission"}:
+                        _err(errors, f"{loc}.paths.{kind}: unknown path kind")
+                    if not isinstance(branch, dict):
+                        _err(errors, f"{loc}.paths.{kind}: object required")
 
     counts = {
         "requirements": len(reqs),

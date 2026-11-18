@@ -304,7 +304,11 @@ def _main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--approved-flow", help="审批流程输出路径")
     args = ap.parse_args(list(argv) if argv is not None else None)
     if bool(args.flow) == bool(args.kb):
-        ap.error("必须二选一提供 --flow 或 --kb")
+        # 都未提供时回退 KB_PATH（与 kb_load_contract / flow.py 同一解析顺序）；
+        # 两者都提供仍是二选一错误，不静默取舍。
+        if args.flow or not os.environ.get("KB_PATH"):
+            ap.error("必须二选一提供 --flow 或 --kb（--kb 省略时回退 KB_PATH 环境变量）")
+        args.kb = os.environ["KB_PATH"]
     if args.kb:
         hits = find_flow_specs(args.kb, args.query)
         if not hits:

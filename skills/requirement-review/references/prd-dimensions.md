@@ -42,4 +42,4 @@ blocking 判定口径（从严）：关键状态（空态/异常态）完全未�
 - `blocking[]` 涉及的 feature **不进入** `go_ahead`，相关用例不生成。
 - `pending[]` 涉及的 feature 可进入 `go_ahead`，但相关用例生成后标 `待确认`（`coverage_flags` 或 `remarks`），不阻塞其余部分。
 - `requirements[].confirmation` 只允许 `confirmed / provisional / ambiguous`（`case_data` 枚举）；`provisional/ambiguous` 的 requirement 相关断言按待确认处理，不得写成确定断言。
-- 每个被拆出的 requirement **必须至少有一个 `required: true` 的 acceptance**，且 AC 带 `elements` 四要素与 `oracle`——否则 `case_data.validate` 直接失败。
+- 每个被拆出的 requirement **必须至少有一个 `required: true` 的 acceptance**，且 AC 带 `elements` 四要素与 `oracle`——否则 `case_data.validate` 直接失败。- **证据溯源（OM3，借鉴 qa evidence_refs）**：`acceptance[]` 可选 `evidence_refs: [{source, quote}]`——source 写需求文档定位（章节/表格/条款），quote 摘录原文片段；`blocking[]`/`pending[]` 的 question/impact 须指到原文位置（章节或原句），禁止仅凭记忆虚构规则。原文缺失时按 `not_reviewed` 记，不补写。

@@ -6,7 +6,8 @@ S0 结构校验先跑；结构不过则不计算后续文本门禁（避免在�
 不自动改用例、不做超标自动降级；失败输出定位到 case_id 或批次号。
 
 检查项：S0 / G1 / G1.5 / G2 / G3 / G4 / G5 / G6 / G7 / V05 / V07 / V08 / V09 /
-V11 / V12 / V13 / COV / COV-PATH / COV-UI / RATIO-SMOKE / RATIO-P0（含小样本例外与批内告警）。
+V11 / V12 / V13 / COV（L1/L3）/ COV-LAYERS（L2/L4）/ COV-PATH / COV-UI / RATIO-SMOKE / RATIO-P0
+（含小样本例外与批内告警）。
 
 退出码：0=通过；1=门禁不通过；2=用法/输入/依赖错误。
 """
@@ -25,6 +26,14 @@ try:
     import case_data as cd
 except Exception as exc:  # noqa: BLE001
     print(f"工具阻塞：无法加载专家包校验器 scripts/case_data.py（{exc}）。", file=sys.stderr)
+    sys.exit(2)
+try:
+    from design_fingerprint import fingerprint as design_fingerprint
+except Exception as exc:  # noqa: BLE001
+    # 不得静默降级：binding 是本门禁的契约产出，缺失会让"内容绑定"退回不可达，
+    # 正是 G09 要消灭的漏洞（手写 binding 自证）。缺依赖即工具阻塞，与 case_data 同口径。
+    print(f"工具阻塞：无法加载 scripts/design_fingerprint.py（{exc}），"
+          f"门禁无法产出 binding，拒绝以缺省值继续。", file=sys.stderr)
     sys.exit(2)
 
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "config" / "policy.json"
@@ -71,6 +80,17 @@ V08_DATA = ("数据", "记录", "条目", "参数", "配置", "样例", "预置"
 FWD_REF_RE = re.compile(r"(?:回到|跳转到|见|参见|参考)第(\d+)步")
 
 
+def _pair_verify(witness):
+    """用 scripts/pairwise.py 独立重算组合覆盖（生成器不得自证）。
+
+    pairwise 的 verify() 同时接受输入形态 `[{"name","value"}]` 与产物形态 `{"角色": "访客"}`，
+    因此 witness 可整份回填后直接重算，不需要在门禁侧做二次转换。
+    """
+    import pairwise as pw
+    return pw.verify(witness.get("parameters") or [], witness.get("constraints") or [],
+                     witness.get("combinations") or [])
+
+
 def _has_signal(text):
     if re.search(r"「[^」]+」", text):
         return True
@@ -105,6 +125,7 @@ class GateRunner:
     def __init__(self, policy):
         self.policy = policy
         self.checks = []
+        self.coverage_matrix = None
         self._compile_g1()
 
     def _compile_g1(self):
@@ -146,6 +167,7 @@ class GateRunner:
         self._g7(cases, tcs, scope_leaf_ids)
         self._v_checks(tcs)
         self._cov(cases, tcs)
+        self._cov_layers(cases)
         self._ratios(cases, tcs, th)
         self._cov_path(cases)
         self._cov_ui(cases, tcs)
@@ -371,7 +393,7 @@ class GateRunner:
                for tc in tcs if "pci_flag" not in tc]
         self.record("V13", "PCI 已识别", "WARN", v13, "pci_flag 全覆盖（缺失判待核实）")
 
-    # COV：四层覆盖与方法见证
+    # COV：L1 主流程（S0 保证）+ L3 方法见证；L2/L4 由 COV-LAYERS 判定
     def _cov(self, cases, tcs):
         issues = []
         methods = {m["id"]: m for m in self.policy.get("structure", {}).get("design_methods", [])}
@@ -382,6 +404,25 @@ class GateRunner:
                 for mid, witness in me.items():
                     if mid in methods and (witness is None or witness == "" or witness == {} or witness == []):
                         issues.append({"case_id": cid, "why": f"method_evidence.{mid} 只有方法名没有见证（{methods[mid]['evidence_kind']}）"})
+                for mid in ("pairwise", "组合覆盖"):
+                    if mid not in me:
+                        continue
+                    witness = me[mid]
+                    if not isinstance(witness, dict):
+                        issues.append({"case_id": cid, "why": f"method_evidence.{mid} 须为对象见证（pairwise.py 输出整份回填），不接受字符串"})
+                        continue
+                    absent = [k for k in ("parameters", "combinations", "input_hash") if k not in witness]
+                    if absent:
+                        issues.append({"case_id": cid, "why": f"method_evidence.{mid} 缺 {absent}；请用 scripts/pairwise.py 生成后整份回填"})
+                        continue
+                    try:
+                        verdict = _pair_verify(witness)
+                    except Exception as exc:  # noqa: BLE001
+                        issues.append({"case_id": cid, "why": f"method_evidence.{mid} 无法独立重算（{exc}）"})
+                        continue
+                    if not verdict.get("verified"):
+                        gaps = len(verdict.get("missing_pairs") or [])
+                        issues.append({"case_id": cid, "why": f"method_evidence.{mid} 独立重算未通过：缺 {gaps} 个参数对（不接受生成器自证）"})
             reason = str(tc.get("classification_reason", ""))
             for word in cd.METHOD_CLAIMS:
                 if word in reason and not isinstance(me, dict):
@@ -390,9 +431,71 @@ class GateRunner:
         exploratory = sum(1 for tc in tcs if "exploratory" in (tc.get("suites") or []))
         if tcs and exploratory / len(tcs) > self.policy.get("structure", {}).get("budget_policy", {}).get("exploratory_ratio_limit", 0.2):
             issues.append({"case_id": "_ratio_", "why": f"探索性用例占比 {exploratory}/{len(tcs)} 超预算上限（不计入已确认规则覆盖）", "level": "WARN"})
-        self.record("COV", "四层覆盖与方法见证", "BLOCK", [i for i in issues if i.get("level") != "WARN"],
+        self.record("COV", "四层覆盖 L1/L3 + 方法见证", "BLOCK", [i for i in issues if i.get("level") != "WARN"],
                     "L1 主流程（S0 保证）+ L3 方法见证合格")
         self.record("COV-W", "探索性预算", "WARN", [i for i in issues if i.get("level") == "WARN"], "探索性占比在预算内")
+
+    # COV-LAYERS：L2 业务分层 / L4 探索性（矩阵见 scripts/coverage_matrix.py）
+    def _cov_layers(self, cases):
+        try:
+            import coverage_matrix as cm
+        except Exception as exc:  # noqa: BLE001
+            self.record("COV-LAYERS", "L2 业务分层 / L4 探索性", "WARN",
+                        [{"case_id": "_layers_", "why": f"coverage_matrix 不可用（{exc}），L2/L4 未判定"}],
+                        "矩阵可用")
+            return
+        matrix = cm.build_matrix(cases, self.policy)
+        self.coverage_matrix = matrix
+        issues = []
+        declared = matrix.get("applicability_declared")
+        # 覆盖义务是判定前提：没有义务就只能靠 flags 自报。新资产缺义务直接 BLOCK；
+        # 历史资产必须显式登记 meta.legacy_source（schema/迁移日期/责任人）才降为 WARN，
+        # 不再用"没有 coverage_flags"推断老数据（v3 G03/A3）。
+        obligations = cases.get("coverage_obligations")
+        has_obligations = isinstance(obligations, list) and bool(obligations)
+        obligations_required = bool(((self.policy.get("structure") or {}).get("obligations") or {})
+                                    .get("required", True))
+        legacy = (cases.get("meta") or {}).get("legacy_source")
+        legacy_ok = isinstance(legacy, dict) and all(
+            str(legacy.get(key) or "").strip() for key in ("schema_version", "migrated_at", "owner"))
+        level = "BLOCK" if declared else "WARN"
+        if declared and not has_obligations and obligations_required:
+            if legacy_ok:
+                level = "WARN"
+                issues.append({"case_id": "_obligations_",
+                               "why": f"历史资产（legacy_source={legacy.get('schema_version')}，迁移于 {legacy.get('migrated_at')}）"
+                                      "未声明 coverage_obligations，L1/L2 仍按 coverage_flags 口径；须在交付摘要列为未迁移义务"})
+            else:
+                issues.append({"case_id": "_obligations_",
+                               "why": "未声明 coverage_obligations：新资产必须逐项声明覆盖义务（id/layer/kind/target/source/required/tc_ids）；"
+                                      "历史资产须显式登记 meta.legacy_source{schema_version,migrated_at,owner}，不得靠省略字段伪装存量"})
+        if not declared:
+            issues.append({"case_id": "_layers_",
+                           "why": "用例集未声明 applicability，L2 无法判定适用范围；按存量豁免降为告警，报告须列为覆盖缺口"})
+        for gap in matrix.get("open_registered_gaps") or []:
+            layer = gap.get("layer") or "未映射"
+            issues.append({"case_id": gap.get("gap_id", "_gap_"),
+                           "why": f"已登记覆盖缺口未关闭（{gap.get('kind')}→{layer}，target={gap.get('target')}）："
+                                  f"{gap.get('reason')}；须补测或用 closed_by 提供关闭证据"})
+        for ob in matrix.get("unmet_obligations") or []:
+            issues.append({"case_id": ob.get("id", "_obligation_"),
+                           "why": f"覆盖义务未绑定有效用例：{ob.get('target')}（{ob.get('kind')}，来源 {ob.get('source')}）"})
+        for layer_id in matrix.get("missing_layers") or []:
+            payload = matrix["layer_matrix"][layer_id]
+            detail = payload.get("detail") or {}
+            if layer_id == "L1":
+                targets = detail.get("uncovered_features") or []
+                issues.append({"case_id": "_layers_", "why": f"L1 未覆盖功能点：{targets}"})
+            elif layer_id == "L2":
+                targets = detail.get("uncovered_features") or []
+                issues.append({"case_id": "_layers_", "why": f"L2 未覆盖功能点（functional 适用但无 L2 用例）：{targets}"})
+            elif layer_id == "L3":
+                targets = [f"{i['case_id']}.{i['method']}" for i in (detail.get("declared_without_evidence") or [])]
+                issues.append({"case_id": "_layers_",
+                               "why": f"L3 方法见证不足（需 ≥{detail.get('min_witnessed_methods')} 种，实有 {payload.get('count')} 种）"
+                                      + (f"；无见证：{targets}" if targets else "")})
+        self.record("COV-LAYERS", "L2 业务分层 / L4 探索性", level, issues,
+                    "L2 按功能点覆盖、L4 已统计（不计入已覆盖）")
 
     # RATIO-SMOKE / RATIO-P0（三层 + 小样本例外）
     def _ratios(self, cases, tcs, th):
@@ -474,45 +577,79 @@ class GateRunner:
     def _cov_path(self, cases):
         meta = cases.get("meta") or {}
         scenes = [s for s in (cases.get("scenarios") or []) if isinstance(s, dict)]
-        if meta.get("flow_kind") not in {"workflow", "stateful"} or not scenes:
+        if not scenes:
             self.record("COV-PATH", "异常与权限路径配比", "BLOCK", [],
-                        "flow_kind=simple 无场景实体，路径配比不适用（覆盖由 FP/AC 引用链承担）")
+                        "无场景实体，路径配比不适用（覆盖由 FP/AC 引用链承担）")
             return
+        # v3 G05：一旦声明场景（即便 flow_kind=simple），必选异常/权限路径必须逐条有 TC 或豁免，
+        # 不得因 flow_kind=simple 直接记 passed。
         tcs = cases.get("testcases", [])
         small_floor = (self.policy.get("thresholds", {}).get("small_sample", {}) or {}).get("case_count_below", 20)
         min_ratio = (self.policy.get("thresholds", {}).get("path_coverage", {}) or {}).get("exception_coverage_min", 0.5)
         below = len(tcs) < small_floor
         issues = []
+        hard_issues = []  # 必选分支无 TC / 无豁免证据：小样本也不得豁免（v3 G05）
         exception_ok = 0
+        tc_by_path = {}
+        for tc in tcs:
+            if isinstance(tc, dict) and tc.get("path_id"):
+                tc_by_path.setdefault(str(tc["path_id"]), []).append(tc.get("id"))
+
+        def path_ids(branch):
+            """兼容两种形态：list[{id,...}] 与 {path_id:{...}}。"""
+            out = []
+            if isinstance(branch, list):
+                for item in branch:
+                    if isinstance(item, dict) and item.get("id"):
+                        out.append(str(item["id"]))
+            elif isinstance(branch, dict):
+                out = [str(k) for k in branch]
+            return out
+
         for scene in scenes:
             sid = scene.get("id", "?")
             branches = scene.get("paths") or {}
             na = scene.get("not_applicable") or {}
             for kind in ("exception", "permission"):
-                has_paths = bool(branches.get(kind))
+                branch = branches.get(kind) or {}
+                pids = path_ids(branch)
                 entry = na.get(kind)
-                evidenced = isinstance(entry, dict) and isinstance(entry.get("reason"), str) and entry["reason"].strip()
-                if not has_paths and not evidenced:
-                    why = f"{kind} 路径为空且 not_applicable 未按对象形态举证（reason/business_object/checked_at）"
+                # 豁免必须是对象形态（reason/business_object/checked_at）：旧字符串形态不再作为有效举证
+                evidenced = (isinstance(entry, dict) and isinstance(entry.get("reason"), str)
+                             and entry["reason"].strip())
+                if not pids and not evidenced:
+                    why = f"{sid}.{kind}: 路径为空且 not_applicable 未举证（reason/business_object/checked_at）"
                     if isinstance(entry, str) and entry.strip():
-                        why = f"{kind} 豁免仍为字符串形态，未按对象形态举证，不得进入执行"
-                    issues.append({"case_id": sid, "why": why})
-            if branches.get("exception"):
+                        why = f"{sid}.{kind}: 豁免仍为字符串形态，未按对象形态举证，不得进入执行"
+                    hard_issues.append({"case_id": sid, "why": why})
+                    continue
+                # 每条已声明路径必须有实际 TC（tc.path_id 关联）；已有合法整类豁免则不再逐条追责
+                if not evidenced:
+                    for pid in pids:
+                        if pid not in tc_by_path:
+                            hard_issues.append({"case_id": sid,
+                                                "why": f"{sid}.{kind}: 路径 {pid} 无任何关联用例（tc.path_id），不得计为已覆盖"})
+            if path_ids(branches.get("exception")):
                 exception_ok += 1
         coverage = exception_ok / len(scenes) if scenes else 0.0
         if coverage < min_ratio:
-            if below:
-                issues.append({"case_id": "_coverage_",
-                               "why": f"exception_coverage={coverage:.0%} 低于 {min_ratio}（小样本例外：降为告警，不阻断）"})
+            ratio_issue = {"case_id": "_coverage_",
+                           "why": f"exception_coverage={exception_ok}/{len(scenes)}={coverage:.0%} 低于 {min_ratio}"}
+            # 比例不足在小样本下降为告警；但“必选路径无 TC/无豁免”始终硬阻断
+            if not below:
+                hard_issues.append(dict(ratio_issue, why=ratio_issue["why"] + "（有异常路径的场景占比过低）"))
             else:
-                issues.append({"case_id": "_coverage_",
-                               "why": f"exception_coverage={exception_ok}/{len(scenes)}={coverage:.0%} 低于 {min_ratio}（有异常路径的场景占比过低）"})
-        if below:
+                issues.append(dict(ratio_issue, why=ratio_issue["why"] + "（小样本例外：比例降为告警，必选路径缺失仍阻断）"))
+        if hard_issues:
+            self.record("COV-PATH", "异常与权限路径配比", "BLOCK", hard_issues,
+                        f"必选异常/权限路径均有 TC 或合法豁免；exception_coverage={coverage:.0%}")
+        elif issues:
+            # 仅小样本比例告警：本项降 warning（与既有 E7 契约一致），必选路径缺失仍走上面的 hard BLOCK
             self.record("COV-PATH", "异常与权限路径配比", "WARN", issues,
-                        f"小样本例外生效（{len(tcs)} 条 < {small_floor}）：exception_coverage={coverage:.0%}，未举证项仍须修订")
+                        f"小样本例外生效：exception_coverage={coverage:.0%}，比例降告警")
         else:
-            self.record("COV-PATH", "异常与权限路径配比", "BLOCK", issues,
-                        f"exception_coverage={coverage:.0%} ≥ {min_ratio} 且豁免均已按对象形态举证")
+            self.record("COV-PATH", "异常与权限路径配比", "BLOCK", [],
+                        f"必选异常/权限路径均有 TC 或合法豁免；exception_coverage={coverage:.0%}")
 
     # COV-UI：界面/无障碍维度为零时必须逐类裁定，不得静默跳过（E4）
     def _cov_ui(self, cases, tcs):
@@ -542,7 +679,7 @@ class GateRunner:
         tcs = cases.get("testcases", [])
         failed = [c for c in self.checks if c["status"] == "failed"]
         warned = [c for c in self.checks if c["status"] == "warning"]
-        return {
+        summary = {
             "status": "fail" if failed else ("warning" if warned else "pass"),
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
             "counts": {
@@ -552,6 +689,19 @@ class GateRunner:
             },
             "checks": self.checks,
         }
+        if self.coverage_matrix is not None:
+            summary["coverage_matrix"] = self.coverage_matrix
+        # 内容绑定：与 execution_ledger.fingerprint 同源，真实报告即可判"已绑定"，
+        # 不再需要调用方手写 binding（手写等于自证）。design_fingerprint 缺失时
+        # 已在导入期 sys.exit(2)，此处必然可用，不再判空以免静默丢 binding。
+        summary["binding"] = {
+            "design_hash": design_fingerprint(cases),
+            "policy_version": str(self.policy.get("schema_version") or ""),
+            "scope": [str(tc.get("id")) for tc in tcs if isinstance(tc, dict)],
+            "required_checks": [c["id"] for c in self.checks if c["status"] == "passed"],
+            "source": "gate_checks",
+        }
+        return summary
 
 
 def main():

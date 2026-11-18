@@ -234,7 +234,9 @@ class ExecutionLedgerTests(unittest.TestCase):
         baseline = self.tool.initialize(target, self.design, self.context, "ROUND-OK", [], good_batches, good_gate)
         self.assertEqual(baseline["gate_precondition"],
                          {"batches_closed": True, "batches_case_count": len(ids),
-                          "gate_report_status": "warning", "gate_report_case_count": len(ids)})
+                          "gate_report_status": "warning", "gate_report_case_count": len(ids),
+                          "binding_verdict": "待核实", "binding_missing": ["binding（缺内容绑定声明，旧报告兼容模式）"],
+                          "binding_compat": True})
 
     def test_cli_init_enforces_gate_precondition(self):
         design_file = self.folder / "cases-gate.json"

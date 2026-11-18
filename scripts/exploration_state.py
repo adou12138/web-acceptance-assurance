@@ -12,8 +12,9 @@ API：summarize(data) 严格校验并返回派生摘要；export_csv(data, outpu
  observation、evidence_paths、blocked_reason、严格布尔 side_effect_pending、非空
  attributes 数组；可选 case_id。ID/引用使用 [A-Za-z0-9][A-Za-z0-9_.:-]*，项 ID
  全局唯一；数组不能重复。引用只校验形状，未加载外部需求/用例目录，不证明其存在。
-属性允许 functional/visual/usability/accessibility/performance/security/data/recovery/
-compatibility。URL 限无用户信息的绝对 http/https，page_url 与 target_url 同源
+属性允许 functional/visual/usability/accessibility/performance/security/reliability/
+compatibility/content。其中 security/compatibility/content 为必选质量属性，被阻塞/未执行会压低结论上限。
+URL 限无用户信息的绝对 http/https，page_url 与 target_url 同源
 （协议、主机、有效端口）。不解析跳转、不执行 action、不验证浏览器最终访问地址。
 
 PASS/FAIL 必须有非空观察和绝对存在的本地证据文件；每次派生时重新读取并计算
@@ -46,7 +47,7 @@ STATUSES = {"NOT_RUN", "PASS", "FAIL", "BLOCKED", "SKIPPED"}
 RISKS = {"high": 0, "medium": 1, "low": 2}
 # E12：与 scripts/case_data.py 的七类用例属性对齐（data/recovery 归并 reliability）；
 # usability 为探索域特有（交互易用性五视角必需），属领域差异而非白名单漂移。
-ATTRIBUTES = {"functional", "visual", "usability", "accessibility", "performance", "security", "reliability", "compatibility"}
+ATTRIBUTES = {"functional", "visual", "usability", "accessibility", "performance", "security", "reliability", "compatibility", "content"}
 VIEWS = {
     "界面样式": {"visual"},
     "交互易用性": {"usability"},
@@ -55,6 +56,11 @@ VIEWS = {
     "性能": {"performance"},
 }
 REQUIRED_VIEWS = ("界面样式", "交互易用性", "基础无障碍", "功能", "性能")
+# 必选质量属性：一旦清单里出现这些属性且未执行/被阻塞，必须压低结论上限，
+# 不得由同视角的一条 functional PASS 记录清空（v3 目标审计 G08/G16）。
+# content=文案（术语/单位/错误提示/未渲染变量）；compatibility=兼容内核/设备；
+# security=权限/会话。三者均有独立必选义务，不能被功能视角覆盖稀释。
+MANDATORY_ATTRIBUTES = ("security", "compatibility", "content")
 ITEM_FIELDS = {"id", "requirement_ids", "page_url", "role", "viewport", "state", "action", "risk", "status", "observation", "evidence_paths", "blocked_reason", "side_effect_pending", "attributes"}
 SCOPE = "仅清单进度与人工下一步候选；不判定业务或总体门禁；证据内容和外部引用需复核；不自动执行或重放"
 
@@ -130,18 +136,61 @@ def _evidence(paths, name):
     return result
 
 
-def _gate(rows, executed_views):
+def _gate(rows, executed_views, rulings=None):
     """按已提供清单计算执行门禁：未消费候选、必查视角无实测记录、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
     SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
     FAIL 属"已实测到异常"，同样不得写"通过"。
+    必选质量属性（安全/兼容/文案）须逐类裁定：要么有 PASS 实测，要么显式写明 not_applicable 理由；
+    整类不出现不等于不适用（v3 G16）。
     """
+    rulings = rulings or {}
     ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()]
     missing = [view for view in REQUIRED_VIEWS if not executed_views[view]]
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
     traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
     failed = [row["id"] for row in rows if row["status"] == "FAIL"]
+    # 必选义务（v3 G08）：副作用未决、必选质量属性被阻塞/未执行、必选页面未遍历，
+    # 都不能因其余视角已有 PASS 而放行结论上限。非必选项仍只披露不阻断。
+    unreconciled_pending = [row["id"] for row in rows if row["side_effect_pending"]]
+    blocked_mandatory = [row["id"] for row in rows
+                         if set(row["attributes"]) & set(MANDATORY_ATTRIBUTES)
+                         and row["status"] in {"BLOCKED", "NOT_RUN", "SKIPPED"}]
+    # 必选质量属性逐类裁定：有 PASS 实测=覆盖；not_applicable 有理由=豁免；其余都算未闭合。
+    passed_attrs = {attr for row in rows if row["status"] == "PASS" for attr in row["attributes"]}
+    mandatory_status, unresolved_mandatory = {}, {}
+    for attr in MANDATORY_ATTRIBUTES:
+        if attr in passed_attrs:
+            mandatory_status[attr] = "covered"
+        elif attr in rulings:
+            ruling = rulings[attr]
+            if ruling["state"] == "not_applicable":
+                mandatory_status[attr] = "not_applicable"
+            else:
+                mandatory_status[attr] = ruling["state"]
+                unresolved_mandatory[attr] = ruling["state"]
+        else:
+            mandatory_status[attr] = "undeclared"
+            unresolved_mandatory[attr] = "undeclared"
+    blocking_notes = []
+    if unreconciled_pending:
+        blocking_notes.append("未决副作用：" + "、".join(unreconciled_pending))
+    if blocked_mandatory:
+        blocking_notes.append("必选质量属性未执行/被阻塞：" + "、".join(blocked_mandatory))
+    if traversal_pending:
+        blocking_notes.append("页面遍历未完成：" + str(traversal_pending) + " 项")
+    if unresolved_mandatory:
+        detail = []
+        for attr, state in unresolved_mandatory.items():
+            if state == "undeclared":
+                detail.append(f"{attr}=未裁定")
+            elif state == "blocked":
+                detail.append(f"{attr}=已裁定阻塞")
+            else:
+                detail.append(f"{attr}=已裁定适用但无 PASS 记录")
+        blocking_notes.append("必选质量属性未闭合：" + "、".join(detail)
+                              + "（须实测或有理由的 not_applicable 裁定）")
     if ready:
         ceiling = "待核实"
         message = f"仍有{len(ready)}项可执行未执行，技术结论上限为待核实；需执行或逐项写明未执行理由与影响"
@@ -154,6 +203,9 @@ def _gate(rows, executed_views):
     elif failed:
         ceiling = "待核实"
         message = f"存在{len(failed)}项FAIL条目：不得写“通过”，须按缺陷必选性与闭环状态判为“不通过”或“待核实”"
+    elif blocking_notes:
+        ceiling = "待核实"
+        message = "存在未关闭的必选探索义务：" + "；".join(blocking_notes) + "；须执行、解除阻塞或写明不适用与影响"
     else:
         ceiling = "通过"
         message = "无未消费候选、必查视角均有记录且含控件遍历条目；仍须按缺陷、断言和证据判定，不代表已通过"
@@ -165,10 +217,13 @@ def _gate(rows, executed_views):
         "missing_views": missing,
         "executed_views": {view: list(ids) for view, ids in executed_views.items()},
         "failed_items": failed,
+        "unreconciled_pending": unreconciled_pending,
+        "blocked_mandatory": blocked_mandatory,
         "skipped_views": {view: [row["id"] for row in rows if row["status"] in {"BLOCKED", "SKIPPED"} and set(row["attributes"]) & attrs]
                           for view, attrs in VIEWS.items()},
         "traversal_pending": traversal_pending,
         "traversal_recorded": traversal_recorded,
+        "mandatory_attributes": mandatory_status,
         "verdict_ceiling": ceiling,
         "message": message,
     }
@@ -176,9 +231,23 @@ def _gate(rows, executed_views):
 
 def summarize(data):
     """校验单份探索输入，返回当前进度、候选 ID、检查视角和带证据指纹的记录。"""
-    _object(data, {"schema_version", "context", "items"}, set(), "root")
+    _object(data, {"schema_version", "context", "items"}, {"attribute_rulings"}, "root")
     if data["schema_version"] != "1.0":
         raise ValueError("schema_version: 必须为字符串 1.0")
+    rulings = data.get("attribute_rulings")
+    if rulings is not None:
+        if not isinstance(rulings, dict):
+            raise ValueError("attribute_rulings: 必须为对象")
+        unknown = set(rulings) - set(MANDATORY_ATTRIBUTES)
+        if unknown:
+            raise ValueError(f"attribute_rulings: 未知属性 {sorted(unknown)}")
+        for attr, ruling in rulings.items():
+            name = "attribute_rulings." + attr
+            _object(ruling, {"state", "reason"}, set(), name)
+            _text(ruling["state"], name + ".state")
+            _text(ruling["reason"], name + ".reason")
+            if ruling["state"] not in {"applicable", "not_applicable", "blocked"}:
+                raise ValueError(f"{name}.state: 必须为 applicable/not_applicable/blocked")
     context = data["context"]
     _object(context, {"target_url", "application_version", "environment"}, set(), "context")
     for key in context:
@@ -237,7 +306,7 @@ def summarize(data):
         "items": rows,
         "scope": SCOPE,
     }
-    report["gate"] = _gate(rows, report["executed_views"])
+    report["gate"] = _gate(rows, report["executed_views"], data.get("attribute_rulings"))
     return report
 
 

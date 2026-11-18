@@ -1,6 +1,6 @@
 {
   "name": "web-acceptance-assurance",
-  "version": "1.18.1",
+  "version": "1.30.4",
   "description": "Tests Web requirements with risk-driven exploration, functional and interface validation, visual and usability reviews, condition-based performance matrices, evidence-based regression, and single-file HTML evidence reports.",
   "expertType": "agent",
   "agentName": "web-acceptance-assurance",

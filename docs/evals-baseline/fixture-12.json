@@ -1,0 +1,13 @@
+{
+  "testcases": 12,
+  "features": 3,
+  "coverage_layers_missing": 0,
+  "feature_l1_ratio": 1.0,
+  "method_variety": 2,
+  "assertion_density": 1.5,
+  "vague_or_placeholder": 0,
+  "smoke_ratio": 0.167,
+  "p0_ratio": 0.167,
+  "gaps_open": 0,
+  "structural_errors": 0
+}

@@ -84,6 +84,11 @@ def _val_in_evidence(evidence, value):
     return bool(s) and s in ev
 
 
+def _normalize_newlines(text):
+    """把 CRLF / 单独的 CR 统一成 LF（Windows 争议单写出后复制回来的证据需归一）。"""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
 # --------------------------------------------------------------------- prep
 def _excerpt(contract_text, limit=DEFAULT_EXCERPT_LIMIT):
     """契约原文摘录——evidence 必须是这里的连续子串。
@@ -738,9 +743,10 @@ def apply_review(review, disputes, facts, expected_sha=None):
             rejected.append("%s：decision 非法（%s）" % (name, decision or "空"))
             continue
         if decision == "correct_llm_value":
-            ev = str(item.get("evidence") or "").strip()
+            ev = _normalize_newlines(str(item.get("evidence") or "")).strip()
             corrected = item.get("corrected") or {}
-            excerpts = [e["text"] for e in (by_field[name].get("excerpts") or [])]
+            excerpts = [_normalize_newlines(e["text"])
+                        for e in (by_field[name].get("excerpts") or [])]
             if not ev or not any(ev in t for t in excerpts):
                 rejected.append("%s：evidence 不是本条争议贴出的原文片段，拒收" % name)
                 continue
@@ -751,9 +757,25 @@ def apply_review(review, disputes, facts, expected_sha=None):
             if bad_keys:
                 rejected.append("%s：修订了不可比对的键 %s，拒收" % (name, bad_keys))
                 continue
-            no_basis = [k for k, v in corrected.items()
-                        if not _val_in_evidence(ev, v if not isinstance(v, list)
-                                                else "".join(str(x) for x in v))]
+            # 修订值逐项校验：enum 条目 [[值,释义]] 只验值；bool 归一小写；扁平清单逐词验。
+            no_basis = []
+            for k, v in corrected.items():
+                vals = v if isinstance(v, list) else [v]
+                bad = []
+                for x in vals:
+                    if isinstance(x, (list, tuple)):
+                        if not x:
+                            bad.append(x)
+                            continue
+                        target = x[0]
+                    else:
+                        target = x
+                    if isinstance(target, bool):
+                        target = "true" if target else "false"
+                    if not _val_in_evidence(ev, target):
+                        bad.append(target)
+                if bad:
+                    no_basis.append("%s（%s 无据）" % (k, bad))
             if no_basis:
                 rejected.append("%s：修订值 %s 在 evidence 中找不到依据，拒收" % (name, no_basis))
                 continue

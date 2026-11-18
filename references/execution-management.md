@@ -53,6 +53,8 @@ summary返回计划数、五态唯一TC计数、executed、execution_rate、pass
 
 有效PASS/FAIL attempt的唯一TC计入executed；波动仍算已执行但不计干净PASS；五态数加总必须等于当前计划TC数。设计/上下文变化时旧记录全量保守失效，摘要给compatible=false和待测清单，写入拒绝，必须新轮次。内容哈希保守，展示字段变化也可能触发新轮次，避免错误复用。
 
+**基线晋升（OM5，借鉴 api-test M12 资产正式化）**：草稿/临时基线只作本轮参考；晋升为**回归基线**须同时满足：①本轮全部 TC 有有效 PASS/FAIL 记录且 open_bugs 状态已知（未知不得晋升）；②用户或负责人**显式批准**——批准动作在轮次记录留痕（批准人、时间、基线文件哈希），禁止工具自行批准；③旧基线原样留档（按 round 归档，不覆盖）；④晋升后的新基线**冻结只读**，后续轮次不得手工改写。未批准的基线不得作为“回归通过”依据。
+
 独立bugs JSON为数组，字段id、severity（blocker/major/normal/minor）、status（open/in_progress/fixed_pending_deploy/fixed_pending_retest/reopened/closed）；可补复现步骤、预期实际、证据、TC/RUN、责任人、优先级、修复版本等完整缺陷字段。工具只对ID唯一性、严重度和状态做基础验证，不替代缺陷复现与关闭审查。priority与severity分开，既有P0/P1/P2仅作测试/处理优先级，不直接用备注字符串推断缺陷严重度。
 
 未传bugs时open_bugs和missing_bug_ids未知；传入台账后按真实status计未关闭数量，分别输出与提测基线相比的new_ids、still_open_ids、closed_ids、missing_from_current。基线中有而当前缺失的问题不是已关闭，要追查缺漏。此差异是台账变化，不声称每个新增条目都由本次功能引入；原因需证据。原FAIL缺BUG当前记录给missing_bug_ids，不因已知BUG都关闭就自动放行。

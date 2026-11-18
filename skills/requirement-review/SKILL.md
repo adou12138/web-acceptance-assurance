@@ -14,13 +14,17 @@ description: 砺衡专家包内 skill：需求评审。收到需求文档/正文
 |---|---|
 | 何时调用 | 收到需求文档/正文（Word 读出文本 / 粘贴文本 / TAPD 导出文本），尚未拆规格 |
 | 输入 | 需求正文 |
-| 输出 | `review-result.json`（唯一事实源）+ `review-summary.md`（`render_review.py` 渲染的派生视图） |
+| 输出 | `review-result.json`（唯一事实源；可选 `visual_evidence[]` 登记原型图证据）+ `review-summary.md`（`render_review.py` 渲染的派生视图） |
 | 不适用 | 不评产品价值、不润色、**不打分不评级**；材料不足的维度记 `not_reviewed` 并写明缺什么 |
 | 写入 | 只写 `review-result.json`；`review-summary.md` 一律由脚本渲染，**不手工写、不口头补充** |
 
 ## 流程
 
 1. **读需求正文**。Word 内的原型截图、批注、修订痕迹可能读不到，关键规则须文字化；TAPD 连接器已授权时可按任务定向读取**指定需求**，未授权或读取失败则要求导出为文本；任何情况下不做全空间拉取；PDF 需求先转文本。
+
+   **原型图通路（docx 内嵌图片）**：`python scripts/extract_docx_media.py --docx <需求.docx> --out <任务工作区> --json` 解包 `word/media/` 并登记 sha256；随后**逐张用宿主多模态能力读取**，把结果写进 `visual_evidence[]`（`file/sha256/type/extracted_rules/confidence/boundary/image_understood`）。铁律：读不到或看不清就写 `image_understood=false` 并在 `boundary` 写明缺什么，**不得凭图猜规则**；脚本只解包不判断内容，截图价值分级与规则提取一律由识读阶段产出。
+
+   **本地文档优先**：接口/字段/枚举等事实以本地知识库全文为准（`KB_PATH` 指向的项目知识库，含 showdoc 导出；本机登记与使用纪律见 api-test 的 `skills/api-test/references/doc_review.md`「本机知识库根路径」节）。**禁止用 WebFetch/WebSearch 抓在线文档替代本地全文**；仅在核对线上版本差异时联网，且须在 `blocking/pending` 或 `evidence_refs.source` 标注"线上版本与本地不一致"。本地缺失时明确写"本地知识库缺失"，不得默认联网补齐。历史需求（`tapd_launched`）与产品规则（`distilled`）等非契约类领域事实，调用已注册的 `wjx-knowledge-base` skill 检索并写出处；检索为空如实记"知识库无记录"，不得凭记忆补历史行为。
 2. **按 `references/prd-dimensions.md` 八维度定性评审**：问题按 blocking / pending 归档；材料不足记 `not_reviewed`。历史一致维度无对照材料时不评，不得凭常识补全。
 3. **拆解实体并分配 ID**（ID 规则最小集如下，与 `case-generator` 的判据同源；case-generator 缺失时本清单自足）：
    - 需求 `^REQ-\d{2,}$`（REQ-01）、功能点 `^FP-\d{2,}$`（FP-01）、验收标准 `^AC-\d{2,}$`（AC-01）、已确认规则 `^R-\d{2,}$`（R-01）、阻塞项 `^B-\d{2,}$`（B-01）、待确认项 `^P-\d{2,}$`（P-01）；
@@ -52,6 +56,9 @@ python scripts/review_check.py --input <绝对路径>/review-result.json --json 
 
 # 摘要渲染（纯派生，不新增判定）
 python scripts/render_review.py --input <绝对路径>/review-result.json --out <绝对路径>/review-summary.md
+
+# 原型图解包（docx 内嵌图片 → media/ + media_manifest.json；识读由宿主多模态完成）
+python scripts/extract_docx_media.py --docx <需求.docx> --out <任务工作区> --json
 ```
 
 脚本按相对本 skill 目录的 `../../scripts/case_data.py` 加载词表（空话/占位判定与执行期校验器同源）；该文件缺失时报工具阻塞退出码 2，不降级为无词表模式。

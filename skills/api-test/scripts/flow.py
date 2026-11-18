@@ -88,6 +88,10 @@ def verify_artifacts(out_dir, csv_path):
 
 # 写操作类接口：未通过测试环境写门禁时，一律不自动执行（只出计划并要求显式授权）。
 WRITE_OPS = ("创建", "新增", "修改", "更新", "删除", "发布", "下线", "导入", "订阅", "清空")
+# 只读操作词汇表（与 applicability._OP_RULES 的“查询”类一致）。写门禁据此区分只读与写；
+# 空/未知操作一律按“需授权”处理，防止借未知 op_type 绕过（v3 目标审计 G12）。
+READ_OPS = ("查询", "获取", "详情", "列表", "读取", "搜索", "统计", "计数", "导出",
+            "list", "get", "query", "detail", "search")
 
 # 执行档位 → 用例筛选规则。plan 档位不执行（在 main 中提前返回）。
 PROFILES = {
@@ -104,10 +108,28 @@ PROFILES = {
 }
 
 
+def resolve_adapter_path(name, external_dir=None):
+    """解析适配器源文件路径：优先包外目录（WJX_ADAPTER_DIR / 显式 external_dir），再回包内。
+
+    v3 G13：站点适配器必须以包外扩展方式加载，禁止为挂载反复改写已安装专家包。
+    返回 Path（不导入），便于 dry-run 在真正加载前展示来源。
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    ext = external_dir or _os.environ.get("WJX_ADAPTER_DIR")
+    if ext:
+        candidate = _Path(ext) / (str(name) + ".py")
+        if candidate.is_file():
+            return candidate
+    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    return _Path(root) / "adapters" / (str(name) + ".py")
+
+
 def build_adapter(name):
     """按 --adapter 选择适配器。
 
-    支持：rest / sojump / graphql / grpc；名称未匹配时 fallback 到 rest。
+    支持：rest / sojump / graphql / grpc；站点适配器可由 WJX_ADAPTER_DIR 指向包外目录加载。
+    name 未匹配且包外有同名模块时优先加载包外扩展；否则 fallback 到 rest。
     grpc 缺依赖时实例化即报错（懒加载防呆，不静默降级）。
 
     两点容易误读的地方：
@@ -116,15 +138,31 @@ def build_adapter(name):
     - 适配器在当前主链路**只用于写操作门禁**（is_write_allowed）；公共参数由
       api_test_runner 负责、实际发请求也走它，build_request/send 等是预留扩展点。
     """
+    import importlib.util as _ilu
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if root not in sys.path:
         sys.path.insert(0, root)  # adapters/ 与 scripts/ 平级，需把 skill 根加入搜索路径
+    # 包外扩展优先（v3 G13）：WJX_ADAPTER_DIR 下的同名模块先于包内同名适配器加载，
+    # sojump 等站点适配器由此可外置，无需改写已安装专家包。
+    ext = os.environ.get("WJX_ADAPTER_DIR")
+    if ext:
+        candidate = os.path.join(ext, str(name) + ".py")
+        if os.path.isfile(candidate):
+            spec = _ilu.spec_from_file_location("ext_adapter_" + str(name), candidate)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            cls = getattr(mod, "ApiAdapter", None) or getattr(mod, "Adapter", None)
+            for attr in ("SojumpAdapter", "RestAdapter", "GraphqlAdapter", "GrpcAdapter"):
+                cls = getattr(mod, attr, None) or cls
+            if cls is None:
+                raise SystemExit("包外适配器 %s 未暴露 ApiAdapter/Adapter 类" % candidate)
+            return cls()
     if name == "sojump":
         try:
             from adapters.sojump import SojumpAdapter
         except ImportError as exc:
-            raise SystemExit("适配器 sojump 未随本包分发（站点适配）；请改用 --adapter rest，"
-                             "或按 references/adapter_contract.md 自行放置站点适配器。原因: %s" % exc)
+            raise SystemExit("适配器 sojump 未随本包分发（站点适配）；请设置 WJX_ADAPTER_DIR 指向包外适配器目录，"
+                             "或改用 --adapter rest，或按 references/adapter_contract.md 自行放置。原因: %s" % exc)
         return SojumpAdapter()
     if name == "graphql":
         from adapters.graphql import GraphqlAdapter
@@ -159,7 +197,12 @@ def validate_exec_config(cfg, label="执行配置"):
         raise ValueError("%s 必须是 JSON 对象" % label)
     adapter = cfg.get("adapter")
     if adapter is not None and adapter not in _ADAPTERS:
-        raise ValueError("%s adapter 必须是 %s" % (label, "/".join(sorted(_ADAPTERS))))
+        # v3 G13：包外 WJX_ADAPTER_DIR 存在同名模块时允许该适配器名
+        ext = os.environ.get("WJX_ADAPTER_DIR")
+        external_ok = bool(ext and os.path.isfile(os.path.join(ext, str(adapter) + ".py")))
+        if not external_ok:
+            raise ValueError("%s adapter 必须是 %s（或由 WJX_ADAPTER_DIR 提供包外扩展）"
+                             % (label, "/".join(sorted(_ADAPTERS))))
     env = cfg.get("environment")
     if env is not None:
         if not isinstance(env, dict):
@@ -211,22 +254,40 @@ def validate_exec_config(cfg, label="执行配置"):
 
 
 def write_gate(adapter, adapter_name, exec_cfg, op_type):
-    """测试环境写操作门禁。
+    """写操作门禁（适配器无关，v3 目标审计 G12）。
 
-    返回 (allowed, reason)。适配器实现了 `is_write_allowed` 就执行其门禁（接口语义保留，
-    支持用户自装站点适配器）；本包随附的 rest/graphql/grpc 适配器均未实现该方法，
-    写保护由 R2 授权确认与执行配置的 environment 声明承担。
+    返回 (allowed, reason)。授权由「操作语义 + 执行配置的环境声明 + 适配器拒绝策略」共同决定，
+    与适配器名称无关：
+
+    - 明确的只读操作（READ_OPS）：放行；
+    - 写操作（WRITE_OPS）或空/未知操作：需 environment.type=="test" 且
+      environment.write_enabled==true 的显式声明；若适配器实现了 is_write_allowed，
+      其拒绝（False）具有否决权，适用于任何适配器名称，不再硬编码 sojump。
     """
     env = (exec_cfg or {}).get("environment") or {}
-    is_write = str(op_type or "") in WRITE_OPS
-    if not is_write or adapter_name != "sojump":
+    op = str(op_type or "").strip()
+    if op in READ_OPS:
         return True, ""
-    if adapter.is_write_allowed(env):
+    env_authorized = env.get("type") == "test" and env.get("write_enabled") is True
+    # 适配器的显式拒绝具有否决权（与名称无关）。未实现该方法不视为拒绝。
+    adapter_denies = False
+    checker = getattr(adapter, "is_write_allowed", None)
+    if callable(checker):
+        try:
+            adapter_denies = not bool(checker(env))
+        except Exception:
+            adapter_denies = True  # 门禁判定自身出错时 fail closed
+    if env_authorized and not adapter_denies:
         return True, ""
+    keys = []
+    if not env_authorized:
+        keys.append("environment.type == \"test\" 且 environment.write_enabled == true")
+    if adapter_denies:
+        keys.append("适配器 is_write_allowed(env) 放行")
     return False, (
-        "写操作门禁未放行：接口操作类型为「%s」，但执行配置未显式声明测试环境。\n"
-        "  需满足：environment.type == \"test\" 且 environment.write_enabled == true\n"
-        "  （仅凭域名像测试环境不足以信任；见 references/intelligence_policy.md）" % op_type)
+        "写操作门禁未放行：接口操作类型为「%s」（未知/空操作按写处理），执行配置未满足：%s。\n"
+        "  仅凭域名或 HTTP 方法不足以信任；见 references/intelligence_policy.md"
+        % (op or "未知", "；".join(keys)))
 
 
 def select_by_profile(cases, profile):
@@ -388,20 +449,36 @@ def retest_report(baseline_path, results, doc=None):
 
 
 def resolve_contract_from_kb(action, kb=None):
-    """用 kb_load_contract 的能力按 action 在知识库里定位契约文件。"""
+    """用 kb_load_contract 的能力按 action 在知识库里定位契约文件。
+
+    解析顺序与 kb_load_contract.main 一致：显式 --kb > KB_PATH 环境变量 >
+    与 skill 同级的默认候选（default_kb_candidates 的 docstring 声明
+    "实际仅 KB_PATH 生效"，依赖此回退）。全部不可用时返回 None，
+    由调用方按 doc_review 登记节的降级纪律处理，不猜测契约。
+    """
     try:
         import kb_load_contract as KB
     except Exception as e:
         print("无法导入 kb_load_contract：%s" % e)
         return None
-    roots = [kb] if kb else list(KB.default_kb_candidates())
+    if kb:
+        roots = [kb]
+    else:
+        roots = []
+        env_kb = os.environ.get("KB_PATH")
+        if env_kb:
+            roots.append(env_kb)
+        roots.extend(KB.default_kb_candidates())
     for root in roots:
         if not root or not os.path.isdir(root):
             continue
         try:
             hits = KB.find_by_filesystem(root, str(action)) or []
-        except Exception:
-            hits = []
+        except Exception as exc:  # noqa: BLE001
+            # 目录存在但读取失败（权限/编码/并发锁）与"确实没有该契约"必须可区分：
+            # 前者静默当成空会让调用方误判"知识库无记录"，掩盖环境问题。
+            print("知识库检索失败（%s）：%s" % (root, exc), file=sys.stderr)
+            continue
         if hits:
             return hits[0] if isinstance(hits[0], str) else str(hits[0])
     return None

@@ -1,6 +1,6 @@
 # 设计数据通道（Figma）
 
-本文件规定「设计数据从哪来、取到后怎么处理、取不到怎么记账」。取数的工具细节与字段口径由 `skills/figma-ui-parity` 权威维护（`references/tooling.md` 1.1/1.2、`references/figma-fields.md`、`scripts/figma_mcp_to_json.py`），本文件只做前置判定与边界，不复制其脚本参数。
+本文件规定「设计数据从哪来、取到后怎么处理、取不到怎么记账」。取数的工具细节与字段口径由 `skills/figma-ui-parity` 权威维护（`skills/figma-ui-parity/references/tooling.md` 1.1/1.2、`skills/figma-ui-parity/references/figma-fields.md`、`skills/figma-ui-parity/scripts/figma_mcp_to_json.py`），本文件只做前置判定与边界，不复制其脚本参数。
 
 ## 一、三种来源与判定顺序
 

@@ -71,7 +71,20 @@
               "focus": {"type": "string", "minLength": 1}
             }
           },
-          "oracle": {"type": "string", "minLength": 1}
+          "oracle": {"type": "string", "minLength": 1},
+          "evidence_refs": {
+            "type": "array",
+            "description": "OM3 证据溯源（借鉴 qa evidence_refs）：来源 + 原文片段，可选；存在时 review_check 校验非空",
+            "items": {
+              "type": "object",
+              "required": ["source", "quote"],
+              "additionalProperties": false,
+              "properties": {
+                "source": {"type": "string", "minLength": 1},
+                "quote": {"type": "string", "minLength": 1}
+              }
+            }
+          }
         }
       }
     },
@@ -156,6 +169,50 @@
         "properties": {
           "dimension": {"enum": ["completeness", "consistency", "clarity", "testability", "performance_security", "state_coverage", "acceptance_mapping", "historical_consistency"]},
           "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "visual_evidence": {
+      "type": "array",
+      "description": "原型/截图证据（可选）：scripts/extract_docx_media.py 解包后由宿主多模态逐张识读并登记；读不到写 image_understood=false 并在 boundary 说明缺口，禁止凭图猜规则。",
+      "items": {
+        "type": "object",
+        "required": ["file", "sha256", "type", "extracted_rules", "confidence", "boundary", "image_understood"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "type": {"enum": ["ui_mockup", "flowchart", "state_diagram", "table_rule", "annotated_screenshot", "api_snapshot", "report_chart", "unknown"]},
+          "extracted_rules": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "boundary": {"type": "string", "minLength": 1, "description": "解读边界：裁切/遮挡/字号不清/未覆盖页面等"},
+          "image_understood": {"type": "boolean"},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "description": "场景建模交接（可选）：评审阶段可产出 SCN/PATH，经 review_bridge 原样进入 cases JSON；与 workflow/stateful 生成链共用同一校验，消除评审拒收但生成强求的契约互斥。",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "goal", "paths"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "pattern": "^SCN-\\d{2,}$"},
+          "name": {"type": "string", "minLength": 1},
+          "goal": {"type": "string", "minLength": 1},
+          "feature_ids": {"type": "array", "items": {"type": "string"}},
+          "not_applicable": {"type": "object"},
+          "paths": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "positive": {"type": "object"},
+              "exception": {"type": "object"},
+              "permission": {"type": "object"}
+            }
+          }
         }
       }
     }

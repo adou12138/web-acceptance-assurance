@@ -6,6 +6,7 @@
 
 输出：<outdir>/测试用例_<task-id>_<视角>.csv 共 5 个文件（utf-8-sig）。
 --verify：渲染后逐文件读回，核对 BOM、表头、列数与 case_id 集合；不一致退出码 1。
+--only P0,P1：只渲染指定优先级（冒烟精选视图）；回读校验以**筛选后集合**为基准，避免按全集比对造成假失败。
 默认拒绝覆盖已有文件；--force 显式允许。task_id 限字母数字与 . _ -（作文件名片段）。
 
 退出码：0=成功；1=回读一致性失败；2=用法/输入错误。
@@ -43,8 +44,11 @@ es = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(es)
 
 
-def select(cases, attributes):
-    return [tc for tc in cases.get("testcases", []) if set(tc.get("attributes") or []) & set(attributes)]
+def select(cases, attributes, only=None):
+    picked = [tc for tc in cases.get("testcases", []) if set(tc.get("attributes") or []) & set(attributes)]
+    if only:
+        picked = [tc for tc in picked if str(tc.get("priority", "")) in only]
+    return picked
 
 
 def verify_view(path, columns, expected):
@@ -66,34 +70,34 @@ def verify_view(path, columns, expected):
         raise VerifyError(f"{path.name}: case_id 集合不一致（回读 {len(actual)} / 预期 {len(expected)}）")
 
 
-def totals(cases):
+def totals(cases, only=None):
     """视图行数与去重用例数分开统计：同一用例跨视角只计一次。"""
     rows = 0
     unique = set()
     for attributes in es.VIEWS.values():
-        picked = select(cases, attributes)
+        picked = select(cases, attributes, only)
         rows += len(picked)
         unique |= {str(tc.get("id", "")) for tc in picked}
     return {"view_rows": rows, "unique_cases": len(unique)}
 
 
-def render(cases, task_id, outdir, columns, force=False, verify=False):
+def render(cases, task_id, outdir, columns, force=False, verify=False, only=None):
     if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
         raise UsageError(f"task_id 仅允许字母数字与 . _ -（最长 64 位）：{task_id!r}")
     outdir = Path(outdir)
     if not outdir.parent.is_dir():
         raise ValueError("输出目录的父目录必须已存在")
     outdir.mkdir(exist_ok=True)
-    headers = [c["header"] for c in columns]
+    headings = [c["header"] for c in columns]
     result = {}
     for view, attributes in es.VIEWS.items():
         path = outdir / f"测试用例_{task_id}_{view}.csv"
         if path.exists() and not force:
             raise FileExistsError(f"拒绝覆盖已有视图：{path}（如确认重渲染请加 --force）")
-        selected = select(cases, attributes)
+        selected = select(cases, attributes, only)
         with path.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream)
-            writer.writerow(headers)
+            writer.writerow(headings)
             for tc in selected:
                 writer.writerow(row_for(tc, columns))
         expected = {str(tc.get("id", "")) for tc in selected}
@@ -111,6 +115,7 @@ def main():
     ap.add_argument("--policy", default=str(DEFAULT_POLICY))
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--force", action="store_true", help="允许覆盖同名视图")
+    ap.add_argument("--only", help="只渲染指定优先级（逗号分隔，如 P0,P1）；回读校验以筛选后集合为基准")
     args = ap.parse_args()
     try:
         cases = load(args.cases)
@@ -118,14 +123,20 @@ def main():
         columns = policy.get("views", {}).get("columns", [])
         if len(columns) != 19:
             raise UsageError(f"policy.views.columns 应为 19 列，当前 {len(columns)}")
-        result = render(cases, args.task_id, args.outdir, columns, args.force, args.verify)
+        only = {p.strip().upper() for p in (args.only or "").split(",") if p.strip()} or None
+        if only:
+            unknown = sorted(only - {"P0", "P1", "P2"})
+            if unknown:
+                raise UsageError(f"--only 只接受 P0/P1/P2，收到 {unknown}")
+        result = render(cases, args.task_id, args.outdir, columns, args.force, args.verify, only)
     except VerifyError as exc:
         print(f"回读校验失败：{exc}", file=sys.stderr)
         sys.exit(1)
     except (UsageError, ValueError, OSError) as exc:
         print(f"渲染失败：{exc}", file=sys.stderr)
         sys.exit(2)
-    print(json.dumps({"views": result, **totals(cases)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"views": result, "only": sorted(only) if only else [], **totals(cases, only)},
+                     ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -187,6 +187,11 @@ class ExplorationStateTests(unittest.TestCase):
                  for name, attrs in attributes.items()]
         items.append(self.item("EXP-TRAV-1", status="PASS", observation="已清点页面控件", evidence_paths=[str(self.evidence)],
                                attributes=["functional", "visual", "usability"]))
+        self.data["attribute_rulings"] = {
+            "security": {"state": "not_applicable", "reason": "本次仅校验视图门禁，未涉及权限与会话"},
+            "compatibility": {"state": "not_applicable", "reason": "未声明内核/设备范围"},
+            "content": {"state": "not_applicable", "reason": "未涉及文案变更"},
+        }
         self.data["items"] = items
         gate = self.report()["gate"]
         self.assertEqual(gate["ready_pending"], 0)
@@ -348,6 +353,11 @@ class ExplorationStateTests(unittest.TestCase):
     def test_executed_view_restores_ceiling_with_skipped_sibling(self):
         passed = lambda ident, attr: self.item(ident, attributes=[attr], status="PASS",
                                                 observation="已实测", evidence_paths=[str(self.evidence)])
+        self.data["attribute_rulings"] = {
+            "security": {"state": "not_applicable", "reason": "本次仅校验视图门禁，未涉及权限与会话"},
+            "compatibility": {"state": "not_applicable", "reason": "未声明内核/设备范围"},
+            "content": {"state": "not_applicable", "reason": "未涉及文案变更"},
+        }
         self.data["items"] = [
             self.item("EXP-TRAV-1", attributes=["functional"], status="PASS",
                       observation="已实测", evidence_paths=[str(self.evidence)]),

@@ -108,3 +108,60 @@ steps / assertions / dependency_mode
 
 - `required: true` 的用例必须以自身 `id` 出现在对应 `acceptance[].case_ids`；AC 的 `requirement_id` 必须属于该用例 feature 的 `requirement_ids`。手工补数据最先断在这里。
 - 渲染出的 19 列 `case_id` 集合必须与 cases JSON **完全相等**，不一致即视图作废重渲（防手工改后回流）。
+
+## 9. 覆盖矩阵与覆盖缺口
+
+**四层覆盖**（`scripts/coverage_matrix.py`，判据见 `references/methodology/testcase_design_spec.md` §5 与 `config/policy.json` 的 `structure.coverage_layers`）：
+
+| 层 | 机械判据 | 判在 |
+|---|---|---|
+| L1 主流程 | 每个功能点至少一条 `coverage_flags` 含 `L1` 的用例 | COV（S0 保证结构） |
+| L2 业务分层 | `applicability.functional.state == applicable` 时，每个功能点至少一条含 `L2` 的用例；非 applicable 记 `not_required` 并回写状态与理由 | COV-LAYERS |
+| L3 设计方法 | `method_evidence` 中有见证的方法数 ≥ `min_witnessed_methods`（默认 2），且不得有"只有名字"的方法 | COV |
+| L4 探索性 | `suites` 含 `exploratory` 的用例数与占比，只统计不计入已覆盖 | COV-LAYERS |
+
+- 矩阵产物 `coverage-matrix.json` 由 `coverage_matrix.py` 生成；`gate_checks.py` 把同一份矩阵嵌进报告 `coverage_matrix` 字段，**报告数字与脚本输出必须同源**。
+- `missing_layers` 非空、义务未绑定、或已登记缺口未关闭时：**新用例集**（已声明 `applicability`）→ COV-LAYERS 判 BLOCK；未声明 `applicability` → 降 WARN 并列入覆盖缺口。**不允许**用"没有 `coverage_flags`"推断存量——历史资产必须按 §10 显式登记后才降为 WARN。
+
+### 9.1 覆盖义务 `coverage_obligations[]`（新用例集必填）
+
+覆盖不能由用例自己声明。生成前先把需求拆成义务，再让每条义务绑定真实用例；`coverage_flags` 只是义务满足后的派生摘要。
+
+| 键 | 要求 |
+|---|---|
+| `id` | 批内唯一稳定 ID（如 `OBL-01`），报告与缺口按它定位 |
+| `layer` | `L1`（正向主流程）或 `L2`（元素/边界/组合）；L3 方法见证、L4 探索预算不属义务 |
+| `kind` | `path` / `field_boundary` / `element` / `combination` / `state_edge` / `permission` / `data` / `copy` / `compatibility` / `security` |
+| `target` | 落到元素、字段边界、状态边或条件组合，不得写"待补充"等占位 |
+| `source` | 引用存在的 `REQ`/`FP`/`AC`，标明义务来自哪条规则 |
+| `required` | 严格布尔；`true` 时未绑定任何有效用例即判该层未覆盖 |
+| `tc_ids` | 实际覆盖该义务的用例 ID 数组；引用的用例必须存在，且 `coverage_flags` 声明同一层 |
+
+判定口径：L1/L2 以"每条必选义务都有有效 `tc_ids`、且标记口径无未覆盖功能点"为准；删标记或删义务都不能提高覆盖——两者不一致时 `case_data` 在 S0 直接报错。
+
+## 10. 历史资产登记（`meta.legacy_source`）
+
+v1.26.0 之前生成的 cases 没有覆盖义务。这类资产必须显式登记来源，才能按存量处理：
+
+| 键 | 要求 |
+|---|---|
+| `schema_version` | 生成时的 cases schema 版本 |
+| `migrated_at` | `YYYY-MM-DD`，登记日期 |
+| `owner` | 负责迁移的人或角色 |
+
+登记后 COV-LAYERS 降为 WARN 并在交付摘要列出"未迁移义务"；未登记的新旧不明资产一律 BLOCK。登记不等于免检，下一轮补义务后应删除该字段。
+
+**覆盖缺口 `coverage_gaps[]`**（顶层可选数组，`case_data.validate` 硬校验）：
+
+| 键 | 要求 |
+|---|---|
+| `gap_id` | `^GAP-\d{2,}$`，批内唯一 |
+| `kind` | `scene_unbound` / `element_uncovered` / `capability_unsupported` / `method_unwitnessed` / `budget_exceeded` / `data_unavailable` |
+| `target` | 缺口指向的功能点、元素、场景或方法，可定位 |
+| `reason` | 为什么补不上（缺材料/缺环境/缺实现），不得写"待补充"等占位 |
+| `obligation` | 补齐动作或责任方，含占位词即校验失败 |
+| `severity` / `required` | 可选；`required=true` 的缺口参与覆盖判定，不得只在附页出现 |
+| `status` | 可选：`open` / `in_progress` / `closed`（缺省 open） |
+| `closed_by` | 关闭证据对象（补测用例 ID、复测记录或产品确认）；有它才算关闭 |
+
+缺口进 19 列 Excel 的「覆盖缺口」附页与门禁报告，**不因主表齐全而消失**；未关闭缺口按类别压回对应层（`element_uncovered`→L2、`feature_uncovered`→L1、`method_unwitnessed`→L3），矩阵与 COV-LAYERS 同时报出，`obligation` 未闭环的必须在交付摘要中列为未覆盖义务。

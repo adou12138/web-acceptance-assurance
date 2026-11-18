@@ -15,6 +15,13 @@ NONCOMMITTAL = ("正常", "成功", "符合预期", "无异常", "功能可用",
                 "工作正常", "无问题", "没问题", "ok", "OK")
 PLACEHOLDERS = ("TODO", "TBD", "FIXME", "待补充", "待完善", "待落实", "待填写", "占位符", "xxx", "XXX")
 METHOD_CLAIMS = ("边界值", "边界条件", "等价类", "状态迁移", "判定表", "组合覆盖", "Pairwise", "pairwise")
+GAP_KINDS = {"scene_unbound", "element_uncovered", "capability_unsupported",
+             "method_unwitnessed", "budget_exceeded", "data_unavailable"}
+# 覆盖义务类型：与 design-spec「义务先行」一致；L3/L4 属方法见证与探索预算，不在此列。
+OBLIGATION_KINDS = {"path", "field_boundary", "element", "combination", "state_edge",
+                    "permission", "data", "copy", "compatibility", "security"}
+OBLIGATION_LAYERS = ("L1", "L2")
+GAP_ID_RE = re.compile(r"^GAP-\d{2,}$")
 
 
 def bare(value):
@@ -96,6 +103,20 @@ def validate(data):
         errors.append("meta.schema_version: expected 1.0")
     if meta.get("flow_kind") not in {"simple", "workflow", "stateful"}:
         errors.append("meta.flow_kind: expected simple/workflow/stateful")
+    if "legacy_source" in meta:
+        legacy = meta.get("legacy_source")
+        if not isinstance(legacy, dict):
+            errors.append("meta.legacy_source: object required")
+        else:
+            extra = set(legacy) - {"schema_version", "migrated_at", "owner"}
+            if extra:
+                errors.append(f"meta.legacy_source: unknown keys {sorted(extra)}")
+            for key in ("schema_version", "migrated_at", "owner"):
+                if not str(legacy.get(key) or "").strip():
+                    errors.append(f"meta.legacy_source.{key}: nonempty string required")
+            when = str(legacy.get("migrated_at") or "")
+            if when and not re.match(r"^\d{4}-\d{2}-\d{2}", when):
+                errors.append("meta.legacy_source.migrated_at: expected YYYY-MM-DD（迁移登记的日期）")
     reqs = indexed(data.get("requirements"), "requirements", True)
     tops = indexed(data.get("features"), "features", True)
     leaves = {}
@@ -108,6 +129,54 @@ def validate(data):
     scenes = indexed(data.get("scenarios", []), "scenarios")
     cases = indexed(data.get("testcases"), "testcases", True)
     diagrams = indexed(data.get("diagrams", []), "diagrams")
+    obligations = data.get("coverage_obligations")
+    if obligations is not None:
+        if not isinstance(obligations, list):
+            errors.append("coverage_obligations: array required")
+        else:
+            known_sources = set(reqs) | set(leaves) | set(acs)
+            seen_obligations = set()
+            for i, ob in enumerate(obligations):
+                loc = f"coverage_obligations[{i}]"
+                if not isinstance(ob, dict):
+                    errors.append(f"{loc}: object required")
+                    continue
+                extra = set(ob) - {"id", "layer", "kind", "target", "source", "required", "tc_ids", "note"}
+                if extra:
+                    errors.append(f"{loc}: unknown keys {sorted(extra)}")
+                for key in ("id", "layer", "kind", "target", "source"):
+                    if not str(ob.get(key) or "").strip():
+                        errors.append(f"{loc}.{key}: nonempty string required")
+                oid = str(ob.get("id") or "").strip()
+                if oid:
+                    if oid in seen_obligations:
+                        errors.append(f"{loc}.id: duplicate {oid}")
+                    seen_obligations.add(oid)
+                layer = str(ob.get("layer") or "").strip()
+                if layer and layer not in OBLIGATION_LAYERS:
+                    errors.append(f"{loc}.layer: expected L1/L2（L3 方法见证、L4 探索预算不属义务）")
+                kind = str(ob.get("kind") or "").strip()
+                if kind and kind not in OBLIGATION_KINDS:
+                    errors.append(f"{loc}.kind: unknown value {kind}（允许 {sorted(OBLIGATION_KINDS)}）")
+                target = str(ob.get("target") or "").strip()
+                if target and (has_placeholder(target) or is_noncommittal(target)):
+                    errors.append(f"{loc}.target: 不得为占位或空泛描述，须落到元素/边界/状态边/条件组合")
+                source = str(ob.get("source") or "").strip()
+                if source and source not in known_sources:
+                    errors.append(f"{loc}.source: unknown reference {source}（须引用存在的 REQ/FP/AC）")
+                boolean(ob, "required", loc)
+                tc_ids = ob.get("tc_ids", [])
+                if not isinstance(tc_ids, list) or any(not isinstance(x, str) for x in tc_ids):
+                    errors.append(f"{loc}.tc_ids: string array required")
+                    tc_ids = []
+                for tid in tc_ids:
+                    tc = cases.get(tid)
+                    if tc is None:
+                        errors.append(f"{loc}.tc_ids: unknown testcase {tid}")
+                        continue
+                    flags = tc.get("coverage_flags")
+                    if isinstance(flags, list) and layer and layer not in flags:
+                        errors.append(f"{loc}.tc_ids: {tid} 未声明 {layer}（义务绑定须与该用例声明的层一致）")
     paths, path_scene = {}, {}
     for ident, req in reqs.items():
         for key in ("name", "source", "description", "confirmation"):
@@ -306,6 +375,42 @@ def validate(data):
         smoke = sum(1 for tc in cases.values() if "smoke" in safe_refs(tc, "suites"))
         if smoke / len(cases) > 0.5:
             warnings.append(f"suites: smoke 占 {smoke}/{len(cases)}，冒烟应聚焦入口可达与核心展示，不宜过半")
+    gaps = data.get("coverage_gaps")
+    if gaps is not None:
+        if not isinstance(gaps, list):
+            errors.append("coverage_gaps: array required")
+        else:
+            seen_gaps = set()
+            for i, gap in enumerate(gaps):
+                loc = f"coverage_gaps[{i}]"
+                if not isinstance(gap, dict):
+                    errors.append(f"{loc}: object required")
+                    continue
+                for key in ("gap_id", "kind", "target", "reason", "obligation"):
+                    if not str(gap.get(key) or "").strip():
+                        errors.append(f"{loc}.{key}: nonempty string required")
+                gid = str(gap.get("gap_id") or "")
+                if gid:
+                    if not GAP_ID_RE.match(gid):
+                        errors.append(f"{loc}.gap_id: expected GAP-NN")
+                    if gid in seen_gaps:
+                        errors.append(f"{loc}.gap_id: duplicate {gid}")
+                    seen_gaps.add(gid)
+                kind = gap.get("kind")
+                if kind and kind not in GAP_KINDS:
+                    errors.append(f"{loc}.kind: unknown value {kind}（允许 {sorted(GAP_KINDS)}）")
+                if has_placeholder(str(gap.get("obligation") or "")):
+                    errors.append(f"{loc}.obligation: 含占位词，须写明补齐动作或责任方")
+                extra = set(gap) - {"gap_id", "kind", "target", "reason", "obligation",
+                                    "severity", "required", "status", "closed_by"}
+                if extra:
+                    errors.append(f"{loc}: unknown keys {sorted(extra)}")
+                if "required" in gap and type(gap["required"]) is not bool:
+                    errors.append(f"{loc}.required: boolean required")
+                if "status" in gap and gap["status"] not in {"open", "in_progress", "closed"}:
+                    errors.append(f"{loc}.status: expected open/in_progress/closed")
+                if "closed_by" in gap and not isinstance(gap["closed_by"], dict):
+                    errors.append(f"{loc}.closed_by: object required（须给出证据或补测用例）")
     stats = {"requirements": len(reqs), "functions": len(tops), "feature_points": len(leaves), "acceptance": len(acs), "scenarios": len(scenes), "testcases": len(cases)}
     if "stats" in meta and meta["stats"] != stats:
         errors.append(f"meta.stats mismatch; computed {stats}")

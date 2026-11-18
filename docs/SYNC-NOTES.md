@@ -13,7 +13,7 @@
 | 3 | `SKILL.md` 元规则 9/10/12 + orchestrator 阈值段 | `config/policy.json` thresholds | 冒烟三层/P0/去重/小样本/分批阈值 | 已对照（定稿值见 policy.json，各带 role） |
 | 4 | `tools/gate_checker.py` G1~G7、`tools/p5_validate.py` V05~V13 | `skills/case-generator/scripts/gate_checks.py` | 判据与白名单 | 已对照（用例化改写：G1 禁止模式+确认拦截、G2 九种模糊表述+具体性信号、G3 A≥3 步/B 不标冒烟、G4 冒烟来源、G5 Jaccard+占位并集、G6 合并模式+豁免、G7 追溯；V01-V04/V10 明确不搬，见 policy.gates.not_migrated。**G1 规则集已抽象为 `policy.gate_rules.g1` 可配置**（方案 §12，2026-11-17 落地：脚本内置默认与 policy 段一致，policy 段存在时以 policy 为准；确认分级豁免简化为纯「确认」步拦截，恢复口径见 policy.gate_rules.g1.confirm.note） |
 | 5 | `prompts/P0.5_prd_quality_review.md` 八维度 | `skills/requirement-review/references/prd-dimensions.md` | 维度清单与 blocking 判定 | 已对照（只取维度与判定，不取分数/权重/等级） |
-| 6 | `prompts/schemas/*.json`（16）、`knowledge/**`（4） | `skills/case-generator/references/schemas/`、`references/methodology/` | 复制件完整性 | 已对照（一次性复制，参考用） |
+| 6 | `prompts/schemas/*.json`（16）、`knowledge/**`（4） | `skills/case-generator/references/legacy-schemas/`、`references/methodology/` | 复制件完整性 | 已对照（一次性复制，参考用）。**v1.19.0 起**：schema 目录改名 `legacy-schemas/` 并加 README 声明"未实现、不代表支持 px 等能力"；`methodology/` 4 份已由 `case-generator/SKILL.md`「方法论参考」逐份回链（此前零引用属孤儿） |
 
 ## 人工对照方法
 
@@ -141,3 +141,313 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **复核**：与源逐文件 `cmp` 后，剩余 4 处差异均为**预期剥离适配**——`SKILL.md`（+10 行包内版声明与整合标注）、`check_environment.py`（`PLAYWRIGHT_CORE_PATH` 候选）、`compare_fields.py`（缺输入/坏 JSON → rc=2）、`test_start_gate.py`（三态断言）；另有包内独有 `test_compare_input_errors.py`。
 - **判据补强**：此前「快照同步至 4.48.0」的验收只看 `SKILL.md` 版本号，版本号升了即认为同步完成。此后同步验收必须按**源提交涉及的文件清单**逐份 `cmp`，不能只看入口文件的 frontmatter。
 - **验证**：包根 139 测试 OK；包内 figma 367 测试 OK（`PYTHONUTF8=1` + `PLAYWRIGHT_CORE_PATH`）。缓存 `1.18.1` 与工作区 `diff` 为空，旧缓存 `1.16.0`/`1.17.0`/`1.18.0` 的 `SKILL.md` 全部转为 `.disabled`。
+
+### 复审修复（v1.18.2，2026-11-17）
+
+> **版本谱系说明**：本会话早先的整合轮（I1–I12）此后经后续轮次（v1.15.0–v1.18.1：跳间门禁、通道文档、figma 4.48.0 副本对齐等）继续演进；本轮 OM1–OM6 修复基于 **v1.18.1** 基线落盘。包内 figma 实际版本为 **4.48.0**（更早的 4.47.0 冻结表述以本文件尾部 v1.18.1 记录为准）。
+
+遗漏审查 OM1–OM6 一次修完（源：qa `p2_evidence` / api M9·M12 / figma `init_workdir`·degradation）：
+
+| # | 遗漏 | 落点 | 修复 |
+|---|---|---|---|
+| OM1 | 工作区自动 `.gitignore` | `scripts/execution_ledger.py`（`initialize` + `_ensure_gitignore`） | init 时写 `.auth/`、`*.storage.json`、图片/视频/har/zip/log 忽略行（追加缺失行语义，不覆盖已有）；`tests/test_om_fixes.py` 回归 |
+| OM2 | 能力 × 降级 × 停止条件矩阵 | `references/execution-evidence.md` | 8 能力矩阵（trigger / fallback / limitations / stop_condition / evidence_label）；与 figma `tooling.md` 的取数通道能力表**主题相邻但不重复**（前者为专家主体通用降级，后者为 figma 内部通道） |
+| OM3 | 测试点来源与原文片段 | `review-result.schema.json` + `prd-dimensions.md` + `review_check.py` | AC 可选 `evidence_refs:[{source,quote}]`（schema + 校验），评审要求 blocking/pending 指原文；回归测试 |
+| OM4 | 计划 vs 实际对账 | `batch.py`（plan 记 `estimated_total`、aggregate 出 `plan_vs_actual`）+ `batches.schema.json` | 偏差 >20% 告警不静默；回归测试 |
+| OM5 | 套件批准 / 基线晋升 | `references/execution-management.md` | 晋升四条件（全 TC 记录且 bugs 已知 / 显式批准留痕 / 旧基线留档 / 冻结只读） |
+| OM6 | 跨 skill 路由回归样本集 | 新增 `references/route-prompts.json`（9 条）+ agents 判路表引用 + `tests/test_om_fixes.py` | 判路表或 description 改动后逐条对照，命中率不降 |
+
+**与既有轮次的兼容性核查**：本轮 11 个改动文件均基于 v1.18.1 现有文本成功叠加，`git status` 仅显示本轮改动（9 改 + 2 新增），未覆盖 v1.15.0–v1.18.1 的提交成果；agents「标准流水线与主动升级」段经后续轮次修正后的口径（第 3 跳机械校验 / exploration gate 为批次结论门禁）**保持不变**。
+
+验证：四入口 **606 tests OK**（包根 144 = 原 139 + OM 5 / case-generator 78 / api-test 17 / figma 367（4.48.0））；validate ✅。
+
+## 能力覆盖补齐（v1.19.0，2026-11-17，依据外部审计 + 自审）
+
+> 一次发布覆盖计划分段 P0–P4（计划里的 1.19.0–1.23.0 未单独发版）；P5 属包外挂载，不改包版本。
+
+### 1. 声明与实现对齐（P0）
+
+| # | 问题 | 处置 | 落点 |
+|---|---|---|---|
+| 1 | 门禁名写「四层覆盖与方法见证」，实现只到 L1（S0 保证）+ L3 方法见证 | L2/L4 由新增 `COV-LAYERS` 判定（存量集无 `coverage_flags` 时降告警，新集缺层才 BLOCK），门禁名改为「四层覆盖 L1/L3 + 方法见证」，policy 增 `coverage_layers_note` 与逐层 `implementation/judged_by` | `gate_checks.py`、`config/policy.json`、`SKILL.md`、`design-spec.md` |
+| 2 | 16 份 `references/schemas/` 零引用（`px_output` 会被误读为"支持图片理解"） | 改名 `legacy-schemas/` 并加 README 逐条声明未实现；同步改本文件对照表 #6 路径 | `references/legacy-schemas/` |
+| 3 | `references/methodology/` 4 份零引用（含四层覆盖原始判据 §5） | `case-generator/SKILL.md` 增「方法论参考」表逐份回链，并指定 §5 为 L1–L4 口径来源 | `SKILL.md` |
+| 4 | 门禁改名后跨轮比对可能因 `name` 不同报差异 | 明确"改名仅影响文案，判据不变；跨轮比对按 gate id 不看 name" | 本节 |
+| 5 | 旧版缓存 1.18.1 仍留启用态 `SKILL.md` | 4 份改 `SKILL.md.disabled`（`tests/test_skill_registration.py` 的契约要求） | 插件缓存 `cache/my-experts/web-acceptance-assurance/1.18.1/` |
+
+### 2. 判据补强（P1）
+
+| # | 能力 | 实现 | 判据 |
+|---|---|---|---|
+| A1 | 四层覆盖矩阵 | 新增 `scripts/coverage_matrix.py`：L1 每功能点 ≥1 条 L1 用例；L2 functional 适用时每功能点 ≥1 条 L2，否则记 `not_required` 并回写理由；L3 有见证方法数 ≥ `min_witnessed_methods`（默认 2）且不得有"只有名字"的方法；L4 只统计不计入覆盖 | `COV-LAYERS`：`missing_layers` 非空时——新集（有 `coverage_flags`）且已声明 `applicability` → BLOCK；未声明 applicability 或全表无 `coverage_flags` 的存量集 → WARN 并列入缺口（沿用 COV-UI 存量口径）；矩阵随报告输出 `coverage_matrix` 字段 |
+| A2 | 组合覆盖举证 | 移植 `scripts/pairwise.py`（零第三方依赖）；**verify 增加对产物形态 `{"角色":"访客"}` 的兼容**，使"生成 → 独立重算"闭环可落地 | `COV`：声明 `pairwise`/`组合覆盖` 必须整份回填 `parameters/combinations/input_hash`，由 `pairwise.verify` 独立重算，未通过即 BLOCK（不接受生成器自证） |
+| A3 | 缺口登记 | `case_data` 新增顶层 `coverage_gaps[]`（`gap_id/kind/target/reason/obligation`，kind 六值枚举、`obligation` 禁占位）；19 列 Excel 增「覆盖缺口」附页（主表仍逐字 19 列）；门禁 counts 增 `coverage_gaps` | 绑不到场景的证据必须进缺口，不得挂无关场景凑数 |
+
+### 3. 效率与导出（P2）
+
+- `render_csv.py --only P0,P1`：精选视图；**回读校验改用筛选后集合为基准**，避免按全集比对导致假失败。
+- 新增 `render_testpoints.py`：由 cases JSON 折叠出 9 列测试点评审视图（功能点/验收标准/测试点/覆盖层/设计方法/用例数/最高优先级/含冒烟/缺口随行）。**边界：派生视图，不替代用例生成**，`execution_ledger.init` 会拒收该 CSV（只认含 `testcases[]` 的 cases JSON）。
+
+### 4. 入口质量（P3）
+
+- 新增 `skills/requirement-review/scripts/extract_docx_media.py`：zipfile + hashlib 解包 `word/media/` 并登记 sha256（不调云端 OCR、不判断内容）；识读由宿主多模态完成，结果写 `review-result.json` 的 `visual_evidence[]`（schema 与 `review_check` 同步校验；`image_understood=false` 时必须写 `boundary` 说明缺口，禁止凭图猜规则）。
+- 本地文档优先条款：`requirement-review` 与 `api-test` 各写明"接口/规则以本地知识库全文为准，禁止用 WebFetch 抓在线文档替代本地；联网仅核对版本差异并标注；本地缺失报缺不默认联网"。
+
+### 5. 维护侧质量基线（P4）
+
+- 新增 `scripts/eval_cases.py` + `docs/evals-baseline/`：机械指标（缺层数 / L1 比例 / 方法数 / 断言密度 / 空话占位 / 冒烟与 P0 占比 / 缺口数 / 结构错误）跨版本比对，退化退出码 1；基线与样例 `fixture-12.json`。
+- **能力边界已写入 README**：只回答"结构是否更完整"，不回答"是否抓到真缺陷"；基线相同不代表质量相同。
+
+### 6. 站点挂载（P5，包外）
+
+- `D:/TestCase/.workbuddy/site-adapters/wjx/`：`sojump.py`、`business_flow_executor.py`、wjx 冒烟配置与业务流候选、`exclude_params.json` 母本 + 落位/移除/自检说明；真实个人配置仍只在 `~/.workbuddy/wjx-api-test/personal_config.json`（用 `WJX_CONFIG` 指过去，不复制）。
+- 包根 `.gitignore` 增两条落位文件忽略，防误提交。
+- 实测：落位后 `from adapters.sojump import SojumpAdapter` 可导入，移除后 `adapters/` 恢复原状。
+
+### 7. 验证与已知边界
+
+- 测试（`PYTHONUTF8=1`）：包根 **164 tests OK**（含新增 `test_coverage_matrix.py` 7 例、`test_pairwise.py` 7 例、`test_eval_cases.py` 6 例）、case-generator **109 tests OK**（含新增 `test_cov_layers.py` 13 例、`test_render_extras.py` 7 例、`test_visual_evidence.py` 11 例）、api-test **17 tests OK**；figma 367 例本轮未跑（未改动其任何文件）。
+- 已知边界：`testpoints` 是派生不是免生成；`eval_cases` 只做机械指标；原型图识读质量取决于宿主多模态能力与图本身可读性，脚本只保证"图被取出来了"。
+- 工作区提示：本轮开始前仓库已有未提交改动（`execution_ledger.py`、`batch.py`、`batches.schema.json`、`prd-dimensions.md`、`agents`、`references/execution-*.md`、`review-result.schema.json` 的 `evidence_refs` 等），非本轮产物；本轮改动已尽量保持最小 diff（schema 曾因 JSON 重写产生整篇格式漂移，已回滚重做为 33 行增量）。
+
+## 复审修复（v1.19.0 追加，2026-11-17 19:20，依据第二次独立核验）
+
+| # | 发现 | 处置 | 落点 |
+|---|---|---|---|
+| R1 | 交付 JSON 视图（`render_json.build_view`）不透传 `coverage_gaps`，"缺口不静默"只对 Excel/测试点视图成立 | 视图在有缺口时输出顶层 `coverage_gaps`；补透传测试（无缺口不出键） | `render_json.py`、`tests/test_render_json.py` |
+| R2 | `tests/test_reference_links.py` 的正则不匹配子目录引用，`references/methodology/**` 的回链实际未被守卫覆盖 | 正则扩展为允许 `references/<子目录>/<名>.md`；回链检查覆盖 references 全树（`legacy-schemas/` 整目录隔离除外）；指向其它 skill 文档（`*/SKILL.md`）的资料性链接不校验存在性 | `tests/test_reference_links.py` |
+
+复审回归：包根 164 / case-generator 110 / api-test 17 全绿。
+
+## v3 目标审计整改 A 批（v1.20.0，2026-11-17）
+
+依据《砺衡目标审计与整改执行方案 v3》，先写失败反例再修实现，覆盖 G03/G08/G09/G12 中“错误放行”类机制；保留先行备份 `D:/TestCase/backup/web-acceptance-assurance.v1.19.0.pre-v3.zip`。
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G08 | 探索门禁新增“必选义务”约束：未决副作用、必选质量属性（security/compatibility）被阻塞/未执行、必选页面未遍历，均压低 verdict_ceiling 为待核实；非必选项仍只披露。保留有 sibling PASS 时非必选 SKIPPED 不阻断的既有语义 | `scripts/exploration_state.py`(_gate + gate 输出新增 unreconciled_pending/blocked_mandatory)；`tests/test_v3_goal_a.py` |
+| G09 | 台账进门新增门禁报告内容绑定：携带 binding(design_hash/policy_version/scope/required_checks) 且 hash 与设计一致→已绑定；缺 binding→标“待核实/兼容模式”；声明必过项未通过或 hash 不符→拒绝 | `scripts/execution_ledger.py`(_gate_precondition 增 design 入参)；既有精确断言测试同步 |
+| G12 | 写授权改为适配器无关：只读操作放行；写/未知/空操作需 environment.type=test+write_enabled=true；适配器的 is_write_allowed 拒绝权适用于任何适配器名（不再硬编码 sojump）；门禁判定异常 fail closed | `skills/api-test/scripts/flow.py`(READ_OPS + write_gate 重写) |
+
+回归：A 批反例 10/10、包根 174、case-generator 110、api-test 17 全绿（PYTHONUTF8=1）。
+
+## v3 目标审计整改 B 批（v1.21.0，2026-11-17）
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G01 | 评审契约新增可选 scenarios 字段（顶层键 + schema + 结构校验：id/name/goal/paths.kind），workflow/stateful 可由 review_bridge 原样承接，消除“评审拒收但生成强求”的互斥 | `requirement-review/references/review-result.schema.json`、`review_check.py`、`tests/test_v3_goal_b.py` |
+| G02 | 新增 `coverage_obligations`（稳定 id/layer/kind/target/source/required/tc_ids）：声明后 L1/L2 以“义务→有效 TC 引用”重算，flags 仅派生；未绑定义务进 `unmet_obligations`/gaps，单改 flags 不再提高覆盖 | `scripts/coverage_matrix.py`(_obligation_overlay) |
+| G03 补 | functional=deferred/insufficient_evidence/unspecified 不再记 L2 not_required，保持未覆盖缺口；仅明确 not_applicable 剔除分母 | `coverage_matrix._layer_l2` |
+| G04 | 方法见证分类型校验（_witness_valid）：boundary 需 ≥2 具名/具体边界，scenario/state 需真实边，equivalence 需有效/无效类，decision_table 需条件+动作；布尔/字符串/"x" 伪见证不计入 L3 | `coverage_matrix._layer_l3`、`gate_checks` 复用矩阵 |
+| G05 | COV-PATH 按“每条已声明异常/权限路径须有 tc.path_id 关联用例或对象形态豁免”判定；flow_kind=simple 一旦声明场景也不再直通；小样本仅放宽比例告警，必选路径缺失仍阻断；字符串豁免继续拒绝 | `gate_checks._cov_path`；`tests/test_gate_checks.py` 夹具补异常路径 TC |
+
+回归：B 批反例 6/6、case-generator 110、包根 180、api-test 17 全绿。
+
+## v3 目标审计整改 C 批（v1.22.0，2026-11-17）
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G11 | 回补源 5.0.2 已有但包内遗漏的语义复核修复：新增 `_normalize_newlines`（CRLF/CR 归一），correct_llm_value 的修订值逐项验据——enum 条目只验值不验释义、bool 归一小写、扁平清单逐词验；空 enum 条目判无据而非崩溃。源/包同输入实测一致（enum、bool 均 1 applied/0 rejected） | `skills/api-test/scripts/llm_semantics.py` |
+| G13 | 新增 `resolve_adapter_path` 与 build_adapter 的包外加载：WJX_ADAPTER_DIR 指向目录下同名 .py 优先于包内适配器加载（importlib.spec_from_file_location），validate_exec_config 放行包外同名适配器；站点适配器不再需要改写已安装专家包。dry-run 在加载前可解析来源 | `skills/api-test/scripts/flow.py` |
+
+回归：C 批反例 5/5、包根 185、case-generator 110、api-test 17 全绿；源/包语义复核同输入结果一致。
+
+## v3 目标审计整改 D 批（v1.23.0，2026-11-17）
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G06 | review_bridge 保留 AC 的 evidence_refs、评审的 visual_evidence/not_reviewed/confirmed_rules；pending 的 AC 归一为 case_data 合法值 provisional + needs_confirmation=true（不再冒充 confirmed）；coverage_gaps 从评审 {area,reason} 机械翻译为 cases {gap_id,kind,target,reason,obligation}，避免直接透传触发校验失败反而丢缺口 | `review_bridge.py`(translate_gaps + 字段保留) |
+| G07 | review_check 拒绝 image_understood=false 且带 extracted_rules（禁止凭未识读图猜规则）；render_review 新增「原型/截图证据」章节，列出每张图已/未识读、边界与提取规则 | `review_check.py`、`render_review.py` |
+| G17 | 回链守卫语料与枚举扩展到全部 skill 级 references（70 份），跳过 GitHub 出处/外部开源引用行以免误报；孤儿判断相对 ROOT | `tests/test_reference_links.py` |
+| G18 | render_testpoints 在 coverage_obligations 存在时即使无 testcases 也能出测试点（稳定 TP id/义务类型/来源/0 用例）；缺口 target 精确 ID 边界匹配（FP-01 不再串 FP-010）；main 接受“仅义务”输入 | `render_testpoints.py` |
+
+回归：D 批反例 6/6、包根 191、case-generator 110、api-test 17 全绿；四类反例逐条复核通过。
+
+## v3 目标审计整改 E 批（v1.24.0，2026-11-17）
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G14 | bug-detection-map 升级映射新增 5 类可判定信号（死按钮无反馈、状态残留/读回不一致、控制台 5xx/断网、长文本/空态/未渲染变量、正常异常交替纪律），命中即主动升级，未命中仍不随意扩大范围 | `references/bug-detection-map.md` |
+| G15 | 六态映射增“保真纪律”：映射只用于门禁计数，不改外部报告原状态；warn 不以业务 PASS 覆盖、须留原文与严重性；pending/notRun/dataMissing 不因同视角另一 PASS 消失；必选质量属性上限按 `blocked_mandatory` 判定 | `references/bug-detection-map.md` §五.4；配合 A 批 exploration_state 门禁 |
+| G16 | 新增 `content`（文案）属性到探索词汇表并列为必选质量属性（与 security/compatibility 同口径）；visual-usability 增文案检查面（术语/单位/日期时区/按钮语义/错误定位/未渲染变量/长文/i18n，客观错误与主观建议分账） | `scripts/exploration_state.py`(ATTRIBUTES/MANDATORY_ATTRIBUTES)、`references/visual-usability.md` |
+
+回归：E 批反例 3/3、包根 194、case-generator 110、api-test 17 全绿。
+
+## v3 目标审计整改 F 批（v1.25.0，2026-11-17）
+
+| ID | 修复 | 落点 |
+|---|---|---|
+| G10 | eval.compare 退化方向重写：LOWER_IS_WORSE（缺层/结构错误/空话/未关闭缺口上升即退化）+ HIGHER_IS_WORSE（方法数/断言密度/L1 比例下降即退化）；结构错误/空话/缺口不再被忽略，退化退出码 1 | `scripts/eval_cases.py` |
+| G19 | 新增独立检出效果评测协议 + 5 个夹具（4 基础场景 + 1 留出）：冻结隐藏答案、合法近似反例、必选分支分母、分账指标（检出/误报/证据完整/未测义务/耗时），未实测保持"效果待验证" | `docs/evals-baseline/detection-protocol.md`、`detection-fixtures/*.json` |
+
+回归：F 批反例 5/5、包根 199、case-generator 110、api-test 17 全绿；三类硬退化逐条复核通过。
+
+## 全面核查修复（v1.26.0，2026-11-17）
+
+核查结论修正：A–F 六批中 6 项（G02/G03/G06/G09/G16/G17）属部分关闭——机制存在但真实链路不可达或可被"不写就没事"绕过。本批按核查报告逐项闭合：
+
+| 项 | 原缺口（可复现） | 修复 | 落点 |
+|---|---|---|---|
+| G02 | `coverage_obligations` 无生成规范、无契约校验，不写义务时 L1/L2 仍按 flags 自证 | 义务进 `case_data.validate`（id 唯一、layer∈L1/L2、kind 枚举、target 非占位、source 必须存在、required 布尔、tc_ids 必须存在且声明同层）；design-spec §9.1/§10 定义必填；SKILL.md 增"覆盖义务先行" | `scripts/case_data.py`、`skills/case-generator/references/design-spec.md`、`SKILL.md` |
+| G03 | 删光 `coverage_flags` 仍按"存量"降 WARN，A 批要求的显式 legacy 登记未实现 | 取消"无 flags 即存量"推断：新资产无义务 → COV-LAYERS failed；仅 `meta.legacy_source{schema_version,migrated_at,owner}` 齐全才 WARN 并披露未迁移义务 | `gate_checks._cov_layers`、`spec §10` |
+| G06 | `coverage_gaps` 在矩阵/门禁零引用，已登记缺口判定上消失 | 未关闭缺口按 kind 回落 L1/L2/L3 并压层，进 `gaps`/`open_registered_gaps`；`closed_by` 才算关闭；缺口可选 `severity/required/status` 进契约 | `coverage_matrix._gap_overlay`、`case_data` |
+| G09 | 门禁不产 `binding`，只有消费端校验 → 真实报告永远待核实，手写 binding 即可自证 | `gate_checks._summary` 直接输出 binding；哈希抽出 `scripts/design_fingerprint.py`，与 `execution_ledger.fingerprint` 同一实现 | `gate_checks.py`、`design_fingerprint.py`、`execution_ledger.py` |
+| G16 | 安全/兼容/文案只在"记录里出现"时生效，整类省略可拿通过 | 清单根 `attribute_rulings` 逐类裁定（applicable / not_applicable+理由 / blocked）；缺失或 applicable 未实测 → 上限待核实，`gate.mandatory_attributes` 明示状态 | `exploration_state.py`、`exploration-runtime.md`、`agents` |
+| G17 | 回链守卫仍按"同名文件任一存在"兜底，写错层级也能过 | 按引用方所属根解析（skill 只查本 skill、包级只查包级）；跨层须显式白名单；裸 `references/…md` 写法才纳入匹配，全路径不误算 | `tests/test_reference_links.py` |
+
+附带行为对齐：义务绑定的用例必须声明同层 flags（S0 拦截）；L2 在 functional 非 applicable 时不被义务拉回"已覆盖"；`render_testpoints` 只对未绑定义务单独出测试点行，避免同一功能点裂成多行。
+
+附带：`scripts/legacy_scan.py`（只读扫描存量 cases，分 obligations/legacy/blocked 三类）；另修真实数据暴露的健壮性问题——历史用例的 `method_evidence` 可能是数组，见证校验器改为判"无见证"而非抛异常（此前会中断整套门禁）。
+
+回归：新增 `tests/test_v126_hardening.py` 23 例；包根 199 → **222**、case-generator 110 → **111**、api-test 17 全绿（合计 350）。
+
+## 独立盲测加强 + 判定方法学（v1.27.0，2026-11-18）
+
+**盲测链从"协议文本"变成"可执行、可拒绝、可复算"的工具链**：
+
+| 项 | 修复前 | 现在 |
+|---|---|---|
+| 答案隔离 | `hidden_answers` 与题面同文件，执行方打开即见 | `blind_eval.py prepare` 只导题面（场景/输入/必选分支/交付格式），答案键留在评测者侧；`verify` 检出答案文件、答案 ID、`executor_saw_answers=true` 即拒 |
+| 计分 | 无脚本，靠人工看报告 | `score` 机械计分：按 `match_all/match_any` 词元匹配、按 severity 分账、误报按 `category` 归类、证据文件必须存在、分支分母来自答案键（改名即报错） |
+| 运行治理 | 未定义 | `run.json` 记 `fixture_sha256`/`protocol_sha256`/预算/执行方；`compare` 对同执行方、协议变更、夹具不同分别告警并标"不可比" |
+| 准出 | 文字条件 | 写进 `verdict`：blocker/major 全检出 + 误报 0 + 分支 100% + 证据齐全 + 未测义务 0 + 无效动作 0 才 pass |
+
+配套：五个夹具的答案与近似反例补 `match` 规则与 `category`（八类）；协议文档重写为八节（隔离/治理/计分/对照/准出/反作弊/逃逸回流/边界）。
+
+**方法论文档补三份**（与源 `qa-req2testcase-generator/knowledge/methodology` 同体例；该目录三份已在包内逐字同步，本次补的是判定侧缺口）：
+
+| 文档 | 内容 | 接入点 |
+|---|---|---|
+| `detection_methods.md` | 判定链、oracle 六源、七类可判定信号、证据最小集、六态、"只能待核实"四种情形 | `agents` 判定纪律、`bug-detection-map.md`、`case-generator/SKILL.md` |
+| `defect_patterns.md` | 11 类缺陷模式（功能/数据/状态/权限/界面/易用/文案/兼容/性能/接口）的最小触发、观察点、常见误判 | 同上；盲测答案键取模式来源 |
+| `false_positive_guard.md` | 误报四问、八类合法近似反例、缺陷/待确认/建议分账 | 同上；盲测 `category` 与之一一对应 |
+
+回归：新增 `tests/test_blind_eval.py` 15 例；包根 237、case-generator 111、api-test 17 全绿。
+
+## 本机专家资产盘点与接入（v1.28.0，2026-11-18）
+
+对本机 `experts/plugins` 下 36 个专家做了只读盘点，筛出 10 个测试/质量相关专家逐份阅读，按"是否补砺衡缺口、是否与现有资产重复"决策：
+
+| 专家 | 可借鉴内容 | 决策 |
+|---|---|---|
+| `bug-test-expert` | 40+ 业务模块坑点知识库（登录/权限/上传/支付/导入/接口/兼容/弱网/安全/无障碍/时区/回调…） | **部分采纳**：只取 Web 新需求验收相关 15 个模块，改写为 `references/business-pitfalls.md`；移动端/车载/IoT/MQ/混沌工程不搬 |
+| `qa-testing` | OWASP Top 10 覆盖目标、缺陷级别 P0–P4、质量指标 | 部分采纳：OWASP 映射进坑点库"安全基线"模块；指标口径与砺衡 `execution-evidence` 冲突，不采纳 |
+| `ai-product-testing-expert` | 幻觉/注入/多轮一致性/固定参数可复现 | 部分采纳：压缩为坑点库"AI 生成/对话"模块；不引入其评测集流程 |
+| `test-automation`（defect-analyst） | 失败归组、竞争假设、置信度、共同根因、flaky | **不采纳**：砺衡 `references/execution-evidence.md` 的"缺陷与复测"已覆盖（竞争假设、置信度、相似现象不直接合并根因、flaky 隔离），重复搬会两套口径 |
+| `software-acceptance-expert` | defect-triage / test-strategy / acceptance-review | 不采纳：技能均约 1.5KB，只有原则无判据，低于现有 execution-evidence |
+| `api-testing-expert` | 通用 API 测试策略 | 不采纳：包内 `skills/api-test`（wjx 5.0.2 系）资产更完整 |
+| `functional-test-expert` | 需求→用例数据包 | 不采纳：与 `case-generator` 主链重复 |
+| `ai-testing-quality-assurance-expert` | crossdoc 证据报告 / skill-preflight | 不采纳：前者是文档交叉校验、后者是技能自检，均非检出能力 |
+| `webapp-testing` | 起服务/浏览器测试流程 | 不采纳：`references/browser-connection.md` 已覆盖且更严 |
+| `software-test-engineer` / `flycatsoft-ce-shi-gong-cheng-shi` | 用例方法速查、行业坑点 | 不采纳：内容为通用口诀，已含于 `design_methods.md` / `business-pitfalls.md` |
+
+新增 `references/business-pitfalls.md`：15 个 Web 模块 × 高/中风险 × "先看什么"，附安全"仅防护验证"与不虚构阈值纪律；与按症状分类的 `methodology/defect_patterns.md` 互补。
+
+接入：`agents`（进探索前按模块过一遍）、`references/bug-detection-map.md`（业务坑点入口）、`methodology/defect_patterns.md`（指向模块清单）、`README.md` 文件清单；新增路由断言（三处都必须指向该文档）。
+
+回归：包根 238、case-generator 111、api-test 17 全绿。
+
+## 方法论文档补充盘点（v1.29.0，2026-11-18）
+
+**修正上一轮盘点口径**：v1.28.0 的扫描只到 3 层目录，漏掉了专家包 `skills/*/references/` 子目录（这批正是方法论文档所在）。本轮全深度重扫 10 个测试类专家共 54 份文档，输出 `本机测试类方法论文档清单_v1.csv`（UTF-8-sig，含决策与理由）。
+
+新采纳两份（均为之前漏扫的 references）：
+
+| 文档 | 来源 | 落地 |
+|---|---|---|
+| 证据等级 E1/E2/E3 | `test-automation/skills/test-automation-ops/references/evidence-grading.md` | 改编为 `methodology/evidence_grading.md`：三级定义、与 PASS/FAIL/BLOCKED 的映射、计数口径、表述对照、交付前五问；接入 `execution-evidence.md`、`agents`、盲测计分（`evidence_grade != E1` 不计检出） |
+| AI 功能测试 | `ai-product-testing-expert/skills/ai-product-quality-gate/references/01–04` | 压缩为 `methodology/ai_feature_testing.md`：四维度判据、八场景、可复现参数、上线门禁、缺陷定级；`business-pitfalls` 的 AI 模块改为指向该专章 |
+
+复核后仍不采纳（本轮补理由）：`qa-testing` 的 ground_truth（已有单源+双向校验+回链守卫）、google_testing_standards（AAA/金字塔与现有口径重叠）、prompt 库/入职指南（非判据）；`software-acceptance-expert` 五个 references 各 <1.4KB，只有原则；`functional-test-expert` 的 Mermaid 流程模板列为候选（与场景/PATH 模型部分重叠）。
+
+回归：包根 239（新增"E2 不计检出"1 例）、case-generator 111、api-test 17 全绿。
+
+## 扫描范围纠正与两份方法学补充（v1.30.0，2026-11-18）
+
+前两轮盘点的扫描范围本身有缺口，先纠正再补：
+
+| 轮次 | 扫了什么 | 漏了什么 |
+|---|---|---|
+| v1.28.0 | `experts/plugins` 下 10 个测试类专家的 `agents/`、`skills/*/SKILL.md`（3 层） | 专家包 `skills/*/references/` 子目录 |
+| v1.29.0 | 上述专家全深度 `*.md`（54 份） | **`codebuddy-plugins-official/external_plugins/`（149 个插件）**、**用户级 `~/.workbuddy/skills`**、**`D:/TestCase/MySharedSkills`**、`cb_teams_marketplace` |
+| v1.30.0 | 四个范围全部补扫（含 `*.json/*.csv/*.txt`） | — |
+
+补扫命中两份真缺口，均对应此前明确宣布"未做"的能力：
+
+| 新增 | 来源 | 补的缺口 |
+|---|---|---|
+| `references/a11y-audit.md` | `external_plugins/accessibility-compliance`（wcag-audit-patterns 38 条、screen-reader-testing 的 VoiceOver/NVDA 命令与检查点、accessibility-audit 的键盘/对比度/人工清单） | figma 7.41 只有 15 条纯计算规则，且 `a11y-rules.md` 自己声明未覆盖键盘全流程、读屏、200% 重排、动效、live region——这些正是本文件内容 |
+| `references/security-verification.md` | `D:/Users/personal skills/security-best-practices`（10 个框架安全规范，含 REACT-XSS-001 等规则号） | `business-pitfalls` §11 只有 6 行"先看什么"，没有验法；本文件给 12 项外部可验防护 + OWASP 映射 + "不算缺陷"情形 |
+
+接入：`agents`（模块排查行明确两条深查入口）、`bug-detection-map`（无障碍行 + §四外部深查说明）、`visual-usability`（基础无障碍与红线）、`business-pitfalls`（§11/§12）、`figma-ui-parity/references/a11y-rules.md`（未覆盖段指向人工审计，跨层白名单登记）、`README` 清单；新增 `tests/test_a11y_security_docs.py`（6 例）锁条数、锁"标内置必须真在规则集里"、锁安全清单每项都有验法与误报说明。
+
+仍不采纳（本轮新增理由）：`performance-testing-review`（能力清单，无阈值无判据）、`unit-testing`/`test-driven-development`（代码级）、`api-testing-observability/api-mock`（mock 生成工具）、`deployment-validation`/`incident-response`（部署与事后运维）、`frontend-design-pro/anti-patterns`（审美偏好，纳入即制造误报）、`design-to-code/accessibility-review`（4.2KB 速查，已被新清单覆盖）。
+委派而非复制：`web-agent-stream-capture`（流式结束判定、跨域 iframe、审批卡）——`browser-connection.md` 已明确指向该技能，保持单一口径。
+候选未接：`lanhu-ui-parity`（蓝湖设计稿来源，`design-data.md` 当前只认 Figma）、`wjx-knowledge-base`（问卷星领域检索，可作接口 oracle 依据）、`dogfood/issue-taxonomy`（严重度与分类重叠，待逐条比对）。
+
+回归：包根 239 → **246**、case-generator 111、api-test 17。
+
+## 问卷星知识库按方案 B 接入（v1.30.1，2026-11-18）
+
+背景：`qa-req2testcase-generator/user_knowledge`（L5 KB，含 showdoc_api_docs 91+ / distilled 规则 M01–M23 / business_flows / api_relations / tapd_launched 2521 / wjx_help 664）此前只在数据层被 `kb_load_contract.py` 支持，但包内同级回退不存在，路径从未登记——接口任务每次都要靠人记 `--kb`。
+
+本批（方案 B，登记进文档契约层，不动脚本）：
+
+- `doc_review.md` 新增「本机知识库根路径」节：登记 `D:/TestCase/MySharedSkills/qa-req2testcase-generator/user_knowledge`（单一出处，脚本自动扫 `project/` 子目录），写明 `kb_load_contract.py` 与 `flow.py --action` 共用解析（`--kb` > `KB_PATH` > 同级回退）。
+- 使用纪律五条：①问卷星接口任务优先从 KB 取契约原文作 oracle，引用写出处；②每次先做存在性检查，不可用时降级 B/C/D 模式，**不得凭记忆补契约**；③检索为空如实写"知识库无记录"并留缺口；④题型/帮助/历史需求等非契约领域事实直接调 `wjx-knowledge-base` skill，不复制内容；⑤语义索引手动重建，过期退回关键词通道并注明。
+- `asset_inventory.md` 的 `kb_load_contract.py` 条目指向登记节（只引用不复制路径）。
+- 新增 `tests/test_kb_registration.py` 5 例：锁单一出处（路径重复即漂移）、锁登记节与 `project/` 说明、锁纪律关键词齐全、锁领域事实委派、锁资产清单引用。
+- 实跑验证：`kb_load_contract.py --kb <登记路径> --action 1000107/1000108` 各命中 5 份文档（ShowDoc 契约原文 + distilled 规则 + ai_homepage/survey_lifecycle 业务流 + 接口依赖关系）。
+
+版本 1.30.0 → 1.30.1（patch：文档层登记 + 测试，无脚本行为变更）。api-test 17 → 22 全绿。
+
+## 衔接点与纪律落地核对（v1.30.1 → 1.30.2，2026-11-18）
+
+对照"知识库衔接点分析"逐项审计实际落地，补齐三处只停在分析层面的缺口：
+
+| 项 | 审计发现 | 处置 |
+|---|---|---|
+| 纪律"原文为准，蒸馏只作索引" | 未写入登记节（R91 把响应字段当必填的教训只在会话里） | doc_review 登记节补第 6 条：判定必回 showdoc 原文；摘要偏差作为 KB 质量问题单独记录 |
+| requirement-review 衔接 | 已有（SKILL.md 本地文档优先 + prd-dimensions #8 历史一致），但变量名 `WJX_KB_PATH` 与 api-test 的 `KB_PATH` 脱节，且无检索 skill 委派 | 统一为 `KB_PATH` 并声明旧名废弃；补 wjx-knowledge-base 委派与"知识库无记录"纪律 |
+| case-generator 衔接 | 无任何契约约束来源约束 | SKILL.md 判据源表后新增"接口类 TC 约束来源"段：约束必须取自契约原文（kb_load_contract），蒸馏不作判定依据，禁止凭记忆编造，KB 不可用改记缺口 |
+
+锁定：`test_kb_registration.py` 新增 StageWiring 4 例（蒸馏纪律固化、变量名统一且旧名废弃、生成侧约束绑定契约原文、历史一致维度出处纪律仍在）。api-test 22 → 26；全量 383 passed / 201 subtests。版本 1.30.2。
+
+## 接入方案审核修复（v1.30.2 → 1.30.3，2026-11-18）
+
+对《问卷星知识库接入方案》审核出的问题按序修复（备份：D:/TestCase/backup/web-acceptance-assurance.v1.30.2.zip）：
+
+**P0 已交付代码缺陷**
+
+| 项 | 问题（实测证据） | 修复 |
+|---|---|---|
+| P0-1 | `flow.resolve_contract_from_kb` 不读 `KB_PATH`——仅设环境变量时返回 None，而其 `--kb` 帮助文本与 `default_kb_candidates` docstring（"实际仅 KB_PATH 生效"）都声明了该回退。`doc_review.md:28`/`asset_inventory.md:19` 的"共用解析"陈述失真 | `flow.py` 补回退（`--kb` > `KB_PATH` > 同级候选），恢复设计意图；`business_flow.py` 同样补回退（两者都提供仍二选一报错） |
+| P0-2 | `business_flow.py` 强制显式 `--kb`，登记路径不生效 | 同上；`business_flow.md` 示例外补 KB_PATH 说明（不进代码块，避免弄坏示例） |
+
+文档修正三处：`doc_review.md`（共用解析陈述补 business_flow.py）、`asset_inventory.md`（同）、`business_flow.md`。
+
+**Tier 1（按审核修正后落地）**
+
+- 新增 `scripts/kb_freshness.py`：**主判据 = 源-索引漂移**（源文件最新 mtime > 索引 `source_mtime` → stale_drift）；墙钟年龄只作提示；`crawled_at` 作"数据截至"展示不判 stale；KB 不可用 exit 2 + 降级提示（对工作流 fail open，不阻断契约定位）。
+- `api-test/SKILL.md` 判路表后固化开场自检顺序：先 `kb_freshness.py`（建议性）→ 再 `kb_load_contract.py`（失败才降级 B/C/D）。
+- `doc_review.md` 纪律第 5 条对齐 fail-open 口径。
+
+**Tier 2 决策**：C（历史一致扫描器）删除——检索 skill 已具备该能力（实测 `--source tapd_launched` 命中 AI 主页两条真实需求），按纪律委派；D（约束导出）本轮不做——`contract_parser.py` 为纯库模块且 `case_generator.py` 已实现字段级变异，做则须先定消费者。
+
+**测试**：`test_kb_registration.py` 增行为级 7 例（KB_PATH 回退/fail closed/显式优先/CLI 三态）；新增 `test_kb_freshness.py` 6 例（漂移判据/墙钟禁用/数据截至/缺失索引/不可用降级）；api-test 26 → **39**。
+
+**端到端**：真实 KB 上 `kb_freshness` 输出 build_at=2026-10-22/漂移通过；`business_flow.py --query` 经 KB_PATH 命中 3 条业务流；`flow.py --plan-only --action 1000107` 成功经 KB 定位契约并进入语义事实准备层（R1 门禁与语义层均为既有设计行为；测试写入 KB 的 staging 文件已清理）。
+
+## 修改内容审核修复（v1.30.3 → 1.30.4，2026-11-18）
+
+对本会话 v1.25.0→1.30.3 全部修改做代码层审核（非仅 git/测试层），修三处：
+
+| 级别 | 问题（实测证据） | 修复 |
+|---|---|---|
+| P0 | `gate_checks.py` 对 `design_fingerprint` 用 `except Exception: = None` 静默降级：移走该模块后门禁仍输出 `warning`、`failed=[]`、binding 消失——正是 G09 要消灭的"内容绑定不可达"换了位置 | 改为与 `case_data` 同口径：导入失败即 `sys.exit(2)` + stderr 说明；binding 产出处去掉判空。实测缺模块 → rc=2、stdout 空 |
+| P0 | `blind_eval.score_run` 只约束 blocker/major，漏 normal 级仍判 `pass` 且**无任何披露**——"全检出"与"只漏轻微"报告完全一样 | 遵守协议不改 verdict（协议第 53 行明定 blocker/major），新增 `warnings`：normal 漏检 + 未被答案键匹配的发现均须披露，写入 score.json |
+| P2 | `flow.resolve_contract_from_kb` 里 `except Exception: hits=[]` 把"读取失败（权限/编码）"与"知识库无记录"混为一谈 | 改为 stderr 告警后跳过该 root，保留其余候选继续解析 |
+
+同时验证成立（未改）：G02 义务契约校验（畸形义务 5 条 error）、G03 无义务未登记 → COV-LAYERS failed / 登记 legacy → warning、G06 登记缺口 → 压 L2 且 missing_layers 命中、G09 binding 64 位哈希、eval_cases 指标方向（LOWER/HIGHER 分组正确）、pairwise 生成验真闭环（12/12 verified）、kb_freshness 漂移判据与 fail-open、从任意 cwd 运行不依赖 cwd。
+
+回归：新增 `test_v126_hardening.py` 3 例（fail-closed 依赖、normal 披露、全检出无 warnings）；**四套完整口径 770 passed / 305 subtests**（此前"全量 400"漏了 figma 367 例，本轮纳入）。

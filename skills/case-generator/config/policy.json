@@ -137,6 +137,11 @@
       {"id": "L3", "name": "设计方法", "requirement": "按适用复杂度使用多种方法，且每种方法有实际见证，不以类别名称计数。"},
       {"id": "L4", "name": "探索性", "requirement": "有具体风险假设时可提出，须单独标注，不计入已确认规则覆盖。"}
     ],
+    "obligations": {
+      "required": true,
+      "note": "新用例集必须声明 coverage_obligations（义务→TC 反查）；历史资产须登记 meta.legacy_source 才降为告警",
+      "fields": ["id", "layer", "kind", "target", "source", "required", "tc_ids"]
+    },
     "attributes": [
       {"id": "functional", "name": "功能", "origin": "qa+expert", "forbidden_claims": []},
       {"id": "security", "name": "安全", "origin": "qa+expert", "forbidden_claims": ["未声明加密方式时断言具体加密算法", "未声明会话策略时断言超时时长"]},

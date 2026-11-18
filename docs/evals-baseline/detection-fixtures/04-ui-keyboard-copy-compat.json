@@ -1,0 +1,85 @@
+{
+  "scenario": "界面/键盘/文案/兼容：焦点顺序、未渲染变量、术语、内核矩阵",
+  "inputs": "Chromium + 支持范围内另一内核；键盘可达；本地文案词库",
+  "hidden_answers": [
+    {
+      "id": "UK-1",
+      "severity": "normal",
+      "description": "页面残留 {{name}} 未渲染变量",
+      "oracle": "应显示实际名称",
+      "match_all": [
+        "{{name}}"
+      ],
+      "match_any": [
+        "未渲染",
+        "残留",
+        "原样"
+      ]
+    },
+    {
+      "id": "UK-2",
+      "severity": "normal",
+      "description": "Tab 顺序跳过主要操作按钮",
+      "oracle": "焦点应按视觉顺序可达",
+      "match_all": [
+        "tab"
+      ],
+      "match_any": [
+        "跳过",
+        "顺序",
+        "焦点"
+      ]
+    },
+    {
+      "id": "UK-3",
+      "severity": "major",
+      "description": "第二内核下表单错位不可用",
+      "oracle": "支持范围内应可用",
+      "match_all": [
+        "内核"
+      ],
+      "match_any": [
+        "错位",
+        "不可用",
+        "布局"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "LN-1",
+      "description": "装饰性图片无 alt（非信息图，合法）",
+      "expect": "不记缺陷",
+      "match_all": [
+        "alt"
+      ],
+      "match_any": [
+        "装饰",
+        "非信息"
+      ],
+      "category": "decorative_image"
+    },
+    {
+      "id": "LN-2",
+      "description": "视口模拟下正常但无真机内核结论",
+      "expect": "记 dataMissing 不记兼容缺陷",
+      "match_all": [
+        "视口"
+      ],
+      "match_any": [
+        "真机",
+        "内核",
+        "模拟"
+      ],
+      "category": "viewport_not_kernel"
+    }
+  ],
+  "required_branches": [
+    "键盘焦点顺序",
+    "未渲染变量扫描",
+    "术语一致性",
+    "内核矩阵按支持范围选样",
+    "长文/空态"
+  ],
+  "holdout": false
+}

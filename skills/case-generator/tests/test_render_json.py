@@ -28,6 +28,17 @@ class TestBuildView(unittest.TestCase):
         self.assertEqual(len(tc1["assertions"]), 3)
         self.assertIn("oracle", tc1["assertions"][0])
 
+    def test_coverage_gaps_passthrough(self):
+        cases = load(CASES_12)
+        view = rj.build_view(cases)
+        self.assertNotIn("coverage_gaps", view)
+        cases["coverage_gaps"] = [{
+            "gap_id": "GAP-01", "kind": "element_uncovered", "target": "FP-02 全选恢复",
+            "reason": "需求未定义全选边界", "obligation": "向产品确认后补测",
+        }]
+        view = rj.build_view(cases)
+        self.assertEqual(view["coverage_gaps"], cases["coverage_gaps"])
+
     def test_trace_chain(self):
         view = rj.build_view(load(CASES_12))
         ac_ids = {a["id"] for a in view["trace"]["acceptance"]}

@@ -163,6 +163,31 @@ def main():
     for idx, col in enumerate(columns, 1):
         width = 12 if col["field"] not in {"steps", "expected_results", "preconditions"} else 40
         ws.column_dimensions[ws.cell(row=1, column=idx).column_letter].width = width
+
+    # 覆盖缺口附页：缺口进视图，避免"用例齐了但缺口被吞掉"（19 列主表保持逐字不变）
+    gaps = cases.get("coverage_gaps") or []
+    if isinstance(gaps, list) and gaps:
+        gap_ws = wb.create_sheet("覆盖缺口")
+        gap_headers = ["缺口编号", "类型", "目标", "原因", "补齐义务"]
+        gap_ws.append(gap_headers)
+        for cell in gap_ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = wrap
+            cell.border = border
+        for gap in gaps:
+            if not isinstance(gap, dict):
+                continue
+            gap_ws.append([str(gap.get("gap_id", "")), str(gap.get("kind", "")),
+                           str(gap.get("target", "")), str(gap.get("reason", "")),
+                           str(gap.get("obligation", ""))])
+            for cell in gap_ws[gap_ws.max_row]:
+                cell.font = body_font
+                cell.alignment = wrap
+                cell.border = border
+        for idx, width in enumerate((14, 22, 26, 50, 40), 1):
+            gap_ws.column_dimensions[gap_ws.cell(row=1, column=idx).column_letter].width = width
+
     wb.save(out)
 
     if args.verify:

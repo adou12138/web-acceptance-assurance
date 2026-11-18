@@ -25,7 +25,23 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 使用绝对路径或以专家包根为当前目录；输出父目录必须存在，拒绝覆盖。退出码0仅表示校验/导出完成，2表示数据或工具错误，不是网站质量门禁。
 
-摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）或`failed_items`非空时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
+摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）、`failed_items`非空或必选质量属性未闭合时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
+
+### 必选质量属性逐类裁定（`attribute_rulings`）
+
+安全、兼容、文案三类**不能靠"本次没提"默认不需要**。清单根对象用可选 `attribute_rulings` 逐类给出裁定，否则 `gate.mandatory_attributes` 记为 `undeclared`、上限压到"待核实"：
+
+```json
+"attribute_rulings": {
+  "security": {"state": "not_applicable", "reason": "本次仅改列表文案，无权限/会话变更"},
+  "compatibility": {"state": "applicable", "reason": "需求承诺 Chrome/Firefox 双内核"},
+  "content": {"state": "applicable", "reason": "新增错误提示与按钮文案"}
+}
+```
+
+- `state`：`applicable`（必须有同属性 PASS 实测记录才算闭合）/ `not_applicable`（必须写理由）/ `blocked`（写明缺什么环境或角色）。
+- 判为 `applicable` 但只有 NOT_RUN/BLOCKED，或根本没写裁定，都进入"必选质量属性未闭合"，不得由功能视角的一条 PASS 抵消。
+- 文案类检查面（术语、单位、未渲染变量、错误定位与恢复指引）见 `references/visual-usability.md`；兼容须记录真实内核/设备，视口模拟不得冒充。
 
 根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`。每个item必填：
 
@@ -41,7 +57,7 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 | evidence_paths | 无重复绝对本地证据文件数组；PASS/FAIL至少一项，重新读文件计算当前SHA-256 |
 | blocked_reason | 字符串；BLOCKED/SKIPPED必须非空，NOT_RUN有阻塞原因也不进入ready |
 | side_effect_pending | 严格布尔，待核对副作用时为true，不推荐直接执行 |
-| attributes | 非空无重复属性：functional/visual/usability/accessibility/performance/security/reliability/compatibility（data/recovery 归并 reliability；usability 为探索域特有） |
+| attributes | 非空无重复属性：functional/visual/usability/accessibility/performance/security/reliability/compatibility/content（data/recovery 归并 reliability；usability 与 content 为探索域特有） |
 | case_id | 可选稳定TC引用；外部存在性由专家按设计源核对 |
 
 文件权限和路径受平台规则约束；不能用链接、空文件名或随便一个有哈希的文件代替内容证据。API输出原始清单记录和证据当前指纹；没有冻结旧摘要就不能宣称检测历史篡改。

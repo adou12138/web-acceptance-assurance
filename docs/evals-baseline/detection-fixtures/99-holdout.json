@@ -1,0 +1,60 @@
+{
+  "scenario": "留出场景：批量恢复/彻底删除的组合边界与副作用（不参与开发）",
+  "inputs": "仅在准出评测时启用；答案由独立评测者冻结",
+  "hidden_answers": [
+    {
+      "id": "HO-1",
+      "severity": "blocker",
+      "description": "彻底删除后可被恢复（违反终态）",
+      "oracle": "删除应为不可逆终态",
+      "match_all": [
+        "删除"
+      ],
+      "match_any": [
+        "可恢复",
+        "仍能恢复",
+        "恢复成功",
+        "终态"
+      ]
+    },
+    {
+      "id": "HO-2",
+      "severity": "major",
+      "description": "批量选择跨页丢失",
+      "oracle": "选择状态应跨页保持",
+      "match_all": [
+        "跨页"
+      ],
+      "match_any": [
+        "丢失",
+        "清空",
+        "选择"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "LN-1",
+      "description": "二次确认弹窗文案偏好差异",
+      "expect": "不记缺陷",
+      "match_all": [
+        "确认"
+      ],
+      "match_any": [
+        "文案",
+        "偏好",
+        "措辞"
+      ],
+      "category": "copy_preference"
+    }
+  ],
+  "required_branches": [
+    "批量选择",
+    "跨页保持",
+    "恢复",
+    "彻底删除",
+    "删除后不可恢复",
+    "二次确认"
+  ],
+  "holdout": true
+}

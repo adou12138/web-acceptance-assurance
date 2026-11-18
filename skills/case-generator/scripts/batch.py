@@ -116,6 +116,7 @@ def cmd_plan(args):
         "requirement_fingerprint": str(req.get("fingerprint", "")),
         "task_id": args.task_id,
         "split_reason": reason,
+        "estimated_total": total,
         "batches": batches,
         "current": None,
     }
@@ -281,6 +282,20 @@ def cmd_aggregate(args):
     report = gc.GateRunner(policy).run(cases)
     report["aggregate"] = True
     report["batches"] = [{k: b.get(k) for k in ("unit_id", "gate", "case_ids")} for b in state["batches"]]
+    # OM4：计划 vs 实际对账（借鉴 api-test M9 plan_vs_actual）——预估失真时告警，不静默
+    estimated_total = state.get("estimated_total")
+    actual_total = len(cases.get("testcases", []))
+    plan_vs_actual = {"estimated": estimated_total, "actual": actual_total}
+    if isinstance(estimated_total, int) and estimated_total > 0:
+        ratio = actual_total / estimated_total
+        plan_vs_actual["ratio"] = round(ratio, 3)
+        plan_vs_actual["delta"] = actual_total - estimated_total
+        plan_vs_actual["warning"] = None
+        if abs(ratio - 1.0) > 0.20:
+            plan_vs_actual["warning"] = (
+                "预估 {} 条 vs 实际 {} 条，偏差 {:.0%} 超 20%，需复核是否漏生成/超生".format(
+                    estimated_total, actual_total, ratio - 1.0))
+    report["plan_vs_actual"] = plan_vs_actual
     out = Path(args.workdir) / "aggregate-report.json"
     save_json(out, report)
     print(f"全量汇总门禁：{report['status']}（冒烟 {report['counts'].get('smoke')} / P0 {report['counts'].get('p0')} / 共 {report['counts'].get('testcases')}）")

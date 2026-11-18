@@ -55,6 +55,9 @@ def build_view(cases):
     }
     if cases.get("scenarios"):
         view["trace"]["scenarios"] = cases["scenarios"]
+    # 缺口必须随视图走：Excel 有附页、测试点视图随行，交付 JSON 也不能丢（否则"缺口不静默"只对部分视图成立）
+    if cases.get("coverage_gaps"):
+        view["coverage_gaps"] = cases["coverage_gaps"]
     return view
 
 

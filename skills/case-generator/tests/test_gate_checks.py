@@ -224,6 +224,13 @@ def make_workflow_cases(exception_map=None, na_exception=None, na_permission=Non
         scenarios.append({"id": f"SCN-{i:02d}", "name": f"业务场景{i}的数据处理旅程", "goal": "验证主流程与异常反馈",
                           "feature_ids": ["FP-01"], "paths": paths, "not_applicable": na})
         tcs.append(_cov_tc(i, f"SCN-{i:02d}", paths["positive"][0]["id"]))
+        # v3 G05：声明的异常路径必须有真实关联用例，不能“有声明即覆盖”
+        for ep in paths["exception"]:
+            et = _cov_tc(i, f"SCN-{i:02d}", ep["id"])
+            et["id"] = f"TC-M01-{i:03d}-EX"
+            et["title"] = f"场景{i}异常路径用例"
+            et["required"] = False
+            tcs.append(et)
     return {
         "meta": {"schema_version": "1.0", "id": "REQ-01", "title": "异常路径门禁测试", "flow_kind": "workflow"},
         "requirements": [{"id": "REQ-01", "name": "数据处理", "source": "门禁测试需求", "description": "数据提交与异常反馈", "confirmation": "confirmed"}],
