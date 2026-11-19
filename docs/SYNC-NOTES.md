@@ -598,3 +598,25 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 **诚实边界（写进文档，不得夸大）**：确认码存于状态文件，能读文件的智能体理论上可自行填入——它防误操作与蒙混，不防有意伪造；真正不可替代的控制点是「停会话、新开会话」这两个只有人能做的动作，以及放行记录进报告供人核对。本包仍不能切换模型，只能核对声明的模型类别。
 
 版本 1.39.0（v1.38.0→1.39.0）；备份 `backup/web-acceptance-assurance-1.38.0`（git worktree 导出 HEAD，复验为旧实现：schema/1、无 checkpoint）；缓存 1.39.0 已同步、1.38.0 的 4 个 SKILL.md 已禁用；390 tests + 198 subtests 全绿（`test_phase_gate.py` 51 例）。
+
+## 攻击面门禁与验收口径纠偏（v1.40.0，2026-11-19）
+
+触发：用户追问「为什么刚刚使用专家实际测试只发现几个问题，项目实际问题远远超出发现的数量」。对 2026-11-18 那次 154 项真实执行做了数据取证，根因不是被测系统干净，而是执行范式错位。
+
+**取证结论（`evidence_20261118/ledger_final.json` + `gate_result.json` + `cases.json`）**：154 条里正向路径 143、边界 10、组合 1、权限 0、异常 0；`surf_id` 关联 0 条、`method` 标注 0 条；`evidence` 含「读回一致」（同源自证）27 条，明确用到独立通道（截图/网页端/抓包）的仅 2 条；4 条 FAIL 全部围绕同一个历史 P0，**0 条来自为新攻击面设计的探针**；`cases.json` 38 条用例无 method/SURF/path_type 字段；目录内无 `adversarial-plan`/`EVT-`/`CHL-`，即对抗循环未启用。门禁当时已给出 `verdict_ceiling=待核实`，但报告仍以「97.4% 通过率」为主指标。
+
+| 项 | 整改 |
+|---|---|
+| 新增 `scripts/attack_coverage.py` | 从台账机械算非正向路径占比（门槛 0.30）、判据独立性（0.30）、风险面关联（0.50）、方法标注；字段缺失报 `path_type_missing` 一类缺口而不是默认通过；`--infer` 的关键词粗分单列 `inferred_*`，**不参与门禁**；`--enforce` 有缺口 rc=2 |
+| 台账侧前置 | `execution_ledger.initialize` 增 `--attack-coverage`：结论并入 `gate_precondition.attack_coverage_ceiling`，`_verdict_ceiling` 按最严合并；未传保持旧结构（向后兼容） |
+| 阶段闸门硬卡口 | `phase_gate.complete --attack-coverage`：`execute` 阶段收尾必填，缺失记 `attack_state=missing` 且 `check-verdict` 直接拦（压待核实）。这是"154 项铺面直接进裁决"那个洞的机械封堵 |
+| `blind_eval` 四项工具缺陷 | ①`_evidence_ok` 兼容 str/list（原先只认数组，写成字符串时全部判「没有证据路径」、命中答案也不计检出）；②`score.json` 改写到 `run_dir` 同级的 `scores/`，修掉"二次计分被自己判成泄漏"的非幂等；③`_finding_text` 纳入 `expected`/`actual`/`observed_via`，`unmatched` 的警告从「可能是臆造缺陷」改为「待人工复核（措辞差异/答案键缺失/无效发现三选一须留痕）」；④`precision_proxy` 分母 <10 输出 NA 并附分母 |
+| GAP-01 断言守卫 | 源码变异实测中 `CHL-SM-06` 存活——删掉 `FORBIDDEN_SOURCES` 的 `fabricated` 后 51 例全绿。新增 `tests/test_adjudication_forbidden_sources.py`（六来源参数化 + 合法对照），在隔离副本复验该变异已被捕杀 |
+| 能力声明回写 | `references/assertion-challenges.md` 从「全部执行器仅为接口约定，能力待探测」改为实测表：源码变异可用（K/(G−I−E)=5/6）、Playwright 可注入可撤销、Chrome DevTools 只可观不可注入 |
+| 身份与报告口径 | 角色定义新增「反模式：为什么测了很多却只发现几个」（四反模式 + 五条机械约束）；核心能力 0 增「测了很多 ≠ 打得深」；批次门禁并列「攻击面门禁」；输出规范要求**首屏给攻击面而非通过率**；`output-templates.md` 与 `phase-workflow.md` 同步 |
+
+**本次 A/B 侧结论（诚实登记）**：`blind_eval` 机制链已实测跑通（prepare/verify/score/ab，隔离护栏与可比性检查均真实生效，单臂 8/8 分支 3 检出 16 张截图），但**两臂真实对照数据仍缺**——卡点是"两臂需独立且盲的执行方"，本会话内评测者已读答案，用不同提示词伪造两臂差异会把"提示词差异"当成"改造效果"，故拒绝。D1 的准确归因更正为：题面模板本就要求数组，是执行方 prompt 写成了字符串而计分器只认数组且报错不可诊断（原记录"题面模板写字符串"属过度归因，已更正）。
+
+**残余缺口（不宣称已堵）**：自建台账、伪造 coverage JSON 仍可绕过门禁——属"有意伪造"，与既有诚实边界同类；机械层防的是"忘了做/懒得做"，防不了"决心造假"。攻击密度门槛 0.30 是"每 3 条至少 1 条非正向"的最低线，不是质量目标。
+
+版本 1.40.0（v1.39.0→1.40.0）；备份 `backup/web-acceptance-assurance-1.39.0`（git archive 导出 HEAD）；419 tests + 207 subtests 全绿（新增 29 例：attack_coverage 10、attack_precondition 6、forbidden_sources 6、blind_eval 5、phase_gate 2）。

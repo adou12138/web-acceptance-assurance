@@ -382,13 +382,40 @@ def start(state, phase, session=None):
     return state
 
 
-def complete(state, phase, note=None, session=None):
+def _attack_check(coverage):
+    """执行阶段收尾时的攻击覆盖检查（scripts/attack_coverage.py 的结论）。
+
+    存在目的：一次 154 项的“全量逐项”执行，143 项走正向路径、风险面关联 0 条、
+    方法标注 0 条，只因它没走过这里——清单式验收直接进了裁决，把“铺得全”当成
+    “打得深”。收集阶段收尾必须交结论，缺失即压上限，不拒终结阶段。
+    """
+    if coverage is None:
+        return {"state": "missing", "ceiling": "待核实", "density": None, "gaps": [],
+                "reasons": ["execute 阶段收尾未提供 attack_coverage 结论："
+                            "攻击密度与判据独立性未经机械检查"]}
+    if not isinstance(coverage, dict):
+        raise ValueError("attack_coverage must be a JSON object（attack_coverage.py 的输出）")
+    ceiling = coverage.get("verdict_ceiling")
+    if ceiling not in {"通过", "待核实", "不通过"}:
+        raise ValueError("attack_coverage 缺 verdict_ceiling（需为 通过/待核实/不通过）")
+    gaps = coverage.get("gaps")
+    if not isinstance(gaps, list):
+        raise ValueError("attack_coverage 缺 gaps 数组（缺口须原样呈现）")
+    return {"state": "provided", "ceiling": ceiling,
+            "density": coverage.get("attack_density"), "gaps": list(gaps),
+            "reasons": [] if ceiling == "通过" else
+                       [f"攻击覆盖不达标：{[g.get('code') for g in gaps if isinstance(g, dict)]}"]}
+
+
+def complete(state, phase, note=None, session=None, attack_coverage=None):
     session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "in_progress":
         raise ValueError(f"phase {phase} is not in progress (status={entry['status']})")
     if entry.get("session") and entry["session"] != session:
         raise ValueError(f"阶段 {phase} 在会话 {entry['session']} 中开始，不得在 {session} 中结束")
+    if phase == "execute":
+        entry["attack_coverage"] = _attack_check(attack_coverage)
     entry["status"] = "done"
     entry["completed_at"] = _now()
     _record(state, "complete", phase, {"note": note, "session": session})
@@ -656,6 +683,13 @@ def check_verdict(state):
     if state.get("awaiting_session_for"):
         reasons.append(f"交接未消费：阶段 {state['awaiting_session_for']} 仍等新会话 resume，"
                        "本会话不得继续推进")
+    # 攻击覆盖率：执行阶段必须交出机械结论，否则“铺得全”会当成“打得深”过门
+    attack = (state["phases"].get("execute") or {}).get("attack_coverage") or {}
+    if attack.get("state") != "provided":
+        reasons.append("execute 阶段未提供攻击覆盖结论（attack_coverage）："
+                       "无法区分“用例铺得全”与“攻击面打得深”，结论上限压待核实")
+    elif attack.get("ceiling") != "通过":
+        reasons.extend(attack.get("reasons") or ["攻击覆盖不达标，结论上限压待核实"])
     routing_warnings = _routing_warnings(state)
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
@@ -865,6 +899,8 @@ def main(argv=None):
     p.add_argument("--phase", required=True)
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
+    p.add_argument("--attack-coverage",
+                   help="attack_coverage.py 结论输出；execute 阶段收尾必填，缺失则结论上限压待核实")
 
     p = sub.add_parser("amend", help="登记计划修订申请")
     p.add_argument("state")
@@ -936,7 +972,9 @@ def main(argv=None):
         elif args.command == "start":
             start(state, args.phase, args.session)
         elif args.command == "complete":
-            complete(state, args.phase, args.note, args.session)
+            complete(state, args.phase, args.note, args.session,
+                     json.loads(Path(args.attack_coverage).read_text(encoding="utf-8"))
+                     if args.attack_coverage else None)
         elif args.command == "amend":
             request_amendment(state, args.phase, args.by, args.note, args.session)
         elif args.command == "approve-amendment":

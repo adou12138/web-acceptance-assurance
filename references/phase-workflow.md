@@ -63,7 +63,8 @@ python scripts/phase_gate.py resume <state> --phase execute --session SESS-2 \
   --user-confirm "<上面那段确认文本原样>" --model-class fast --model-name "GLM-5.3-Flash high"
 python scripts/phase_gate.py start  <state> --phase execute --session SESS-2
 # …执行与采集…
-python scripts/phase_gate.py complete <state> --phase execute --session SESS-2
+python scripts/phase_gate.py complete <state> --phase execute --session SESS-2 \
+    --attack-coverage <attack_coverage.json>   # 采集收尾必交，缺失即压待核实
 python scripts/phase_gate.py submit   <state> --phase adjudicate --session SESS-2
 python scripts/phase_gate.py checkpoint <state> --phase execute --session SESS-2
 

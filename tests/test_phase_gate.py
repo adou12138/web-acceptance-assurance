@@ -50,7 +50,10 @@ class PhaseGateTestBase(unittest.TestCase):
         else:
             self.resume(phase, model_classes.get(phase))
         self.pg.start(self.state, phase, session)
-        self.pg.complete(self.state, phase, session=session)
+        # 执行阶段收尾必须交攻击覆盖结论，否则“铺得全”会当成“打得深”过门
+        coverage = ({"verdict_ceiling": "通过", "gaps": [], "attack_density": 0.4}
+                    if phase == "execute" else None)
+        self.pg.complete(self.state, phase, session=session, attack_coverage=coverage)
         nxt = self.pg.NEXT_PHASE[phase]
         if nxt:
             self.pg.submit(self.state, nxt, session=session,
@@ -75,6 +78,36 @@ class PhaseMachineTests(PhaseGateTestBase):
         check = self.pg.check_verdict(self.state)
         self.assertFalse(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "待核实")
+
+    def test_execute_completion_without_attack_coverage_blocks_verdict(self):
+        # 真实教训：154 项执行里 143 项走正向、风险面关联 0，却一路进到裁决
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"))
+        entry = self.state["phases"]["execute"]["attack_coverage"]
+        self.assertEqual(entry["state"], "missing")
+        check = self.pg.check_verdict(self.state)
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("attack_coverage" in r for r in check["reasons"]))
+
+    def test_low_attack_density_blocks_verdict(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         attack_coverage={"verdict_ceiling": "待核实", "attack_density": 0.078,
+                                          "gaps": [{"code": "attack_density_low",
+                                                    "message": "密度 0.078 低于门槛 0.3"}]})
+        check = self.pg.check_verdict(self.state)
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("攻击覆盖不达标" in r for r in check["reasons"]))
 
     def test_execute_cannot_start_before_cross_session_resume(self):
         self.pg.start(self.state, "plan", "SESS-1")

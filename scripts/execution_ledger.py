@@ -278,6 +278,34 @@ def _ensure_gitignore(workspace):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _attack_precondition(attack_coverage):
+    """攻击面覆盖进门条件：密度/判据独立性不达标时压结论上限。
+
+    attack_coverage 为 scripts/attack_coverage.py 的结论输出；不传时返回空字典，
+    baseline 结构保持旧样（向后兼容）。只认该脚本机械算出的 verdict_ceiling，
+    不接受人工改写的"已充分覆盖"声明。
+
+    存在目的：154 项真实测试里 143 项走正向路径、surf 关联 0、方法标注 0，
+    最终只产出 4 条 FAIL——
+    "铺得全"曾冒充"打得深"，此处在建账阶段就把它分开计。
+    """
+    if attack_coverage is None:
+        return {}
+    if not isinstance(attack_coverage, dict):
+        raise ValueError("attack_coverage must be a JSON object（attack_coverage.py 的结论输出）")
+    ceiling = attack_coverage.get("verdict_ceiling")
+    if ceiling not in {"通过", "待核实", "不通过"}:
+        raise ValueError("attack_coverage 缺 verdict_ceiling（需为 通过/待核实/不通过）")
+    gaps = attack_coverage.get("gaps")
+    if not isinstance(gaps, list):
+        raise ValueError("attack_coverage 缺 gaps 数组（须原样呈现，不得隐矞缺口）")
+    return {
+        "attack_coverage_ceiling": ceiling,
+        "attack_density": attack_coverage.get("attack_density"),
+        "attack_gaps": list(gaps),
+    }
+
+
 def _phase_precondition(phase_state):
     """三阶段闸门进门条件：未走完放行流程时压结论上限。
 
@@ -317,7 +345,8 @@ def _phase_precondition(phase_state):
 
 
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
-               adversarial_gate=None, adversarial_waiver=None, phase_state=None):
+               adversarial_gate=None, adversarial_waiver=None, phase_state=None,
+               attack_coverage=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
@@ -328,6 +357,7 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
     gate_precondition.update(_adversarial_precondition(
         adversarial_gate, adversarial_waiver, read_only=read_only, case_count=len(cases)))
     gate_precondition.update(_phase_precondition(phase_state))
+    gate_precondition.update(_attack_precondition(attack_coverage))
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
@@ -503,6 +533,9 @@ def _verdict_ceiling(baseline, counts, executed):
     ceiling = _strictest(fact, adversarial)
     if phase_ceiling:
         ceiling = _strictest(ceiling, phase_ceiling)
+    attack_ceiling = gate.get("attack_coverage_ceiling")
+    if attack_ceiling:
+        ceiling = _strictest(ceiling, attack_ceiling)
     return ceiling
 
 
@@ -593,6 +626,8 @@ def main():
             part.add_argument("--adversarial-waiver", help="对抗循环豁免理由（纯只读小任务可用，留痕）")
             part.add_argument("--phase-state",
                               help="phase_gate.py 状态文件；阶段未走完放行流程时结论上限压待核实")
+            part.add_argument("--attack-coverage",
+                              help="attack_coverage.py 结论输出；攻击密度/判据独立性不达标时压上限")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -611,7 +646,8 @@ def main():
                                 _load(args.gate_report) if args.gate_report else None,
                                 _load(args.adversarial_gate) if args.adversarial_gate else None,
                                 args.adversarial_waiver,
-                                _load(args.phase_state) if getattr(args, "phase_state", None) else None)
+                                _load(args.phase_state) if getattr(args, "phase_state", None) else None,
+                                _load(args.attack_coverage) if getattr(args, "attack_coverage", None) else None)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

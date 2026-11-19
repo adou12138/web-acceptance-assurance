@@ -4,7 +4,7 @@
 子命令：
     prepare  从含答案的夹具生成"只剩题目"的运行目录（执行方只拿这个目录）
     verify   检查运行目录是否混入答案（文件名/内容/答案 ID），并核对执行方声明
-    score    用答案键给执行结果打分，写 score.json（检出/误报/分支/证据/未测义务）
+    score    用答案键给执行结果打分（检出/误报/分支/证据/未测义务），结果写 run_dir 同级的 scores/<run>.json
     compare  两份 score.json 对照，标注单次复跑、同一执行方等不可比风险
     ab       A/B 两臂聚合对照（改造前/后各一目录，每目录含多个 run 的 score.json）
              ——按臂聚合检出/误报/复现/成本，输出裁定精确率与每百探针有效发现等
@@ -85,8 +85,12 @@ def spec_from_fixture(fixture):
                 "executor": {"name": "执行方标识", "tooling": "浏览器/接口工具", "saw_answers": False},
                 "budget": {"minutes": 30},
                 "branches": [{"name": "必须来自题面 required_branches", "status": "EXECUTED|BLOCKED", "reason": "BLOCKED 必填"}],
-                "findings": [{"id": "F-1", "title": "现象", "observed": "实际观察与预期差",
-                              "severity": "blocker|major|normal", "evidence": ["相对本目录的证据路径"],
+                "findings": [{"id": "F-1", "title": "现象",
+                              "expected": "按需求应发生什么（结构化三要素之一）",
+                              "actual": "实际发生了什么（与 expected 的差异）",
+                              "observed_via": "怎么观察到的：DOM/网络响应/截图/接口读回",
+                              "observed": "实际观察与预期差（自由文本，兼容旧格式）",
+                              "severity": "blocker|major|normal", "evidence": ["相对本目录的证据路径（数组）"],
                               "evidence_grade": "E1（默认）；E2 模拟/E3 未执行不计检出",
                               "reproduction": "可选 {attempts, successes}（k/n，含失败尝试）",
                               "cost": "可选 {probes, minutes}"}],
@@ -176,7 +180,14 @@ def _match(rule, text):
 
 
 def _finding_text(finding):
-    return " ".join(_normalize(finding.get(key)) for key in ("title", "observed", "branch"))
+    """拼接 finding 的可匹配文本。
+
+    除 title/observed/branch 外，纳入结构化三要素 expected/actual/observed_via——
+    执行方把「预期 vs 实际 vs 观察方式」写清时，语义词元才有机会命中；否则
+    判据量的是用词重合而不是检出能力（见 docs/evals-baseline/ab-protocol.md）。
+    """
+    return " ".join(_normalize(finding.get(key)) for key in
+                    ("title", "observed", "branch", "expected", "actual", "observed_via"))
 
 
 def _parse_reproduction(finding):
@@ -230,7 +241,15 @@ def _parse_unresolved_candidates(payload):
 
 
 def _evidence_ok(run_dir, finding):
+    """校验证据可复核。evidence 接受字符串或数组两种形态。
+
+    题面模板早期写作字符串，计分器只认数组，导致照题面执行的真实运行
+    全部被判「没有证据路径」、命中答案也不计检出（系统性判低）。此处两种
+    形态都接受，题面模板同步改为数组以消除歧义。
+    """
     evidence = finding.get("evidence")
+    if isinstance(evidence, str):
+        evidence = [evidence.strip()] if evidence.strip() else []
     if not isinstance(evidence, list) or not evidence:
         return False, "没有证据路径"
     missing = []
@@ -242,6 +261,16 @@ def _evidence_ok(run_dir, finding):
     if missing:
         return False, f"证据不存在或为空：{missing}"
     return True, ""
+
+
+def _score_out_path(run_dir):
+    """计分结果输出位置：run_dir 同级的 scores/<run 名>.json。
+
+    不写进 run_dir：score.json 内嵌作业键的答案 ID，留在运行目录会同时触发
+    「泄漏答案」误判与二次计分被拒。ab 子命令同时兼容旧位置。
+    """
+    run_dir = Path(run_dir)
+    return run_dir.parent / "scores" / f"{run_dir.name}.json"
 
 
 def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
@@ -375,7 +404,16 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
             f"normal 级未全检出：缺 {by_severity['normal']['missed']}"
             f"（不影响 verdict，但按「减少漏测」目标应记为覆盖缺口）")
     if unmatched:
-        warnings.append(f"未被任何答案键匹配的发现（可能是臆造缺陷或答案键缺失）：{unmatched}")
+        # 不直接判「臆造」：词元未命中可能只是措辞差异，也可能是真缺陷落在
+        # 答案键之外。定性属人工复核（finding-triage），工具只报事实清单。
+        warnings.append(f"未命中任何答案键，待人工复核（措辞差异/答案键缺失/无效发现，三选一须留痕）：{unmatched}")
+        # 仅在确有未命中时提示结构化要素缺失：全检出时不该再多出一条噪音
+        unstructured = [f.get("id") for f in findings
+                        if not (f.get("expected") and f.get("actual") and f.get("observed_via"))]
+        if unstructured:
+            warnings.append(
+                f"未命中的发现里有未写结构化三要素（expected/actual/observed_via）的：{unstructured}——"
+                "建议补齐后复核，匹配召回依赖可读的预期/实际描述")
     result = {
         "run_id": _read_json(run_dir / "run.json").get("run_id") if (run_dir / "run.json").is_file() else run_dir.name,
         "scenario": key.get("scenario", ""),
@@ -407,7 +445,11 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
         "warnings": warnings,
         "allow_blocked": bool(allow_blocked),
     }
-    _write_json(Path(run_dir) / "score.json", result)
+    # 计分结果写在 run_dir 之外：score.json 含答案 ID，若留在运行目录，
+    # 既会被 verify_run 判成「泄漏答案」，又会破坏二次计分的幂等性。
+    out_path = _score_out_path(run_dir)
+    _write_json(out_path, result)
+    result["score_path"] = str(out_path)
     return result
 
 
@@ -496,13 +538,15 @@ def _derived_metrics(arm):
     """
     precision = "NA"
     denominator = arm["detected_total"] + arm["false_positives"]
-    if denominator:
+    # 小样本不给比例：分母 < 10 时输出 NA 并附分母，避免「精确率 1.0」被误读
+    if denominator >= 10:
         precision = round(arm["detected_total"] / denominator, 4)
     per_100_probes = "NA"
     if arm.get("cost") and (arm["cost"].get("probes") or 0) > 0:
         per_100_probes = round(arm["detected_total"] / arm["cost"]["probes"] * 100, 2)
     repro_rate = (arm.get("reproduction") or {}).get("rate") if arm.get("reproduction") else "NA"
-    return {"precision_proxy": precision, "effective_findings_per_100_probes": per_100_probes,
+    return {"precision_proxy": precision, "precision_proxy_denominator": denominator,
+            "effective_findings_per_100_probes": per_100_probes,
             "reproduction_rate": repro_rate}
 
 
@@ -517,7 +561,7 @@ def compare_ab(arm_a_dir, arm_b_dir):
         arm_dir = Path(arm_dir)
         if not arm_dir.is_dir():
             raise ValueError(f"臂目录不存在：{arm_dir}")
-        found = sorted(arm_dir.glob("**/score.json"))
+        found = sorted(set(arm_dir.glob("**/score.json")) | set(arm_dir.glob("**/scores/*.json")))
         if not found:
             raise ValueError(f"臂目录内未找到任何 score.json（须先对各 run 执行 score 子命令）：{arm_dir}")
         return [_read_json(p) for p in found]
