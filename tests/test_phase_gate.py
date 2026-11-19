@@ -20,83 +20,107 @@ class PhaseGateTestBase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.folder = Path(self.tmp.name)
+        self.handoff_dir = self.folder / "handoff"
+        self.handoff_dir.mkdir()
         self.state_path = self.folder / "phase-state.json"
-        self.state = self.pg.init_state(self.state_path, "TASK-1")
+        self.state = self.pg.init_state(self.state_path, "TASK-1", "SESS-1",
+                                        self.pg.ROUTING["plan"]["model_class"],
+                                        self.pg.ROUTING["plan"]["model_hint"])
 
-    def run_phase(self, phase, model_class=None):
-        """完整走一个阶段：提交 → 放行 → 开始 → 完成。"""
-        model_class = model_class or self.pg.ROUTING[phase]["model_class"]
-        self.pg.submit(self.state, phase, model_class=model_class, model_name="test-model")
-        self.pg.approve(self.state, phase, "user", f"同意进入{phase}")
-        self.pg.start(self.state, phase)
-        self.pg.complete(self.state, phase)
+    def session_for(self, phase):
+        return f"SESS-{self.pg.PHASES.index(phase) + 1}"
+
+    def resume(self, phase, model_class=None):
+        """模拟用户在新会话里粘回确认文本。"""
+        prior = self.pg.PHASES[self.pg.PHASES.index(phase) - 1]
+        token = self.state["phases"][prior]["handoff"]["token"]
+        return self.pg.resume(self.state, phase, self.session_for(phase),
+                              f"续跑任务 TASK-1 的 {phase} 阶段，确认码 {token}",
+                              model_class or self.pg.ROUTING[phase]["model_class"],
+                              self.pg.ROUTING[phase]["model_hint"])
+
+    def finish_phase(self, phase, model_classes=None):
+        """跨会话走完一个阶段：resume → start → complete → submit 下一阶段 → checkpoint。"""
+        model_classes = model_classes or {}
+        session = self.session_for(phase)
+        if phase == "plan":
+            # 规划阶段的模型来自起始会话：用会话记录模拟“这一阶段实际用的模型”
+            if model_classes.get("plan"):
+                self.state["sessions"][0]["model_class"] = model_classes["plan"]
+        else:
+            self.resume(phase, model_classes.get(phase))
+        self.pg.start(self.state, phase, session)
+        self.pg.complete(self.state, phase, session=session)
+        nxt = self.pg.NEXT_PHASE[phase]
+        if nxt:
+            self.pg.submit(self.state, nxt, session=session,
+                           model_class=model_classes.get(nxt, self.pg.ROUTING[nxt]["model_class"]),
+                           model_name=self.pg.ROUTING[nxt]["model_hint"])
+        self.pg.checkpoint(self.state, phase, self.handoff_dir, session=session)
         return self.state
 
     def finish_all(self, model_classes=None):
-        model_classes = model_classes or {}
         for phase in self.pg.PHASES:
-            self.run_phase(phase, model_classes.get(phase))
+            self.finish_phase(phase, model_classes)
 
 
 class PhaseMachineTests(PhaseGateTestBase):
-    def test_init_creates_three_pending_phases_and_blocks_verdict(self):
+    def test_init_approves_plan_and_leaves_others_pending(self):
+        """用户下达任务即视为放行规划阶段，其余阶段仍须交接放行。"""
         self.assertEqual(list(self.state["phases"]), list(self.pg.PHASES))
-        for phase in self.pg.PHASES:
+        self.assertEqual(self.state["phases"]["plan"]["status"], "approved")
+        self.assertEqual(self.state["phases"]["plan"]["approval"]["mode"], "task_start")
+        for phase in ("execute", "adjudicate"):
             self.assertEqual(self.state["phases"][phase]["status"], "pending")
         check = self.pg.check_verdict(self.state)
         self.assertFalse(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "待核实")
 
-    def test_cannot_start_phase_without_user_approval(self):
+    def test_execute_cannot_start_before_cross_session_resume(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.pg.submit(self.state, "execute", session="SESS-1")
+        # 只 submit 申请，不得开始——必须新会话 resume
         with self.assertRaises(ValueError):
-            self.pg.start(self.state, "plan")
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        # 仅提交（等待放行）仍不得开始——用户同意是独立一步
-        with self.assertRaises(ValueError):
-            self.pg.start(self.state, "plan")
+            self.pg.start(self.state, "execute", "SESS-1")
 
     def test_execute_requires_plan_done(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.approve(self.state, "plan", "user", "同意")
-        self.pg.start(self.state, "plan")
         with self.assertRaises(ValueError):
-            self.pg.submit(self.state, "execute", model_class="fast")
-        self.pg.complete(self.state, "plan")
-        self.pg.submit(self.state, "execute", model_class="fast")
-        self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
+            self.pg.submit(self.state, "execute", session="SESS-1")
 
-    def test_happy_path_unlocks_verdict(self):
+    def test_happy_path_across_three_sessions_unlocks_verdict(self):
         self.finish_all()
         check = self.pg.check_verdict(self.state)
         self.assertTrue(check["verdict_allowed"], check["reasons"])
         self.assertIsNone(check["phase_ceiling"])
+        ids = [item["id"] for item in self.state["sessions"]]
+        self.assertEqual(ids, ["SESS-1", "SESS-2", "SESS-3"])
 
-    def test_approval_requires_approver_and_basis(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        with self.assertRaises(ValueError):
-            self.pg.approve(self.state, "plan", "", "同意")
-        with self.assertRaises(ValueError):
-            self.pg.approve(self.state, "plan", "user", "   ")
+    def test_sessions_record_actual_models(self):
+        self.finish_all()
+        models = {item["id"]: item["model_name"] for item in self.state["sessions"]}
+        self.assertEqual(models["SESS-1"], self.pg.ROUTING["plan"]["model_hint"])
+        self.assertEqual(models["SESS-2"], self.pg.ROUTING["execute"]["model_hint"])
+        self.assertEqual(models["SESS-3"], self.pg.ROUTING["adjudicate"]["model_hint"])
 
     def test_reject_then_resubmit(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.reject(self.state, "plan", "user", "缺少异常路径")
-        self.assertEqual(self.state["phases"]["plan"]["status"], "rejected")
-        self.assertEqual(self.state["phases"]["plan"]["rejections"][0]["reason"], "缺少异常路径")
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.assertEqual(self.state["phases"]["plan"]["status"], "awaiting_approval")
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.pg.reject(self.state, "execute", "user", "缺少异常路径")
+        self.assertEqual(self.state["phases"]["execute"]["status"], "rejected")
+        self.assertEqual(self.state["phases"]["execute"]["rejections"][0]["reason"], "缺少异常路径")
+        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
 
     def test_complete_requires_in_progress(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.approve(self.state, "plan", "user", "同意")
         with self.assertRaises(ValueError):
-            self.pg.complete(self.state, "plan")
+            self.pg.complete(self.state, "plan", session="SESS-1")
 
     def test_open_amendment_blocks_start_and_verdict(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.approve(self.state, "plan", "user", "同意")
-        self.pg.start(self.state, "plan")
-        self.pg.request_amendment(self.state, "plan", "agent", "采集期发现新风险面需补设计")
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.request_amendment(self.state, "plan", "agent", "采集期发现新风险面需补设计",
+                                  session="SESS-1")
         check = self.pg.check_verdict(self.state)
         self.assertFalse(check["verdict_allowed"])
         self.assertTrue(any("修订" in reason for reason in check["reasons"]))
@@ -104,20 +128,13 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.assertEqual(self.state["amendments"][0]["status"], "approved")
 
     def test_routing_mismatch_blocks_until_acknowledged(self):
-        self.finish_all(model_classes={"plan": "fast"})
+        self.finish_all(model_classes={"plan": self.pg.ROUTING["execute"]["model_class"]})
         check = self.pg.check_verdict(self.state)
         self.assertFalse(check["verdict_allowed"], "规划用快模型属路由误配，须压上限")
         self.assertTrue(any(w["code"] == "routing_mismatch" for w in check["warnings"]))
         self.pg.acknowledge_routing(self.state, "plan", "本会话仅有快模型可用，已在报告中披露")
         check = self.pg.check_verdict(self.state)
         self.assertTrue(check["verdict_allowed"], check["reasons"])
-
-    def test_undeclared_routing_warns_but_does_not_block(self):
-        self.finish_all()
-        self.state["phases"]["plan"]["routing"]["declared_class"] = None
-        check = self.pg.check_verdict(self.state)
-        self.assertTrue(check["verdict_allowed"])
-        self.assertTrue(any(w["code"] == "routing_undeclared" for w in check["warnings"]))
 
     def test_state_persists_and_reloads(self):
         self.finish_all()
@@ -130,6 +147,126 @@ class PhaseMachineTests(PhaseGateTestBase):
     def test_init_refuses_existing_state(self):
         with self.assertRaises(ValueError):
             self.pg.init_state(self.state_path, "TASK-2")
+
+
+class CrossSessionHandoffTests(PhaseGateTestBase):
+    """阶段之间必须停会话、新会话续跑——同会话推进一律不给过。"""
+
+    def to_handoff(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.pg.submit(self.state, "execute", session="SESS-1", artifacts=["cases.json"])
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        return self.state["phases"]["plan"]["handoff"]
+
+    def test_checkpoint_requires_next_phase_application(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self.assertIn("submit", str(ctx.exception))
+
+    def test_checkpoint_requires_phase_started(self):
+        with self.assertRaises(ValueError):
+            self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+
+    def test_checkpoint_writes_handoff_with_confirm_text(self):
+        handoff = self.to_handoff()
+        md = Path(handoff["markdown"])
+        self.assertTrue(md.is_file())
+        text = md.read_text(encoding="utf-8")
+        self.assertIn(handoff["token"], text)
+        self.assertIn(self.pg.ROUTING["execute"]["model_hint"], text)
+        self.assertEqual(self.state["awaiting_session_for"], "execute")
+        self.assertFalse(handoff["consumed"])
+
+    def test_old_session_cannot_advance_after_checkpoint(self):
+        handoff = self.to_handoff()
+        with self.assertRaises(ValueError):
+            self.pg.start(self.state, "execute", "SESS-1")
+        self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
+        self.assertFalse(handoff["consumed"])
+
+    def test_resume_requires_confirm_token(self):
+        self.to_handoff()
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.resume(self.state, "execute", "SESS-2", "继续", "fast")
+        self.assertIn("确认码", str(ctx.exception))
+        self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
+
+    def test_resume_rejects_same_session(self):
+        self.to_handoff()
+        token = self.state["phases"]["plan"]["handoff"]["token"]
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.resume(self.state, "execute", "SESS-1", f"确认码 {token}", "fast")
+        self.assertIn("必须换会话", str(ctx.exception))
+
+    def test_resume_rejects_reused_session_id(self):
+        self.to_handoff()
+        token = self.state["phases"]["plan"]["handoff"]["token"]
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.resume(self.state, "execute", "SESS-1", f"确认码 {token}", "fast")
+        self.assertIn("换会话", str(ctx.exception))
+        # 已完成阶段用过的会话标识不得复用
+        self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast")
+        self.pg.start(self.state, "execute", "SESS-2")
+        self.pg.complete(self.state, "execute", session="SESS-2")
+        self.pg.submit(self.state, "adjudicate", session="SESS-2")
+        self.pg.checkpoint(self.state, "execute", self.handoff_dir, session="SESS-2")
+        token2 = self.state["phases"]["execute"]["handoff"]["token"]
+        # 复用交接会话本身：直接拦
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.resume(self.state, "adjudicate", "SESS-2", f"确认码 {token2}", "strong-reasoning")
+        self.assertIn("换会话", str(ctx.exception))
+        # 复用更早阶段用过的会话标识：同样拦（不同阶段必须各自新会话）
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.resume(self.state, "adjudicate", "SESS-1", f"确认码 {token2}", "strong-reasoning")
+        self.assertIn("已使用过", str(ctx.exception))
+
+    def test_resume_cannot_double_consume_handoff(self):
+        self.to_handoff()
+        token = self.state["phases"]["plan"]["handoff"]["token"]
+        self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast")
+        with self.assertRaises(ValueError):
+            self.pg.resume(self.state, "execute", "SESS-3", f"确认码 {token}", "fast")
+
+    def test_resume_records_cross_session_approval(self):
+        self.to_handoff()
+        token = self.state["phases"]["plan"]["handoff"]["token"]
+        self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast", "GLM-5.3-Flash high")
+        approval = self.state["phases"]["execute"]["approval"]
+        self.assertEqual(approval["mode"], "cross_session")
+        self.assertEqual(approval["from_session"], "SESS-1")
+        self.assertEqual(approval["to_session"], "SESS-2")
+        self.assertEqual(approval["confirm_token"], token)
+        self.assertEqual(self.state["active_session"], "SESS-2")
+        self.assertIsNone(self.state["awaiting_session_for"])
+
+    def test_foreign_session_cannot_operate_state(self):
+        self.to_handoff()
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.submit(self.state, "adjudicate", session="SESS-9")
+        self.assertIn("无权操作", str(ctx.exception))
+
+    def test_handoff_reject_from_new_session(self):
+        self.to_handoff()
+        self.pg.reject(self.state, "execute", "user", "交接产物缺用例追溯", session="SESS-2")
+        self.assertEqual(self.state["phases"]["execute"]["status"], "rejected")
+        self.assertEqual(self.state["active_session"], "SESS-2")
+        self.assertIsNone(self.state["awaiting_session_for"])
+
+    def test_same_session_approve_caps_verdict(self):
+        """同会话放行是兼容路径：能走完流程，但结论上限只能待核实。"""
+        for phase in self.pg.PHASES:
+            if phase != "plan":
+                self.pg.submit(self.state, phase,
+                               model_class=self.pg.ROUTING[phase]["model_class"])
+                self.pg.approve(self.state, phase, "user", "同会话同意")
+            self.pg.start(self.state, phase, self.session_for("plan"))
+            self.pg.complete(self.state, phase, session=self.session_for("plan"))
+        check = self.pg.check_verdict(self.state)
+        self.assertFalse(check["verdict_allowed"])
+        self.assertEqual(check["phase_ceiling"], "待核实")
+        self.assertTrue(any("同会话放行" in reason for reason in check["reasons"]))
 
 
 class CollectionRecordTests(PhaseGateTestBase):
@@ -226,26 +363,40 @@ class PhaseGateCliTests(PhaseGateTestBase):
         return subprocess.run([sys.executable, str(SCRIPT), *args],
                               capture_output=True, text=True, encoding="utf-8")
 
-    def test_cli_full_flow_and_verdict_gate(self):
+    def test_cli_cross_session_flow(self):
         state = self.folder / "cli-state.json"
-        run = self.cli("init", str(state), "--task", "TASK-CLI")
-        self.assertEqual(run.returncode, 0, run.stderr)
+        handoff = self.folder / "cli-handoff"
+        handoff.mkdir()
+        self.assertEqual(self.cli("init", str(state), "--task", "TASK-CLI",
+                                  "--session", "SESS-1",
+                                  "--model-class", "strong-reasoning").returncode, 0)
         blocked = self.cli("check-verdict", str(state))
         self.assertEqual(blocked.returncode, 1)
         self.assertEqual(json.loads(blocked.stdout)["phase_ceiling"], "待核实")
 
-        premature = self.cli("start", str(state), "--phase", "plan")
-        self.assertEqual(premature.returncode, 2, "未放行不得开始")
+        # 规划阶段由 init 放行；execute 未交接前不得开始
+        self.assertEqual(self.cli("start", str(state), "--phase", "plan",
+                                  "--session", "SESS-1").returncode, 0)
+        self.assertEqual(self.cli("complete", str(state), "--phase", "plan",
+                                  "--session", "SESS-1").returncode, 0)
+        self.assertEqual(self.cli("submit", str(state), "--phase", "execute",
+                                  "--session", "SESS-1").returncode, 0)
+        premature = self.cli("start", str(state), "--phase", "execute", "--session", "SESS-1")
+        self.assertEqual(premature.returncode, 2, "未交接不得开始")
 
-        self.assertEqual(self.cli("submit", str(state), "--phase", "plan",
-                                  "--model-class", "strong-reasoning").returncode, 0)
-        self.assertEqual(self.cli("approve", str(state), "--phase", "plan",
-                                  "--by", "user", "--note", "同意").returncode, 0)
-        self.assertEqual(self.cli("start", str(state), "--phase", "plan").returncode, 0)
-        self.assertEqual(self.cli("complete", str(state), "--phase", "plan").returncode, 0)
+        self.assertEqual(self.cli("checkpoint", str(state), "--phase", "plan",
+                                  "--handoff-dir", str(handoff), "--session", "SESS-1").returncode, 0)
+        token = json.loads((handoff / "handoff-plan.json").read_text(encoding="utf-8"))["token"]
+        # 同会话续跑必须被拒
+        same = self.cli("resume", str(state), "--phase", "execute", "--session", "SESS-1",
+                        "--user-confirm", f"确认码 {token}", "--model-class", "fast")
+        self.assertEqual(same.returncode, 2)
+        ok = self.cli("resume", str(state), "--phase", "execute", "--session", "SESS-2",
+                      "--user-confirm", f"确认码 {token}", "--model-class", "fast")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
         status = json.loads(self.cli("status", str(state)).stdout)
-        self.assertEqual(status["phases"]["plan"]["status"], "done")
-        self.assertIn("execute", status["next_action"])
+        self.assertEqual(status["phases"]["execute"]["status"], "approved")
+        self.assertEqual(status["active_session"], "SESS-2")
 
     def test_cli_scan_collection_rc(self):
         bad = self.folder / "records.jsonl"
@@ -265,18 +416,16 @@ class PhaseGateCliTests(PhaseGateTestBase):
 
 
 class TamperResistanceTests(PhaseGateTestBase):
-    """自攻发现的两条绕过路径：自我放行、手改状态文件。"""
+    """自攻验证：自我放行、手改状态文件、伪造会话都必须被拦。"""
 
     def test_agent_cannot_self_approve(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
         for ident in ("agent", "assistant", "system", "砺衡"):
             with self.subTest(identity=ident), self.assertRaises(ValueError):
                 self.pg.approve(self.state, "plan", ident, "我自己同意")
-        self.assertEqual(self.state["phases"]["plan"]["status"], "awaiting_approval")
 
     def test_agent_cannot_approve_amendment(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.request_amendment(self.state, "plan", "agent", "补充风险面")
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.request_amendment(self.state, "plan", "agent", "补充风险面", session="SESS-1")
         with self.assertRaises(ValueError):
             self.pg.approve_amendment(self.state, "AMD-1", "agent", "自行批准")
 
@@ -291,10 +440,17 @@ class TamperResistanceTests(PhaseGateTestBase):
         self.assertIn("不可信", str(ctx.exception))
 
     def test_hand_edited_history_entry_is_detected(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
         self.pg.save(self.state_path, self.state)
         data = json.loads(self.state_path.read_text(encoding="utf-8"))
-        data["history"][0]["action"] = "approve"
+        data["history"][0]["action"] = "resume"
+        self.state_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.pg.load(self.state_path)
+
+    def test_hand_edited_active_session_is_detected(self):
+        self.pg.save(self.state_path, self.state)
+        data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        data["active_session"] = "SESS-9"
         self.state_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         with self.assertRaises(ValueError):
             self.pg.load(self.state_path)
@@ -339,10 +495,7 @@ class PhaseLedgerIntegrationTests(PhaseGateTestBase):
         self.assertNotIn("phase_ceiling", baseline["gate_precondition"])
 
     def test_incomplete_phase_state_caps_verdict_to_pending(self):
-        self.pg.submit(self.state, "plan", model_class="strong-reasoning")
-        self.pg.approve(self.state, "plan", "user", "同意")
-        self.pg.start(self.state, "plan")
-        self.pg.complete(self.state, "plan")
+        self.pg.start(self.state, "plan", "SESS-1")
         workspace = self.folder / "incomplete"
         baseline = self.ledger.initialize(workspace, self.design, self.context, "R1",
                                           [], None, None, self.adversarial, None, self.state)
@@ -365,8 +518,27 @@ class PhaseLedgerIntegrationTests(PhaseGateTestBase):
         summary = self.ledger.summarize(workspace, self.design, self.context, [])
         self.assertEqual(summary["verdict_ceiling"], "通过")
 
+    def test_same_session_approval_caps_ledger_verdict(self):
+        """同会话放行虽走完流程，台账侧也必须压住结论。"""
+        for phase in self.pg.PHASES:
+            if phase != "plan":
+                self.pg.submit(self.state, phase,
+                               model_class=self.pg.ROUTING[phase]["model_class"])
+                self.pg.approve(self.state, phase, "user", "同会话同意")
+            self.pg.start(self.state, phase, "SESS-1")
+            self.pg.complete(self.state, phase, session="SESS-1")
+        workspace = self.folder / "same-session"
+        baseline = self.ledger.initialize(workspace, self.design, self.context, "R1",
+                                          [], None, None, self.adversarial, None, self.state)
+        self.assertEqual(baseline["gate_precondition"]["phase_ceiling"], "待核实")
+        self.assertTrue(any("同会话" in reason
+                            for reason in baseline["gate_precondition"]["phase_reasons"]))
+        self.run_all_cases(workspace)
+        self.assertEqual(self.ledger.summarize(workspace, self.design, self.context, [])["verdict_ceiling"],
+                         "待核实")
+
     def test_unacknowledged_routing_mismatch_caps_verdict(self):
-        self.finish_all(model_classes={"adjudicate": "fast"})
+        self.finish_all(model_classes={"adjudicate": self.pg.ROUTING["execute"]["model_class"]})
         workspace = self.folder / "routing"
         baseline = self.ledger.initialize(workspace, self.design, self.context, "R1",
                                           [], None, None, self.adversarial, None, self.state)

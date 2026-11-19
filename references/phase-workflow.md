@@ -1,6 +1,12 @@
-# 三阶段执行闸门（规划 → 采集 → 裁决）
+# 三阶段执行闸门（规划 → 采集 → 裁决，跨会话）
 
-把一次测试拆成三段执行，**每段之间由用户放行**。目的不是流程好看，而是把"规划质量"和"判定质量"压在强推理环节，把"点、填、读"这类标准化动作交给快模型，并且用机械手段禁止采集环节越界下结论。
+把一次测试拆成三段执行，**阶段之间要停会话、换会话**，在新会话里由用户确认后继续。目的不是流程好看，而是三件实事：
+
+1. 把"规划质量"和"判定质量"压在强推理模型，"点、填、读"交给快模型——**换会话才谈得上换模型**；
+2. 用机械手段禁止采集环节越界下结论；
+3. 让每个阶段的下游都拿到一份明确的交接包，而不是靠同一段上下文记忆滚动。
+
+同会话内确认（legacy `approve`）保留兼容，但一律记 `same_session`，结论上限压"待核实"——同会话既换不了模型，也没有"人真正看过交接包"的独立环节。
 
 ## 0. 需求可疑点（先声明，再执行）
 
@@ -11,55 +17,93 @@
 | 模型路由不可由专家包强制 | 专家包是提示词 + 脚本资产，实际模型由会话/平台决定。脚本换不了模型 | 降级为**声明 + 核对**：每阶段必须声明实际模型类别，与路由表不符时结论上限压"待核实"，除非记录误配理由（`ack-routing`）。**不得宣称"已实现自动路由"** |
 | 路由表依据的是外部对比数据 | "GPT-6.1-Sol medium 领先 33.5 分""GLM 约 2.3 倍速 / $0.41 每任务"等数值来自需求方陈述，本包无独立来源 | 只作为**选型建议**写进路由表，不作判据、不进报告结论 |
 | 采集环节的"不判定"只能机械拦一部分 | 脚本可拦判定字段与 PASS/FAIL 枚举，但拦不住把判定写进自然语言观察文本（如"看起来功能正常"） | 键名/枚举机械拦截 + 文档纪律双管；**如实标注该盲区**，不宣称"已杜绝误判" |
-| 阶段切分与自适应探索有张力 | 采集期发现新风险面时，严格执行"计划不可变"会扼杀探索 | 提供**修订申请**通道（`amend` → 用户批准），批准前不得出裁决；不许静默扩写计划 |
+| 阶段切分与自适应探索有张力 | 采集期发现新风险面时，严格执行“计划不可变”会扼杀探索 | 提供**修订申请**通道（`amend` → 用户批准），批准前不得出裁决；不许静默扩写计划 |
+| “停会话、新开会话”不是脚本能执行的动作 | 脚本只能要求“换一个会话标识”，停会话与新开会话只能由人完成 | 交接包显式输出“操作步骤（必须由用户完成）”；`resume` 机械要求新会话标识且从未使用过；**如实声明**确认码防误操作不防伪造 |
 
 ## 1. 三阶段定义
 
-| 阶段 | 名称 | 路由类别 | 核心产出 | 进门条件 | 准出条件 |
-|---|---|---|---|---|---|
-| `plan` | 规划与用例生成 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | 需求评审结论、功能点/场景/用例、风险面与对抗 plan、放行申请 | 收到需求/网址 | 产物齐备且已提交放行 |
-| `execute` | 批量执行与状态采集 | `fast`（建议 GLM-5.3-Flash high） | 执行轨迹：每步页面快照、网络响应、控制台日志、元素状态、证据路径 | `plan` 已 done 且本阶段已获放行 | 批次闭环、采集记录合规 |
-| `adjudicate` | 结果裁决与缺陷分类 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | 产品缺陷/环境故障/测试步骤问题/需求问题的分类与证据等级 | `execute` 已 done 且本阶段已获放行 | 裁决条目合规、缺陷登记 |
+| 阶段 | 名称 | 路由类别 | 执行会话 | 核心产出 | 进门条件 | 准出条件 |
+|---|---|---|---|---|---|---|
+| `plan` | 规划与用例生成 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | S1（`init` 创建） | 需求评审结论、功能点/场景/用例、风险面与对抗 plan | 收到需求/网址（`init` 即放行） | 产物齐备、下一阶段已 submit、已 checkpoint |
+| `execute` | 批量执行与状态采集 | `fast`（建议 GLM-5.3-Flash high） | **S2（新会话）** | 执行轨迹：每步页面快照、网络响应、控制台日志、元素状态、证据路径 | `plan` 已 done + 新会话 `resume` 成功 | 批次闭环、采集记录合规、下一阶段已 submit、已 checkpoint |
+| `adjudicate` | 结果裁决与缺陷分类 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | **S3（新会话）** | 产品缺陷/环境故障/测试步骤问题/需求问题的分类与证据等级 | `execute` 已 done + 新会话 `resume` 成功 | 裁决条目合规、缺陷登记、已 checkpoint |
 
-阶段与既有工作流程的映射：阶段一 ↔ 工作流程 1–3；阶段二 ↔ 工作流程 3–4；阶段三 ↔ 工作流程 4–6。**步骤是动作清单，阶段是放行边界**——动作可以来回，跨阶段必须经用户同意。
+阶段与既有工作流程的映射：阶段一 ↔ 工作流程 1–3；阶段二 ↔ 工作流程 3–4；阶段三 ↔ 工作流程 4–6。**步骤是动作清单，阶段是放行边界与会话边界**——动作可以在同一阶段内反复，跨阶段必须结束当前会话、由用户在新会话确认。
 
-## 2. 放行协议（机械，不靠口头）
+## 2. 放行协议：停会话 → 新会话确认（机械，不靠口头）
 
-状态机：`pending → awaiting_approval → approved → in_progress → done`，另有 `rejected`。
+状态机：`pending → awaiting_approval → approved → in_progress → done`，另有 `rejected`。会话维度另有两个字段：`active_session`（状态当前持有者）与 `awaiting_session_for`（交接未消费时指向待续跑阶段）。
+
+### 2.1 一个阶段的标准动作序列
+
+以阶段一为例（规划在会话 S1，采集在会话 S2，裁决在会话 S3）：
 
 ```bash
-# 阶段一产物就绪，申请放行（必须声明实际执行模型类别）
-python scripts/phase_gate.py init  <task>/phase-state.json --task "<任务名>"
-python scripts/phase_gate.py submit <state> --phase plan \
-  --artifact <task>/review-result.json --artifact <task>/cases-xxx.json \
-  --model-class strong-reasoning --model-name "<实际模型名>"
-# 用户放行（放行人 + 依据缺一不可）
-python scripts/phase_gate.py approve <state> --phase plan --by user --note "同意，进入采集"
-python scripts/phase_gate.py start   <state> --phase plan
-python scripts/phase_gate.py complete <state> --phase plan
-# 采集、裁决同构；随时查看状态与下一步
+# ── 会话 S1：规划 ─────────────────────────────
+python scripts/phase_gate.py init <task>/phase-state.json --task "<任务名>" \
+  --session SESS-1 --model-class strong-reasoning --model-name "GPT-6.1-Sol medium"
+# init 即放行规划阶段（用户下达任务＝同意规划），无需再 approve
+python scripts/phase_gate.py start    <state> --phase plan  --session SESS-1
+# …规划工作：评审、功能点、场景、用例、风险面…
+python scripts/phase_gate.py complete <state> --phase plan  --session SESS-1
+python scripts/phase_gate.py submit   <state> --phase execute --session SESS-1 \
+  --artifact <task>/cases-xxx.json            # 说明下一步要采什么
+python scripts/phase_gate.py checkpoint <state> --phase plan --session SESS-1
+# → 生成 handoff/handoff-plan.md，打印确认文本；本会话到此结束
+
+# ── 用户操作（必须由人完成）──────────────────
+# 1. 结束 S1；
+# 2. 新开会话 S2，把执行模型切换为 GLM-5.3-Flash high；
+# 3. 把交接包里的确认文本原样发出，例如：
+#    「续跑任务「X」的阶段 execute（批量执行与状态采集），确认码 19469EA8；
+#      本会话执行模型 GLM-5.3-Flash high（fast）」
+
+# ── 会话 S2：采集（只采集，不判定）──────────
+python scripts/phase_gate.py resume <state> --phase execute --session SESS-2 \
+  --user-confirm "<上面那段确认文本原样>" --model-class fast --model-name "GLM-5.3-Flash high"
+python scripts/phase_gate.py start  <state> --phase execute --session SESS-2
+# …执行与采集…
+python scripts/phase_gate.py complete <state> --phase execute --session SESS-2
+python scripts/phase_gate.py submit   <state> --phase adjudicate --session SESS-2
+python scripts/phase_gate.py checkpoint <state> --phase execute --session SESS-2
+
+# ── 会话 S3：裁决（强推理 + 诚实性规则）──────
+python scripts/phase_gate.py resume <state> --phase adjudicate --session SESS-3 \
+  --user-confirm "<交接包确认文本>" --model-class strong-reasoning
+python scripts/phase_gate.py start  <state> --phase adjudicate --session SESS-3
+python scripts/phase_gate.py complete <state> --phase adjudicate --session SESS-3
+python scripts/phase_gate.py checkpoint <state> --phase adjudicate --session SESS-3
+
+# 随时查看与终检
 python scripts/phase_gate.py status <state>
 python scripts/phase_gate.py check-verdict <state>   # 未通过时 rc=1，结论上限"待核实"
 ```
 
-硬规则：
+### 2.2 硬规则（全部机械校验，违反即 rc=2）
 
-- **未 `approve` 不得 `start`**，`start` 会直接报错（rc=2）；不允许"边做边等同意"。
-- **前一阶段未 `done` 不得提交下一阶段**。
-- 放行人、放行时间、放行依据三者缺一，`approve` 拒绝。
+- **未 `resume` 不得 `start`**（规划阶段由 `init` 放行）。不允许"边做边等同意"。
+- **前一阶段未 `done` 不得提交下一阶段**；`checkpoint` 必须先把下一阶段 `submit` 好（末阶段除外），否则交接包没有明确的下一步。
+- **`resume` 是跨会话唯一入口**，且必须满足四条：`--session` 与交接会话**不同**；该标识**从未使用过**；`--user-confirm` 含交接确认码；交接包未被消费（`consumed=false`）。
+- **交接点可以驳回**：用户在新会话不满意交接产物，可直接 `reject --session <新会话>`，无需先 resume。
+- **状态单写者**：`active_session` 之外的会话调任何推进命令一律拒绝（"无权操作"）。会话交替改同一份状态被机械禁止。
+- 放行人、放行时间、放行依据三者缺一，`approve` / `resume` 拒绝。
 - 被驳回（`reject`）后须修订再 `submit`，驳回理由进 history，不得覆盖。
 - 存在未批准的修订申请时，`check-verdict` 返回"待核实"。
 
-### 2.1 防自授与防篡改（自攻发现的两条绕过路径）
-
-实现完成后对闸门做了黑盒自攻，两条路径当时都成立，已修：
+### 2.3 防自授、防篡改与防蒙混（自攻发现，均已修）
 
 | 攻击 | 修复前 | 修复后 |
 |---|---|---|
 | 智能体以 `--by agent` 给自己放行 | 成功 → 人工闸门变自动放行 | 放行人命中智能体身份集合（`agent`/`assistant`/`bot`/`system`/`ai`/`expert`/`砺衡`/`助手`/`智能体`）即拒绝 |
-| 直接改 `phase-state.json` 把三个阶段置 `done` | 成功 → 伪造全流程完成并给出"通过" | history 哈希链 + 状态摘要校验，`load` 时检出并报"阶段状态不可信"，拒绝沿用 |
+| 直接改 `phase-state.json` 把三个阶段置 `done` | 成功 → 伪造全流程完成并给出"通过" | history 哈希链 + 状态摘要（含 `sessions`/`active_session`/`awaiting_session_for`）校验，`load` 时报"阶段状态不可信" |
+| 同会话换个会话标识假装跨会话 | 旧实现根本没有会话概念 | `resume` 要求新标识 ≠ 交接会话且从未使用过；同会话 `approve` 记 `same_session`，结论上限只能"待核实" |
+| 交接后在旧会话继续推进 | — | `active_session` 单写者校验 + 交接未消费时旧会话 `start` 被拒 |
 
-**诚实边界**：哈希链能检出**朴素手工改写**，检不出"拿脚本按格式重算整条链"的有意伪造——本包不掌握私钥，做不到不可否认签名。因此真正的控制点是：放行人必须是人工身份、放行记录必须进报告供人核对、被检出的状态不得被"修好再用"。不宣称"防篡改已完备"。
+**诚实边界（必须写进报告，不得夸大）**：
+
+- 确认码存在状态文件里，能读文件的智能体理论上可以自行填入。它防的是**误操作与蒙混**，不是防有意伪造——那等同伪造哈希链，脚本在无签名密钥前提下无法证明"这行字确实是人打的"。真正的控制点是：**停会话与新开会话这两个动作只能由人做**，放行记录进报告供人核对，被检出的状态不得"修好再用"。
+- 哈希链能检出朴素手工改写，检不出"拿脚本按格式重算整条链"的伪造。
+- 本包不能切换模型，只核对声明的模型类别（见第 5 节）。
 
 ## 3. 阶段二禁令：只采集，不判定
 
@@ -114,14 +158,16 @@ execution_ledger.verdict_ceiling
   = strictest(台账事实上限, adversarial_ceiling, phase_ceiling)
 ```
 
-`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在未批准修订、或存在未确认的路由误配。`execution_ledger init --phase-state <state>` 会把这三项写入 `baseline.gate_precondition`，不传该参数时保持旧行为（结构不变，便于存量批次复跑）。
+`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在未批准修订、存在未确认的路由误配、存在**同会话放行**（`approval.mode = same_session`）、或交接未消费（`awaiting_session_for` 非空）。`execution_ledger init --phase-state <state>` 会把这几项写入 `baseline.gate_precondition`，不传该参数时保持旧行为（结构不变，便于存量批次复跑）。
 
 ## 6. 常见错误与处置
 
 | 错误 | 后果 | 正确做法 |
 |---|---|---|
-| 采集阶段顺手写"通过/失败" | 快模型的误判直接变成结论，方案的核心收益被抵消 | 只记 `observed` 与 `collection_state`，判定留到裁决阶段 |
-| 用户没同意就开始下一阶段 | 阶段边界失效，等于退回单段执行 | 先 `submit` → 等 `approve` → 再 `start` |
-| 路由不符但不说 | 假设（规划强模型）不成立，结论可信度虚高 | `ack-routing` 记录误配理由，并在报告"范围限制"中披露 |
-| 用"页面应该有"填缺失证据 | 盲测里"帮页面把测试做完"的同型错误 | 记 `blocked` / `not_run`，在报告中列缺口 |
+| 采集阶段顺手写“通过/失败” | 快模型的误判直接变成结论，方案的核心收益被抵消 | 只记 `observed` 与 `collection_state`，判定留到裁决阶段 |
+| 在同一个会话里连续做两个阶段 | 换不了模型，规划/裁决质量前提不成立 | 每阶段结束 `checkpoint` → 停会话 → 新会话 `resume` |
+| 交接后忘了把确认文本发回新会话 | `resume` 因缺确认码被拒（rc=2），流程停住 | 打开 `handoff/handoff-<phase>.md`，把 `text` 代码块里那段原样发出 |
+| 用同一个会话标识接两个阶段 | 被拒：“必须换会话”或“已使用过” | 每个阶段用新的会话标识（SESS-1/2/3…） |
+| 路由不符但不说 | 假设（规划强模型）不成立，结论可信度虚高 | `ack-routing` 记录误配理由，并在报告“范围限制”中披露 |
+| 用“页面应该有”填缺失证据 | 盲测里“帮页面把测试做完”的同型错误 | 记 `blocked` / `not_run`，在报告中列缺口 |
 | 阶段完成但台账不传 `--phase-state` | 阶段闸门形同虚设 | 建台账时显式传状态文件，报告引用 `phase_state` 字段 |

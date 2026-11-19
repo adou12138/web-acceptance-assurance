@@ -578,3 +578,23 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 2. 手改 `phase-state.json` 把三阶段置 done → history 哈希链 + 状态摘要校验，`load` 检出报「阶段状态不可信」，拒绝沿用。诚实边界：检不出「按格式重算整条链」的有意伪造（无签名密钥），已写入文档，不宣称防篡改完备。
 
 版本 1.38.0（v1.37.0→1.38.0）；备份 `backup/web-acceptance-assurance-1.37.0`（git worktree 导出 HEAD 并复验 338 passed + 1 skipped）；377 tests + 198 subtests 全绿（新增 `tests/test_phase_gate.py` 38 例）。
+
+## 阶段间跨会话交接（v1.39.0，2026-11-19）
+
+用户澄清：**阶段之间要停会话，由人手动发话并新开会话继续**（不是在会话内确认），目的是在不同阶段切换执行模型。原实现是「同会话 `approve`」，正是要排除的做法。
+
+| 落地项 | 内容 |
+|---|---|
+| 状态机扩展 | schema 升 `phase-state/2`；新增 `active_session`（状态单写者）、`awaiting_session_for`（交接未消费时指向待续跑阶段）、`sessions`（每会话的模型与开关时间）。摘要哈希覆盖这三项，手改会被检出 |
+| 新增 `checkpoint` | 阶段收尾：必须先 `submit` 下一阶段（末阶段除外），生成 `handoff/handoff-<phase>.md` + `.json`，含**确认码**、**下阶段建议模型**、**用户需原样发出的确认文本**、产物清单与恢复命令；状态置 done 并挂 `awaiting_session_for`，本会话至此不得推进 |
+| 新增 `resume` | **跨会话唯一入口**。四条硬校验：新会话标识 ≠ 交接会话、从未使用过、`--user-confirm` 含确认码、交接包未被消费。通过后记 `approval.mode=cross_session`（含 from/to session 与确认码），切换 `active_session`，按新会话模型声明路由并核对 |
+| 同会话 `approve` 降级 | 保留兼容，但记 `mode=same_session`；`check-verdict` 与 `execution_ledger._phase_precondition` 一律压「待核实」——同会话换不了模型 |
+| 单写者与会话边界 | `active_session` 之外的会话调任何推进命令被拒；交接未消费时旧会话 `start` 被拒；交接点允许新会话直接 `reject`（无先 resume） |
+| 规划阶段无需再申请 | `init` 即放行 `plan`（`approval.mode=task_start`，用户下达任务＝同意规划）；规划阶段的 routing 由起始会话的 `model_class` 声明 |
+| 文档 | `references/phase-workflow.md` 第 2 节重写（标准动作序列含会话切换、硬规则、自攻表、诚实边界）；角色定义三阶段表加「执行会话」列并新增「阶段收尾固定交付」四条 |
+
+**实现期的三处自发现缺陷（均已修）**：①`checkpoint` 若把阶段置成非 done，末阶段永远拿不到结论——改为「阶段完成即 done + 交接未消费标记」；②`resume` 去目标阶段找确认码（确认码在**上一阶段**的交接包里）——改为沿交接链取；③`resume` 误把「目标阶段须 done」当校验（应校验上一阶段）。另撤销一条自拟的「一会话一阶段」校验：`resume` 已要求会话标识未使用过，该条属死代码且会误伤同会话兼容路径。
+
+**诚实边界（写进文档，不得夸大）**：确认码存于状态文件，能读文件的智能体理论上可自行填入——它防误操作与蒙混，不防有意伪造；真正不可替代的控制点是「停会话、新开会话」这两个只有人能做的动作，以及放行记录进报告供人核对。本包仍不能切换模型，只能核对声明的模型类别。
+
+版本 1.39.0（v1.38.0→1.39.0）；备份 `backup/web-acceptance-assurance-1.38.0`（git worktree 导出 HEAD，复验为旧实现：schema/1、无 checkpoint）；缓存 1.39.0 已同步、1.38.0 的 4 个 SKILL.md 已禁用；390 tests + 198 subtests 全绿（`test_phase_gate.py` 51 例）。

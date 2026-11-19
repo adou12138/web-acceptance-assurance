@@ -1,16 +1,23 @@
-"""Three-phase execution gate: plan -> execute -> adjudicate, with human approval between phases.
+"""Three-phase execution gate: plan -> execute -> adjudicate, across separate sessions.
 
 设计原则：
-1. 阶段推进只认状态机，不认“我觉得可以了”。每阶段开始前必须有用户显式放行记录
-   （放行人 + 时间 + 依据），缺一项即拒绝开始。
-2. 采集阶段只许记录观察，不许下判定：记录里出现判定字段或 PASS/FAIL 类枚举值时拒绝写入。
+1. **阶段之间换会话，不换会话不给过。** 一个阶段做完必须 `checkpoint` 收尾并结束本会话；
+   下一阶段只能在用户**新开的会话**里用 `resume` 启动。换会话才谈得上换模型——
+   同会话内确认（legacy `approve`）虽保留兼容，但一律记 `same_session`，结论上限压“待核实”。
+2. 阶段推进只认状态机，不认“我觉得可以了”。`resume` 必须带用户在新会话里原样粘回的
+   确认码（由 `checkpoint` 生成并打印），缺确认码即拒绝；确认文本随记录留痕。
+3. 采集阶段只许记录观察，不许下判定：记录里出现判定字段或 PASS/FAIL 类枚举值时拒绝写入。
    这条把“采集方只负责点、填、读，不负责判定”落成机械约束，而不是口头约定。
-3. 裁决阶段只许依据实际观察下判定：无证据引用、依据来源非 observed_*、
+4. 裁决阶段只许依据实际观察下判定：无证据引用、依据来源非 observed_*、
    或声明“由脚本补全页面行为”时拒绝。这是诚实性规则的机械投影。
-4. 模型路由以“声明 + 核对”实现：每阶段必须声明实际执行模型类别，与路由表不符时
+5. 模型路由以“声明 + 核对”实现：每阶段必须声明实际执行模型类别，与路由表不符时
    结论上限压“待核实”，除非显式记录误配理由。本脚本不切换模型，只核对声明。
-5. 本闸门只约束阶段顺序与记录合规，不产生“通过/不通过”业务结论；
+6. 本闸门只约束阶段顺序、会话边界与记录合规，不产生“通过/不通过”业务结论；
    技术结论仍由 execution_ledger / adversarial_gate 计算并按最严取齐。
+
+诚实边界：确认码落在状态文件里，能读到文件的智能体理论上可以自行填入。确认码防的是
+“没看交接包就往下跑”和“同会话蒙混过关”，**不是**防有心伪造——那等同伪造哈希链，
+属于故意欺骗，脚本无法在无签名密钥的前提下证明“这行字确实是人打的”。
 """
 from datetime import datetime, timezone
 import argparse
@@ -19,7 +26,7 @@ import json
 from pathlib import Path
 import sys
 
-SCHEMA = "phase-state/1"
+SCHEMA = "phase-state/2"
 PHASES = ("plan", "execute", "adjudicate")
 NEXT_PHASE = {"plan": "execute", "execute": "adjudicate", "adjudicate": None}
 PHASE_LABELS = {"plan": "规划与用例生成", "execute": "批量执行与状态采集",
@@ -39,6 +46,12 @@ ROUTING = {
 }
 
 STATUSES = {"pending", "awaiting_approval", "approved", "in_progress", "done", "rejected"}
+
+# 交接确认文本模板：checkpoint 打印给用户，用户在**新会话**里原样粘回
+HANDOFF_CONFIRM_TEMPLATE = ("续跑任务「{task}」的阶段 {phase}（{label}），确认码 {token}；"
+                            "本会话执行模型 {model_hint}（{model_class}）")
+HANDOFF_FILE = "handoff-{phase}.md"
+HANDOFF_JSON = "handoff-{phase}.json"
 
 # 采集阶段禁入的判定类键名（出现即视为越界判定）
 COLLECTION_FORBIDDEN_KEYS = (
@@ -83,6 +96,9 @@ def _last_hash(state):
 
 def _state_digest(state):
     body = {"phases": state["phases"], "amendments": state["amendments"],
+            "sessions": state.get("sessions") or [],
+            "active_session": state.get("active_session"),
+            "awaiting_session_for": state.get("awaiting_session_for"),
             "history_tail": _last_hash(state)}
     return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
 
@@ -115,6 +131,29 @@ def _phase(phase):
     return phase
 
 
+def _require_session(state, session=None):
+    """会话归属校验：状态同一时刻只由一个会话持有。
+
+    换会话续跑的唯一入口是 resume；其它命令拿着别的会话标识来操作一律拒绝，
+    避免两个会话交替改同一份状态。
+    """
+    active = state.get("active_session")
+    if not active:
+        raise ValueError("阶段状态未绑定会话：无法操作")
+    given = _text(session, "session") if session else active
+    if given != active:
+        raise ValueError(f"阶段状态由会话 {active} 持有，{given} 无权操作；"
+                         "跨会话续跑须在新会话执行 resume，不得直接改状态")
+    return given
+
+
+def _session_record(state, session):
+    for item in state.get("sessions") or []:
+        if item.get("id") == session:
+            return item
+    return None
+
+
 def _record(state, action, phase=None, detail=None):
     payload = {"at": _now(), "action": action, "phase": phase, "detail": detail or {}}
     prev = _last_hash(state)
@@ -123,17 +162,25 @@ def _record(state, action, phase=None, detail=None):
     state["updated_at"] = payload["at"]
 
 
-def new_state(task):
+def new_state(task, session="SESS-1", model_class=None, model_name=None):
     task = _text(task, "task")
+    session = _text(session, "session")
     return {
         "schema": SCHEMA,
         "task": task,
         "created_at": _now(),
         "updated_at": _now(),
+        "active_session": session,
+        "awaiting_session_for": None,
+        "sessions": [{"id": session, "opened_at": _now(),
+                      "model_class": (model_class.lower() if isinstance(model_class, str) else None),
+                      "model_name": (model_name.strip() if isinstance(model_name, str) and model_name.strip() else None),
+                      "closed_at": None, "phases": []}],
         "phases": {
             phase: {"status": "pending", "artifacts": [], "routing": None,
                     "submitted_at": None, "approval": None, "started_at": None,
-                    "completed_at": None, "rejections": []}
+                    "completed_at": None, "rejections": [], "handoff": None,
+                    "session": None}
             for phase in PHASES
         },
         "amendments": [],
@@ -141,14 +188,25 @@ def new_state(task):
     }
 
 
-def init_state(path, task):
+def init_state(path, task, session="SESS-1", model_class=None, model_name=None, note=None):
+    """建立阶段状态机。用户下达测试任务即视为放行第一阶段（规划）。"""
     path = Path(path)
     if path.exists():
         raise ValueError(f"phase state already exists: {path}")
     if not path.parent.is_dir():
         raise ValueError("phase state parent directory must already exist")
-    state = new_state(task)
-    _record(state, "init", None, {"task": task})
+    state = new_state(task, session, model_class, model_name)
+    _record(state, "init", None, {"task": task, "session": state["active_session"],
+                                  "model_class": model_class, "model_name": model_name})
+    # 规划阶段无需再单独申请：用户给出测试任务本身就是放行
+    entry = state["phases"]["plan"]
+    entry["approval"] = {"by": "user", "via": "task_start", "mode": "task_start",
+                         "at": _now(),
+                         "note": (note.strip() if isinstance(note, str) and note.strip()
+                                  else "用户下达测试任务，视为放行规划阶段")}
+    entry["status"] = "approved"
+    entry["session"] = state["active_session"]
+    _record(state, "approve", "plan", entry["approval"])
     save(path, state)
     return state
 
@@ -165,6 +223,10 @@ def load(path):
             raise ValueError(f"phase state missing phase: {phase}")
     state.setdefault("amendments", [])
     state.setdefault("history", [])
+    state.setdefault("sessions", [])
+    state.setdefault("awaiting_session_for", None)
+    if not state.get("active_session"):
+        raise ValueError("phase state missing active_session：无法判定当前会话，须重建阶段状态")
     ok, why = verify_chain(state)
     if not ok:
         raise ValueError(f"阶段状态不可信：{why}；须由用户重新放行，不得沿用被改写的记录")
@@ -193,8 +255,10 @@ def _prior_done(state, phase):
     return True, None
 
 
-def submit(state, phase, artifacts=None, model_class=None, model_name=None, note=None):
-    """阶段产物就绪，提交放行申请。"""
+def submit(state, phase, artifacts=None, model_class=None, model_name=None, note=None,
+           session=None):
+    """申请放行某阶段（由**上一阶段所在会话**在 checkpoint 前调用）。"""
+    _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] not in {"pending", "rejected"}:
         raise ValueError(f"phase {phase} cannot be submitted from status {entry['status']}")
@@ -217,7 +281,8 @@ def submit(state, phase, artifacts=None, model_class=None, model_name=None, note
     _record(state, "submit", phase, {"artifacts": artifacts,
                                      "declared_class": entry["routing"]["declared_class"],
                                      "declared_model": entry["routing"]["declared_model"],
-                                     "note": note})
+                                     "note": note,
+                                     "session": state.get("active_session")})
     return state
 
 
@@ -230,34 +295,64 @@ def _approver(by):
     return name
 
 
-def approve(state, phase, by, note):
-    """用户放行：允许开始该阶段。放行人与依据缺一不可。"""
+def approve(state, phase, by, note, session=None):
+    """同会话放行（兼容路径，**不是推荐流程**）。
+
+    推荐流程是 checkpoint → 结束会话 → 新会话 resume。同会话放行会记
+    mode=same_session，check_verdict 与台账一律把结论上限压“待核实”——
+    因为同一会话内放行既无法换模型，也失去了“人真正看过交接包”的独立性。
+    """
+    _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "awaiting_approval":
         raise ValueError(f"phase {phase} is not awaiting approval (status={entry['status']})")
     ok, why = _prior_done(state, phase)
     if not ok:
         raise ValueError(why)
-    approval = {"by": _approver(by), "at": _now(), "note": _text(note, "note")}
+    approval = {"by": _approver(by), "at": _now(), "note": _text(note, "note"),
+                "via": "same_session", "mode": "same_session",
+                "session": state.get("active_session")}
     entry["approval"] = approval
     entry["status"] = "approved"
     _record(state, "approve", phase, approval)
     return state
 
 
-def reject(state, phase, by, reason):
+def reject(state, phase, by, reason, session=None):
+    """驳回阶段。允许在交接点由**新会话**直接驳回（用户不满意交接产物）。"""
     entry = _entry(state, phase)
-    if entry["status"] != "awaiting_approval":
-        raise ValueError(f"phase {phase} is not awaiting approval (status={entry['status']})")
-    record = {"by": _text(by, "by"), "at": _now(), "reason": _text(reason, "reason")}
+    session = _text(session, "session") if session else state.get("active_session")
+    active = state.get("active_session")
+    at_handoff = state.get("awaiting_session_for") == phase
+    if session != active:
+        if not at_handoff:
+            raise ValueError(f"阶段状态由会话 {active} 持有，{session} 无权驳回；"
+                             "跨会话只有在交接点（checkpoint 之后、resume 之前）才可驳回")
+        handoff_session = (entry.get("handoff") or {}).get("session")
+        if session == handoff_session:
+            raise ValueError("驳回会话与交接会话相同：交接点驳回须在新会话进行")
+        if _session_record(state, session):
+            raise ValueError(f"会话 {session} 已使用过：不得重复使用会话标识")
+    if entry["status"] != "awaiting_approval" and not at_handoff:
+        raise ValueError(f"phase {phase} 不可驳回（status={entry['status']}）")
+    record = {"by": _text(by, "by"), "at": _now(), "reason": _text(reason, "reason"),
+              "session": session}
     entry["rejections"].append(record)
     entry["status"] = "rejected"
+    entry["handoff"] = None
+    entry["approval"] = None
+    state["awaiting_session_for"] = None
+    if session != active:
+        state["sessions"].append({"id": session, "opened_at": _now(), "model_class": None,
+                                  "model_name": None, "closed_at": None, "phases": []})
+        state["active_session"] = session
     _record(state, "reject", phase, record)
     return state
 
 
-def start(state, phase):
-    """开始阶段：必须已获放行，且前一阶段已 done。"""
+def start(state, phase, session=None):
+    """开始阶段：必须已获放行，且前一阶段已 done；须在放行所在会话内开始。"""
+    session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "approved":
         raise ValueError(f"phase {phase} not approved for start (status={entry['status']})；"
@@ -265,26 +360,228 @@ def start(state, phase):
     ok, why = _prior_done(state, phase)
     if not ok:
         raise ValueError(why)
+    approval = entry.get("approval") or {}
+    if approval.get("mode") == "cross_session" and approval.get("to_session") != session:
+        raise ValueError(f"阶段 {phase} 的放行发生在新会话 {approval.get('to_session')}，"
+                         f"当前会话 {session} 不得开始；跨会话须由放行会话自己执行")
     if any(a["status"] == "awaiting_approval" for a in state["amendments"]):
         raise ValueError("存在未批准的阶段修订申请：修订批准前不得开始或继续阶段")
+    if entry.get("routing") is None:
+        session_record = _session_record(state, session) or {}
+        entry["routing"] = {
+            "declared_class": session_record.get("model_class"),
+            "declared_model": session_record.get("model_name"),
+            "expected_class": ROUTING[phase]["model_class"],
+            "model_hint": ROUTING[phase]["model_hint"],
+            "ack": None,
+        }
     entry["status"] = "in_progress"
     entry["started_at"] = _now()
-    _record(state, "start", phase)
+    entry["session"] = session
+    _record(state, "start", phase, {"session": session})
     return state
 
 
-def complete(state, phase, note=None):
+def complete(state, phase, note=None, session=None):
+    session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "in_progress":
         raise ValueError(f"phase {phase} is not in progress (status={entry['status']})")
+    if entry.get("session") and entry["session"] != session:
+        raise ValueError(f"阶段 {phase} 在会话 {entry['session']} 中开始，不得在 {session} 中结束")
     entry["status"] = "done"
     entry["completed_at"] = _now()
-    _record(state, "complete", phase, {"note": note})
+    _record(state, "complete", phase, {"note": note, "session": session})
     return state
 
 
-def request_amendment(state, phase, by, note):
+def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=None):
+    """阶段收尾：写交接包并停在 awaiting_new_session——**本会话到此结束**。
+
+    这是“每阶段停止会话、换会话换模型”的机械落点：
+    - 必须先把下一阶段 submit 好（最后一阶段除外），否则交接包没有明确的下一步；
+    - 生成确认码并打印确认文本，用户需在**新会话**里原样粘回；
+    - 状态置 awaiting_new_session 后，本会话任何推进命令都会被拒。
+    """
+    session = _require_session(state, session)
+    entry = _entry(state, phase)
+    if entry["status"] not in {"in_progress", "done"}:
+        raise ValueError(f"phase {phase} 不能收尾（status={entry['status']}）；"
+                         "须先 start 并完成本阶段工作")
+    if any(a["status"] == "awaiting_approval" for a in state["amendments"]):
+        raise ValueError("存在未批准的阶段修订申请：先处理修订再 checkpoint")
+    handoff_dir = Path(handoff_dir)
+    if not handoff_dir.is_dir():
+        raise ValueError(f"交接目录必须已存在：{handoff_dir}")
+    nxt = NEXT_PHASE[phase]
+    if nxt:
+        nxt_status = state["phases"][nxt]["status"]
+        if nxt_status != "awaiting_approval":
+            raise ValueError(f"下一阶段 {nxt} 尚未提交申请（status={nxt_status}）："
+                             f"须先 submit {nxt} 说明下一步要做什么，再 checkpoint")
+    artifacts = [a for a in (artifacts or []) if isinstance(a, str)]
+    token = hashlib.sha256((_state_digest(state) + phase + _now()).encode("utf-8")).hexdigest()[:8].upper()
+    confirm_text = None
+    if nxt:
+        confirm_text = HANDOFF_CONFIRM_TEMPLATE.format(
+            task=state.get("task"), phase=nxt, label=PHASE_LABELS[nxt], token=token,
+            model_hint=ROUTING[nxt]["model_hint"], model_class=ROUTING[nxt]["model_class"])
+    handoff = {
+        "schema": "phase-handoff/1",
+        "task": state.get("task"),
+        "from_phase": phase,
+        "from_session": session,
+        "next_phase": nxt,
+        "next_phase_label": PHASE_LABELS[nxt] if nxt else None,
+        "token": token,
+        "confirm_text": confirm_text,
+        "next_routing": ({"model_class": ROUTING[nxt]["model_class"],
+                          "model_hint": ROUTING[nxt]["model_hint"]} if nxt else None),
+        "artifacts": entry.get("artifacts") or [],
+        "extra_artifacts": artifacts,
+        "note": (note.strip() if isinstance(note, str) and note.strip() else None),
+        "created_at": _now(),
+        "resume_command": (f"python scripts/phase_gate.py resume {phase}-state --phase {nxt} "
+                           f"--session <新会话标识> --user-confirm \"<粘贴确认文本>\" "
+                           f"--model-class {ROUTING[nxt]['model_class']}"
+                           if nxt else None),
+    }
+    md_path = handoff_dir / HANDOFF_FILE.format(phase=phase)
+    json_path = handoff_dir / HANDOFF_JSON.format(phase=phase)
+    md_path.write_text(_render_handoff_md(handoff), encoding="utf-8")
+    json_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    entry["handoff"] = {"at": _now(), "session": session, "token": token,
+                        "markdown": str(md_path), "json": str(json_path),
+                        "consumed": False, "next_phase": nxt}
+    entry["status"] = "done"
+    entry["completed_at"] = entry.get("completed_at") or _now()
+    # 交接未消费：下一个阶段只能在**新会话**里 resume，本会话已无权推进
+    state["awaiting_session_for"] = nxt
+    _record(state, "checkpoint", phase, {"session": session, "token": token,
+                                         "next_phase": nxt,
+                                         "markdown": str(md_path),
+                                         "note": handoff["note"]})
+    return state
+
+
+def _render_handoff_md(handoff):
+    lines = [
+        f"# 阶段交接包 · {handoff['task']}",
+        "",
+        f"- 已结束阶段：`{handoff['from_phase']}`（{PHASE_LABELS[handoff['from_phase']]}）",
+        f"- 交接会话：`{handoff['from_session']}`",
+        f"- 下一阶段：`{handoff['next_phase']}`（{handoff['next_phase_label'] or '无'}）",
+        f"- 生成时间：{handoff['created_at']}",
+        "",
+    ]
+    if handoff["next_routing"]:
+        lines += [
+            f"- **下一阶段建议模型**：{handoff['next_routing']['model_hint']}"
+            f"（类别 `{handoff['next_routing']['model_class']}`）",
+            "",
+        ]
+    lines += ["## 本阶段产物", ""]
+    items = (handoff.get("artifacts") or []) + (handoff.get("extra_artifacts") or [])
+    lines += [f"- `{item}`" for item in items] or ["- （未登记产物路径）"]
+    if handoff.get("note"):
+        lines += ["", "## 交接说明", "", handoff["note"]]
+    lines += [
+        "",
+        "## 操作步骤（必须由用户完成）",
+        "",
+        "1. **结束当前会话**；",
+        f"2. 新开一个会话，把执行模型切换为 {handoff['next_routing']['model_hint'] if handoff['next_routing'] else '任意'}"
+        "（同会话内换模型不视为跨阶段交接）；",
+        "3. 在新会话里把下面这段确认文本原样发出：",
+        "",
+        "```text",
+        handoff["confirm_text"] or "（无下一阶段，本任务三阶段已结束）",
+        "```",
+        "",
+        "4. 新会话据此执行 resume 后，才允许 start 下一阶段。",
+        "",
+        "## 确认码",
+        "",
+        f"`{handoff['token']}`",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def resume(state, phase, new_session, user_confirm, model_class=None, model_name=None,
+           note=None):
+    """新会话续跑：凭用户粘贴的确认文本放行某阶段。这是换会话（换模型）的唯一入口。"""
+    entry = _entry(state, phase)
+    waiting_for = state.get("awaiting_session_for")
+    if waiting_for != phase:
+        if entry["status"] == "awaiting_approval":
+            prior = PHASES[PHASES.index(phase) - 1] if PHASES.index(phase) else "（起点）"
+            raise ValueError(f"阶段 {phase} 处于 awaiting_approval：须先由上一阶段"
+                             f"（{prior}）的会话执行 checkpoint 生成交接包，再在新会话 resume")
+        raise ValueError(f"phase {phase} 不在等待新会话状态（awaiting_session_for={waiting_for}, "
+                         f"status={entry['status']}）；跨会话续跑只能接在 checkpoint 之后")
+    if entry.get("status") not in {"awaiting_approval", "pending", "rejected"}:
+        raise ValueError(f"phase {phase} 状态为 {entry['status']}：交接点应停在待放行，"
+                         "不应已放行或已开始；疑似跨会话推进被绕过")
+    prior = PHASES[PHASES.index(phase) - 1]
+    prior_entry = state["phases"][prior]
+    handoff = prior_entry.get("handoff") or {}
+    if handoff.get("next_phase") != phase:
+        raise ValueError(f"上一阶段 {prior} 的交接包未指向 {phase}：交接链断裂，须重新 checkpoint {prior}")
+    if handoff.get("consumed"):
+        raise ValueError(f"阶段 {prior} 的交接包已被消费：不得重复放行")
+    new_session = _text(new_session, "session")
+    if new_session == handoff.get("session"):
+        raise ValueError(f"新会话标识与交接会话 {new_session} 相同："
+                         "阶段之间必须换会话——同会话续跑等于没换模型，不给过")
+    if _session_record(state, new_session):
+        raise ValueError(f"会话 {new_session} 已使用过：不同阶段必须各自使用新会话")
+    ok, why = _prior_done(state, phase)
+    if not ok:
+        raise ValueError(why)
+    confirm = _text(user_confirm, "user_confirm")
+    token = str(handoff.get("token") or "").upper()
+    if not token:
+        raise ValueError("交接包缺少确认码：该阶段未正常 checkpoint，须重新收尾")
+    if token not in confirm.upper():
+        raise ValueError(f"用户确认文本未包含交接确认码 {token}："
+                         "须把交接包里的确认文本原样粘回，不得由智能体代填或改写")
+    approval = {"by": "user", "via": "new_session", "mode": "cross_session",
+                "at": _now(), "note": confirm,
+                "from_session": handoff.get("session"), "to_session": new_session,
+                "confirm_token": token}
+    entry["approval"] = approval
+    entry["routing"] = {
+        "declared_class": (_text(model_class, "model_class").lower() if model_class else None),
+        "declared_model": (model_name.strip() if isinstance(model_name, str) and model_name.strip()
+                           else None),
+        "expected_class": ROUTING[phase]["model_class"],
+        "model_hint": ROUTING[phase]["model_hint"],
+        "ack": None,
+    }
+    entry["status"] = "approved"
+    handoff["consumed"] = True
+    handoff["consumed_at"] = _now()
+    handoff["consumed_by_session"] = new_session
+    prior_entry["handoff"] = handoff
+    state["awaiting_session_for"] = None
+    for item in state["sessions"]:
+        if item.get("id") == handoff.get("session"):
+            item["closed_at"] = _now()
+    state["sessions"].append({"id": new_session, "opened_at": _now(),
+                              "model_class": entry["routing"]["declared_class"],
+                              "model_name": entry["routing"]["declared_model"],
+                              "closed_at": None, "phases": []})
+    state["active_session"] = new_session
+    _record(state, "resume", phase, dict(approval, note=confirm,
+                                         declared_class=entry["routing"]["declared_class"],
+                                         declared_model=entry["routing"]["declared_model"]))
+    return state
+
+
+def request_amendment(state, phase, by, note, session=None):
     """阶段中发现的计划缺口：登记修订申请，批准前不得给出裁决。"""
+    _require_session(state, session)
     _phase(phase)
     record = {"id": f"AMD-{len(state['amendments']) + 1}", "phase": phase,
               "status": "awaiting_approval", "requested_by": _text(by, "by"),
@@ -349,6 +646,16 @@ def check_verdict(state):
     for amendment in state["amendments"]:
         if amendment["status"] == "awaiting_approval":
             reasons.append(f"阶段修订申请 {amendment['id']} 未获批准：{amendment['note']}")
+    # 同会话放行：无法换模型，也没有独立的“人看过交接包”环节
+    same_session_phases = [phase for phase in PHASES
+                           if ((state["phases"][phase].get("approval") or {}).get("mode")
+                               == "same_session")]
+    for phase in same_session_phases:
+        reasons.append(f"{phase}（{PHASE_LABELS[phase]}）为同会话放行：未跨会话交接，"
+                       "不满足「每阶段停止会话、新会话换模型续跑」的要求")
+    if state.get("awaiting_session_for"):
+        reasons.append(f"交接未消费：阶段 {state['awaiting_session_for']} 仍等新会话 resume，"
+                       "本会话不得继续推进")
     routing_warnings = _routing_warnings(state)
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
@@ -371,20 +678,30 @@ def check_verdict(state):
 
 
 def _next_action(state):
+    waiting_for = state.get("awaiting_session_for")
+    if waiting_for:
+        prior = PHASES[PHASES.index(waiting_for) - 1]
+        handoff = (state["phases"][prior].get("handoff") or {})
+        return (f"阶段 {prior} 已收尾，交接包 {handoff.get('markdown')}："
+                f"**请结束本会话**，新开会话（切换为 {ROUTING[waiting_for]['model_hint']}）后执行 "
+                f"resume {waiting_for}，并把交接包里的确认文本原样发回")
     for phase in PHASES:
         entry = state["phases"][phase]
         status = entry["status"]
         if status == "pending":
-            return f"提交阶段 {phase}（{PHASE_LABELS[phase]}）产物并申请放行"
+            return f"提交阶段 {phase}（{PHASE_LABELS[phase]}）申请：由上一阶段会话 submit {phase}"
         if status == "rejected":
-            return f"阶段 {phase} 被驳回：按驳回意见修订后重新 submit"
+            return f"阶段 {phase} 被驳回：按驳回意见修订后重新 submit {phase}"
         if status == "awaiting_approval":
-            return f"等待用户放行阶段 {phase}（{PHASE_LABELS[phase]}）——未放行不得开始"
+            return (f"阶段 {phase}（{PHASE_LABELS[phase]}）等待放行：先完成上一阶段 checkpoint，"
+                    f"再在新会话 resume {phase}")
         if status == "approved":
-            return f"已获放行，可开始阶段 {phase}（{PHASE_LABELS[phase]}）"
+            return (f"阶段 {phase}（{PHASE_LABELS[phase]}）已获放行，"
+                    f"由会话 {entry.get('approval', {}).get('to_session') or state.get('active_session')} 开始")
         if status == "in_progress":
-            return f"阶段 {phase}（{PHASE_LABELS[phase]}）进行中，完成后 complete 并申请下一阶段放行"
-    return "三阶段均已完成，可按台账口径汇总结论"
+            return (f"阶段 {phase}（{PHASE_LABELS[phase]}）进行中：完成后 complete、"
+                    f"submit 下一阶段申请，再 checkpoint 结束本会话")
+    return "三阶段均已完成且交接已消费，可按台账口径汇总结论"
 
 
 def scan_collection_records(records):
@@ -469,11 +786,15 @@ def status(state):
     return {
         "schema": SCHEMA,
         "task": state.get("task"),
+        "active_session": state.get("active_session"),
+        "awaiting_session_for": state.get("awaiting_session_for"),
+        "sessions": state.get("sessions") or [],
         "phases": {phase: {"label": PHASE_LABELS[phase],
                            "status": state["phases"][phase]["status"],
                            "artifacts": state["phases"][phase].get("artifacts"),
                            "routing": state["phases"][phase].get("routing"),
-                           "approval": state["phases"][phase].get("approval")}
+                           "approval": state["phases"][phase].get("approval"),
+                           "handoff": state["phases"][phase].get("handoff")}
                    for phase in PHASES},
         "amendments": state["amendments"],
         "routing_warnings": _routing_warnings(state),
@@ -488,35 +809,62 @@ def main(argv=None):
     p = sub.add_parser("init", help="初始化阶段状态机")
     p.add_argument("state")
     p.add_argument("--task", required=True)
+    p.add_argument("--session", default="SESS-1", help="本会话标识（用于跨会话交接校验）")
+    p.add_argument("--model-class", help="本会话执行模型类别：strong-reasoning / fast")
+    p.add_argument("--model-name", help="本会话实际模型名（留痕用）")
+    p.add_argument("--note", help="任务放行说明")
 
-    p = sub.add_parser("submit", help="提交阶段产物并申请放行")
+    p = sub.add_parser("submit", help="提交阶段申请（由上一阶段会话发起）")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--artifact", action="append", default=[])
     p.add_argument("--model-class", help="实际执行模型类别：strong-reasoning / fast")
     p.add_argument("--model-name", help="实际模型名（留痕用）")
     p.add_argument("--note")
+    p.add_argument("--session", help="本会话标识")
 
-    p = sub.add_parser("approve", help="用户放行阶段")
+    p = sub.add_parser("checkpoint", help="阶段收尾：写交接包并要求结束本会话")
+    p.add_argument("state")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--handoff-dir", help="交接包目录（默认状态文件同级的 handoff/）")
+    p.add_argument("--artifact", action="append", default=[])
+    p.add_argument("--note")
+    p.add_argument("--session", help="本会话标识")
+
+    p = sub.add_parser("resume", help="新会话续跑：凭用户粘贴的确认文本放行下一阶段")
+    p.add_argument("state")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--session", required=True, help="**新会话**标识（不得与交接会话相同）")
+    p.add_argument("--user-confirm", required=True,
+                   help="用户在新会话中原样粘回的确认文本（须含交接确认码）")
+    p.add_argument("--model-class", help="新会话执行模型类别：strong-reasoning / fast")
+    p.add_argument("--model-name", help="新会话实际模型名（留痕用）")
+    p.add_argument("--note")
+
+    p = sub.add_parser("approve", help="同会话放行（兼容路径；结论上限会压待核实）")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--by", required=True)
     p.add_argument("--note", required=True)
+    p.add_argument("--session", help="本会话标识")
 
-    p = sub.add_parser("reject", help="用户驳回阶段")
+    p = sub.add_parser("reject", help="驳回阶段（交接点可由新会话驳回）")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--by", required=True)
     p.add_argument("--reason", required=True)
+    p.add_argument("--session", help="驳回所在会话标识")
 
     p = sub.add_parser("start", help="开始已放行的阶段")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
+    p.add_argument("--session", help="本会话标识（跨会话放行须由放行会话开始）")
 
     p = sub.add_parser("complete", help="完成进行中的阶段")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--note")
+    p.add_argument("--session", help="本会话标识")
 
     p = sub.add_parser("amend", help="登记计划修订申请")
     p.add_argument("state")
@@ -564,23 +912,33 @@ def main(argv=None):
             return 0 if not violations else 1
 
         if args.command == "init":
-            result = init_state(args.state, args.task)
+            result = init_state(args.state, args.task, args.session, args.model_class,
+                                args.model_name, args.note)
             print(json.dumps(status(result), ensure_ascii=False, indent=2))
             return 0
 
         state = load(args.state)
         if args.command == "submit":
-            submit(state, args.phase, args.artifact, args.model_class, args.model_name, args.note)
+            submit(state, args.phase, args.artifact, args.model_class, args.model_name,
+                   args.note, args.session)
+        elif args.command == "checkpoint":
+            handoff_dir = (Path(args.handoff_dir) if args.handoff_dir
+                           else Path(args.state).parent / "handoff")
+            handoff_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint(state, args.phase, handoff_dir, args.note, args.artifact, args.session)
+        elif args.command == "resume":
+            resume(state, args.phase, args.session, args.user_confirm, args.model_class,
+                   args.model_name, args.note)
         elif args.command == "approve":
-            approve(state, args.phase, args.by, args.note)
+            approve(state, args.phase, args.by, args.note, args.session)
         elif args.command == "reject":
-            reject(state, args.phase, args.by, args.reason)
+            reject(state, args.phase, args.by, args.reason, args.session)
         elif args.command == "start":
-            start(state, args.phase)
+            start(state, args.phase, args.session)
         elif args.command == "complete":
-            complete(state, args.phase, args.note)
+            complete(state, args.phase, args.note, args.session)
         elif args.command == "amend":
-            request_amendment(state, args.phase, args.by, args.note)
+            request_amendment(state, args.phase, args.by, args.note, args.session)
         elif args.command == "approve-amendment":
             approve_amendment(state, args.id, args.by, args.note)
         elif args.command == "ack-routing":

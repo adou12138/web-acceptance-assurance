@@ -302,6 +302,15 @@ def _phase_precondition(phase_state):
         expected = routing.get("expected_class")
         if declared and expected and declared != expected and not routing.get("ack"):
             reasons.append(f"阶段 {phase} 模型路由误配未确认（声明 {declared} / 要求 {expected}）")
+    # 跨会话交接：同会话放行 = 没换会话，也就没换模型，结论不得高于待核实
+    for phase, entry in phases.items():
+        approval = (entry or {}).get("approval") or {}
+        if approval.get("mode") == "same_session":
+            reasons.append(f"阶段 {phase} 为同会话放行：未跨会话交接（未换模型），"
+                           "不满足阶段间停会话换模型的要求")
+    waiting_for = phase_state.get("awaiting_session_for")
+    if waiting_for:
+        reasons.append(f"交接未消费：阶段 {waiting_for} 仍等新会话 resume")
     return {"phase_state": "incomplete" if reasons else "complete",
             "phase_ceiling": "待核实" if reasons else None,
             "phase_reasons": reasons}
