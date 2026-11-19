@@ -7,15 +7,24 @@
 攻击面增长，而报告主指标是通过率，天然奖励"确认正常"。
 
 本脚本只做三件事：
-  1. 诊断：把台账摊成路径类型/判据来源/发现方式的分布，给出攻击密度；
-  2. 门禁：密度与判据独立性不达标时压结论上限，避免"铺得全"冒充"打得深"；
+  1. 诊断：把台账摊成路径类型/判据来源/发现方式/失效假设的分布；
+  2. 门禁：缺可证伪预测、判据拿不出独立通道时压结论上限；
   3. 反声明：字段填满不等于做过。surf_id 要与 plan 风险面核对、independent 要能
      指出独立通道且带证据、method 要落在方法库枚举内，否则不给"通过"。
+
+**判据设计原则：考构造，不考配比。** 早期版本用「非正向路径 ≥30%」「方法 ≥3 种」
+「designed_probe 占比」这类配额，实测可被标注操纵（改个标签就过关），而且
+"如实记录未探索项"会把「通过」打成「待核实」——等于制度上劝阻诚实。现在改为：
+每个高风险风险面至少要有一条可证伪预测（`hypothesis` + `hypothesis_outcome`），
+「打破了几个假设」是产出而不是违规；密度、方法多样性、计划外发现全部只作披露。
 
 纪律：
 - 只按台账里**显式声明**的字段计算；字段缺失记 unknown 并列入缺口，不用启发式值
   充当机械判据（--infer 的粗分结果单列 inferred_*，仅供参考，不进 density）。
 - 工具不判缺陷有无，只判"攻击面是否被真正打过"。
+- 计划外风险面（surfaces_beyond_plan）计为**产出**：未知问题的定义就是"不在计划
+  里"，罚它等于从制度上劝阻发现未知问题。但必须 amend 纳入后续计划，否则下一轮
+  不会有假设，发现会被丢掉。
 
 路径类型不是只有功能逻辑：界面与文案（ui_content）、易用性（usability）、无障碍
 （accessibility）、数据一致性（data_consistency）、回归（regression）都是合法攻击
@@ -73,9 +82,15 @@ DEFAULT_DENSITY_THRESHOLD = 0.30
 DEFAULT_INDEPENDENT_RATE = 0.30
 # 风险面关联：至少一半的执行记录要能追溯到已登记失效假设
 DEFAULT_SURF_LINKAGE = 0.50
-# 方法多样性：记录数达此规模后，至少要出现的不同方法数
+# 方法多样性：记录数达此规模后，至少要出现的不同方法数（现仅作披露，不作门禁）
 METHOD_DIVERSITY_MIN_RECORDS = 20
 METHOD_DIVERSITY_MIN_METHODS = 3
+# 失效假设：无 plan 时，记录数达此规模就至少要有一条可证伪预测。
+# 这条替代了原先的 attack_density / method_low_diversity 配额——配额能被凑，
+# 而「如果 X 则 Y 会坏」凑不出来：写了就得能被执行出来。
+HYPOTHESIS_MIN_RECORDS = 20
+# 全正向台账的判定门槛：达到此规模却一条非正向路径都没有，说明本轮没构造失效条件
+NO_ATTACK_MIN_RECORDS = 5
 
 INFER_RULES = (
     ("accessibility", r"无障碍|键盘|焦点|读屏|对比度|aria|tabindex|目标尺寸|点击区域"),
@@ -179,8 +194,8 @@ def _oracle_unproven(rec):
 
 def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
-            residual_note=None, plan_surfaces=None,
-            surf_linkage_threshold=DEFAULT_SURF_LINKAGE):
+            residual_note=None, plan_surfaces=None, plan_risks=None,
+            surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None):
     records = _normalize_events(records)
     total = len(records)
     path_counts = {k: 0 for k in PATH_TYPES}
@@ -190,12 +205,18 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     modes = {k: 0 for k in DISCOVERY_MODES}
     surf_linked = 0
     surf_bad_format = []
-    surf_unknown = []
+    surf_new = []
     methods = {}
     declared_method_missing = 0
     method_unknown = []
     unproven = []
     probes_total = 0
+    hyp_records = 0
+    hyp_broken = 0
+    hyp_held = 0
+    hyp_blocked = 0
+    hyp_without_surface = []
+    per_surf = {}
 
     known_methods = _method_ids()
 
@@ -226,7 +247,9 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             if not SURF_ID_RE.match(surf):
                 surf_bad_format.append(surf)
             elif plan_surfaces is not None and surf not in plan_surfaces:
-                surf_unknown.append(surf)
+                # 计划外发现不是违规：未知问题的定义就是"不在计划里"，罚它等于
+                # 从制度上劝阻发现未知问题（实测 E2）。单列计数，供 report 呈现。
+                surf_new.append(surf)
             else:
                 surf_linked += 1
 
@@ -238,6 +261,38 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                 methods[method] = methods.get(method, 0) + 1
         else:
             declared_method_missing += 1
+
+        # —— 失效假设：每条记录可声明"如果 X 则 Y 会坏"的可证伪预测与结果 ——
+        hypothesis = str(rec.get("hypothesis") or "").strip()
+        if hypothesis:
+            if not surf:
+                hyp_without_surface.append(rec.get("id") or rec.get("case_id") or "?")
+            hyp_records += 1
+            outcome = str(rec.get("hypothesis_outcome") or "").strip().lower()
+            if outcome not in ("broken", "held", "blocked"):
+                status = str(rec.get("status") or "").strip().upper()
+                outcome = {"FAIL": "broken", "BLOCKED": "blocked"}.get(status, "held")
+            if outcome == "broken":
+                hyp_broken += 1
+            elif outcome == "blocked":
+                hyp_blocked += 1
+            else:
+                hyp_held += 1
+
+        if surf and SURF_ID_RE.match(surf):
+            bucket = per_surf.setdefault(surf, {"records": 0, "methods": set(),
+                                                "hypotheses": 0, "broken": 0, "held": 0,
+                                                "blocked": 0})
+            bucket["records"] += 1
+            if method in known_methods:
+                bucket["methods"].add(method)
+            if hypothesis:
+                bucket["hypotheses"] += 1
+                outcome = str(rec.get("hypothesis_outcome") or "").strip().lower()
+                if outcome not in ("broken", "held", "blocked"):
+                    status = str(rec.get("status") or "").strip().upper()
+                    outcome = {"FAIL": "broken", "BLOCKED": "blocked"}.get(status, "held")
+                bucket[outcome] += 1
 
         probes = rec.get("probes")
         if isinstance(probes, int) and probes > 0:
@@ -252,8 +307,11 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                   if independent_total else "NA")
     surf_rate = round(surf_linked / total, 4) if total else "NA"
     method_diversity = len(methods)
+    single_method_surfs = sorted(s for s, b in per_surf.items()
+                                 if len(b["methods"]) <= 1 and b["records"] >= 3)
 
     gaps = []
+    notices = []
     if not total:
         gaps.append({"code": "empty_ledger", "message": "台账为空，无任何执行记录"})
     if path_unknown:
@@ -261,32 +319,42 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                      "message": f"{path_unknown}/{total} 条未声明 path_type（"
                                 + "/".join(PATH_TYPES) + "），攻击密度无法机械计算；"
                                 "推断值仅供参考，不作判据"})
-    if isinstance(density, float) and density < density_threshold:
-        gaps.append({"code": "attack_density_low",
-                     "message": f"攻击密度 {density} 低于门槛 {density_threshold}："
-                                f"非正向路径 {non_positive}/{total}，本轮以确认功能可用为主"})
-    if isinstance(indep_rate, float) and indep_rate < independent_rate:
-        gaps.append({"code": "oracle_self_attested",
-                     "message": f"判据独立性 {indep_rate} 低于门槛 {independent_rate}："
-                                f"同源自证 {oracle['self_attested']} 条（用被测物自己的回显当 oracle）"})
+    # 绝对零而非比例：比例能被凑，而"一条非正向路径都没有"凑不出来。
+    if declared_total >= NO_ATTACK_MIN_RECORDS and non_positive == 0:
+        gaps.append({"code": "no_attack_paths",
+                     "message": f"{declared_total} 条记录全部是 positive：没有任何"
+                                "边界/异常/权限/组合/界面/一致性/回归路径，"
+                                "本轮只确认了功能可用，没有构造让它坏的条件"})
     if unproven:
         detail = "；".join(f"{rid}: {why}" for rid, why in unproven[:5])
         gaps.append({"code": "oracle_independence_unproven",
                      "message": f"{len(unproven)} 条声明 independent 但拿不出独立通道：{detail}"})
-    if not modes["designed_probe"]:
-        gaps.append({"code": "no_designed_probe",
-                     "message": "没有一条执行来自为失效假设设计的探针（designed_probe=0）："
-                                "缺陷全是偶然撞见或方式未声明，不能算作攻击面已覆盖"})
-    if total and surf_rate < surf_linkage_threshold:
-        gaps.append({"code": "surf_linkage_low",
-                     "message": f"仅 {surf_linked}/{total} 条关联到已登记风险面（surf_id）："
-                                "攻击点未追溯到失效假设，无法判断覆盖了哪些失效方式"})
+    # 一条独立通道都没有，是"证据结构缺失"，与"比例偏低"不是一件事：
+    # 比例可凑，零独立通道凑不出来（每条 independent 都要求点名通道 + 带证据）。
+    if total >= 10 and oracle["independent"] == 0:
+        gaps.append({"code": "oracle_no_independent_evidence",
+                     "message": f"{total} 条记录中没有任何 independent 判据："
+                                "结论全靠自证或未声明，无法排除同源假绿"})
+    # —— 失效假设：替代"配额"的核心判据 ——
+    required_surfaces = {s for s, risk in (plan_risks or {}).items()
+                         if str(risk).strip().lower() in ("high", "critical")}
+    covered = {s for s, b in per_surf.items() if b["hypotheses"] > 0}
+    missing_hyp = sorted(required_surfaces - covered)
+    if missing_hyp:
+        gaps.append({"code": "surface_without_hypothesis",
+                     "message": f"高风险风险面没有任何可证伪预测：{missing_hyp[:6]}"
+                                "（每个高风险面至少要有一条「如果 X 则 Y 会坏」的构造）"})
+    if plan_risks is None and total >= HYPOTHESIS_MIN_RECORDS and not hyp_records:
+        gaps.append({"code": "no_falsifiable_hypothesis",
+                     "message": f"{total} 条记录里没有一条声明失效假设（hypothesis）："
+                                "无法区分「确认功能可用」与「构造让它坏的条件」"})
+    if hyp_without_surface:
+        gaps.append({"code": "hypothesis_without_surface",
+                     "message": f"{len(hyp_without_surface)} 条失效假设未关联风险面："
+                                f"{hyp_without_surface[:5]}（假设必须挂到 surf_id 才能判覆盖）"})
     if surf_bad_format:
         gaps.append({"code": "surf_format_invalid",
                      "message": f"surf_id 形态非法（需 SURF- 前缀 + 稳定标识）：{surf_bad_format[:5]}"})
-    if surf_unknown:
-        gaps.append({"code": "surf_unknown",
-                     "message": f"surf_id 不在对抗 plan 的风险面清单内：{sorted(set(surf_unknown))[:5]}"})
     if declared_method_missing:
         gaps.append({"code": "method_missing",
                      "message": f"{declared_method_missing}/{total} 条未标注探针方法（方法库 ID），"
@@ -294,14 +362,32 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     if method_unknown:
         gaps.append({"code": "method_unknown",
                      "message": f"method 不在方法库枚举内：{sorted(set(method_unknown))[:5]}"})
-    if total >= METHOD_DIVERSITY_MIN_RECORDS and method_diversity < METHOD_DIVERSITY_MIN_METHODS:
-        gaps.append({"code": "method_low_diversity",
-                     "message": f"仅使用 {method_diversity} 种方法（记录 {total} 条，下限 "
-                                f"{METHOD_DIVERSITY_MIN_METHODS}）：方法单一是「测了很多」的典型特征"})
     if not gaps and not (isinstance(residual_note, str) and residual_note.strip()):
         gaps.append({"code": "residual_note_missing",
                      "message": "结论将达「通过」但未声明未破的攻击面（--residual-note）："
                                 "无法区分「真的没问题」与「没找到让它失败的输入」"})
+
+    # —— 披露项：只报数，不压上限。配比可凑，凑出来的达标不代表打得深 ——
+    if isinstance(density, float) and density < density_threshold:
+        notices.append({"code": "attack_density_low",
+                        "message": f"攻击密度 {density} 低于参考值 {density_threshold}："
+                                   f"非正向 {non_positive}/{total}（仅披露，不作判据）"})
+    if total and isinstance(surf_rate, float) and surf_rate < surf_linkage_threshold:
+        notices.append({"code": "surf_linkage_low",
+                        "message": f"{surf_linked}/{total} 条关联到计划内风险面"
+                                   "（仅披露；计划外发现计入 surfaces_beyond_plan）"})
+    if single_method_surfs:
+        notices.append({"code": "single_method_surface",
+                        "message": f"以下风险面只用了 1 种方法且记录 ≥3 条：{single_method_surfs[:5]}；"
+                                   "若其假设全部「未打破」，建议换手法复打"})
+    if surf_new:
+        notices.append({"code": "new_surface",
+                        "message": f"发现 {len(set(surf_new))} 个计划外风险面：{sorted(set(surf_new))[:6]}"
+                                   "（计为产出；需 amend 纳入后续计划，否则无法累积）"})
+        if not (isinstance(amend_note, str) and amend_note.strip()):
+            notices.append({"code": "new_surface_amend_missing",
+                            "message": "计划外风险面未提交 amend 说明（--amend-note）："
+                                       "下一轮该风险面不会有假设，发现会被丢掉"})
 
     return {
         "total": total,
@@ -319,12 +405,23 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "surf_linkage_rate": surf_rate,
         "surf_linkage_threshold": surf_linkage_threshold,
         "surf_plan_checked": plan_surfaces is not None,
+        "surfaces_beyond_plan": len(set(surf_new)),
+        "surfaces_beyond_plan_ids": sorted(set(surf_new)),
+        "amend_note": (amend_note or "").strip() or None,
+        "hypotheses": {"declared": hyp_records, "broken": hyp_broken,
+                       "held": hyp_held, "blocked": hyp_blocked,
+                       "break_rate": (round(hyp_broken / hyp_records, 4)
+                                      if hyp_records else None)},
+        "surface_coverage": {s: {**b, "methods": sorted(b["methods"])}
+                             for s, b in sorted(per_surf.items())},
+        "single_method_surfaces": single_method_surfs,
         "methods": methods,
         "method_missing": declared_method_missing,
         "method_diversity": method_diversity,
         "probes_total": probes_total,
         "residual_note": (residual_note or "").strip() or None,
         "gaps": gaps,
+        "notices": notices,
         "verdict_ceiling": "待核实" if gaps else "通过",
         "scope": "只判攻击面覆盖与判据独立性，不判缺陷有无、不替代对抗门禁与探索门禁",
     }
@@ -337,12 +434,16 @@ def _emit_csv(result, path):
             rows.append({"section": key, "metric": name, "value": value})
     for name in ("total", "attack_density", "density_threshold", "surf_linked",
                  "surf_linkage_rate", "method_missing", "method_diversity",
-                 "probes_total", "verdict_ceiling"):
+                 "probes_total", "surfaces_beyond_plan", "verdict_ceiling"):
         rows.append({"section": "summary", "metric": name, "value": result[name]})
+    for name, value in result["hypotheses"].items():
+        rows.append({"section": "hypothesis", "metric": name, "value": value})
     for name, value in result["path_type_groups"].items():
         rows.append({"section": "path_type_group", "metric": name, "value": value})
     for gap in result["gaps"]:
         rows.append({"section": "gap", "metric": gap["code"], "value": gap["message"]})
+    for notice in result.get("notices") or []:
+        rows.append({"section": "notice", "metric": notice["code"], "value": notice["message"]})
     with Path(path).open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=["section", "metric", "value"])
         writer.writeheader()
@@ -357,6 +458,16 @@ def _plan_surfaces(path):
     return {str(s.get("id")) for s in surfaces if isinstance(s, dict) and s.get("id")}
 
 
+def _plan_risks(path):
+    """风险面 → 风险等级。高风险面必须至少有一条可证伪预测，这是"设计过攻击"的判据。"""
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    surfaces = data.get("surfaces")
+    if not isinstance(surfaces, list):
+        raise ValueError("plan 缺 surfaces 数组")
+    return {str(s.get("id")): s.get("risk") for s in surfaces
+            if isinstance(s, dict) and s.get("id")}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="攻击面覆盖与判据独立性检查")
     parser.add_argument("--ledger", required=True,
@@ -364,6 +475,8 @@ def main(argv=None):
     parser.add_argument("--plan", help="对抗 plan（提供时 surf_id 与风险面清单交叉核对）")
     parser.add_argument("--residual-note",
                         help="未破攻击面声明；结论达「通过」前必填")
+    parser.add_argument("--amend-note",
+                        help="计划外风险面的纳入说明；缺省时只提示，不压上限")
     parser.add_argument("--emit-json", help="结论输出路径")
     parser.add_argument("--emit-csv", help="CSV 导出路径（UTF-8-sig）")
     parser.add_argument("--density-threshold", type=float, default=DEFAULT_DENSITY_THRESHOLD)
@@ -377,7 +490,9 @@ def main(argv=None):
     result = analyse(records, args.density_threshold, args.independent_rate,
                      residual_note=args.residual_note,
                      plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
-                     surf_linkage_threshold=args.surf_linkage)
+                     plan_risks=_plan_risks(args.plan) if args.plan else None,
+                     surf_linkage_threshold=args.surf_linkage,
+                     amend_note=args.amend_note)
     if args.emit_json:
         Path(args.emit_json).write_text(json.dumps(result, ensure_ascii=False, indent=2),
                                         encoding="utf-8")

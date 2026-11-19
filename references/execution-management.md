@@ -51,13 +51,26 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 |---|---|---|
 | `path_type` | positive / boundary / exception / permission / combo / ui_content / usability / accessibility / data_consistency / regression | 本用例打的是哪个攻击维度；`positive` 只用于"确认功能可用" |
 | `surf_id` | `SURF-…` | 对应的风险面，须在对抗 plan 的 surfaces 清单内 |
-| `method` | 方法库稳定 ID（`probe-playbook.md` B 节） | 用了哪种方法；多样性会被核对 |
+| `method` | 方法库稳定 ID（`probe-playbook.md` B 节） | 用了哪种方法；多样性只作披露，不作配额 |
+| `hypothesis` | 自由文本 | **可证伪预测**："如果 <条件> 则 <可观察的坏结果>"。每个高风险风险面至少一条；写了要能被执行出来 |
+| `hypothesis_outcome` | broken / held / blocked | 该预测是否被打破；缺省时按 status 推导（FAIL→broken、PASS→held、BLOCKED→blocked）。**broken 是产出不是违规** |
 | `oracle_source` | independent / self_attested | 判据来自独立通道还是被测物自己的回显 |
 | `oracle_channel` | 自由文本 | `independent` 必填且要点名通道（网页端 DOM/接口响应/持久化读回）；只写"读回一致"不算 |
 | `discovery_mode` | designed_probe / incidental / undetermined | 这条来自为失效假设设计的探针，还是碰巧撞见 |
 | `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现 |
 
-收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>"`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
+收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>" [--amend-note "<计划外风险面的纳入说明>"]`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
+
+**门禁考什么、不考什么**（口径容易搞错的地方）：
+
+| 会压结论上限 | 只披露不压 |
+|---|---|
+| 缺 `path_type`、`method` 或 `path_type` 全为 positive | 攻击密度低于 0.30 |
+| 声明 `independent` 却拿不出通道/证据 | 计划外风险面（`surfaces_beyond_plan` 计为产出） |
+| 高风险风险面没有一条可证伪预测 | 方法多样性不足 |
+| 一条独立判据都没有（绝对零，不是比例） | 风险面关联率偏低 |
+
+理由：配额能被标注操纵（改个 `discovery_mode` 就过关），而"如果 X 则 Y 会坏"凑不出来——写了就得能被执行。绝对值（一条都没有）同样凑不出来，比例能。
 
 ## 结果与证据
 

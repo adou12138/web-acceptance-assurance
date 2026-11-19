@@ -382,6 +382,83 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertEqual(gate["verdict_ceiling"], "通过")
         self.assertEqual(gate["skipped_views"]["性能"], ["EXP-V2"])
 
+    # ---------- B4：如实登记"看到可疑但还没查"不该被罚 ----------
+
+    def _passing_doc(self):
+        attributes = {"visual": ["visual"], "usability": ["usability"],
+                      "accessibility": ["accessibility"], "functional": ["functional"],
+                      "performance": ["performance"]}
+        items = [cell for name, attrs in attributes.items()
+                 for cell in self.cells("EXP-" + name, attrs)]
+        items.append(self.item("EXP-TRAV-1", status="PASS", observation="已清点页面控件",
+                               evidence_paths=[str(self.evidence)],
+                               attributes=["functional", "visual", "usability"]))
+        self.data["attribute_rulings"] = {
+            "security": {"state": "not_applicable", "reason": "本次仅校验视图门禁"},
+            "compatibility": {"state": "not_applicable", "reason": "未声明内核/设备范围"},
+            "content": {"state": "not_applicable", "reason": "未涉及文案变更"},
+        }
+        self.data["items"] = items
+        return items
+
+    def test_acknowledged_unexplored_does_not_lower_ceiling(self):
+        """实测过的反向激励：同一份清单只把 3 条观察写成 NOT_RUN，通过就掉成待核实。"""
+        items = self._passing_doc()
+        self.assertEqual(self.report()["gate"]["verdict_ceiling"], "通过")
+        items.extend(self.item(f"EXP-NR-{i}", status="NOT_RUN", risk="high",
+                              observation="审批卡片文案可疑，尚未设计探针",
+                              acknowledged_unexplored={"next_action": "补审批卡片文案探针",
+                                                       "owner": "砺衡"})
+                     for i in (1, 2, 3))
+        gate = self.report()["gate"]
+        self.assertEqual(gate["ready_pending"], 0)
+        self.assertEqual(gate["verdict_ceiling"], "通过")
+        self.assertEqual(len(gate["acknowledged_unexplored"]), 3)
+        self.assertEqual(gate["acknowledged_unexplored"][0]["owner"], "砺衡")
+
+    def test_acknowledged_without_owner_still_counts_as_pending(self):
+        """承认项不是免罚牌：缺 next_action / owner 就还是待执行。"""
+        items = self._passing_doc()
+        items.append(self.item("EXP-NR-9", status="NOT_RUN", risk="high",
+                               observation="可疑但没写后续",
+                               acknowledged_unexplored={"next_action": "", "owner": ""}))
+        gate = self.report()["gate"]
+        self.assertEqual(gate["ready_pending"], 1)
+        self.assertIn("EXP-NR-9", gate["acknowledged_incomplete"])
+        self.assertEqual(gate["verdict_ceiling"], "待核实")
+
+    def test_acknowledged_only_allowed_on_not_run(self):
+        self.data["items"] = [self.item("EXP-1", status="PASS", observation="观察",
+                                        evidence_paths=[str(self.evidence)],
+                                        acknowledged_unexplored={"next_action": "a",
+                                                                 "owner": "b"})]
+        with self.assertRaises(ValueError):
+            self.tool.summarize(self.data)
+
+    # ---------- B6：覆盖看构造动作，不看凑页面 ----------
+
+    def test_two_falsify_actions_cover_view_without_extra_page_state(self):
+        items = self._passing_doc()
+        # 把 visual 压回同一页面同一状态，但给两个不同的构造动作
+        # 用"性能"视角做实验：它不被 TRAV 条目的属性带到，单元数可控
+        perf = [i for i in items if "performance" in i["attributes"]]
+        perf[1]["page_url"] = perf[0]["page_url"]
+        perf[1]["state"] = perf[0]["state"]
+        perf[0]["falsify_action"] = "把首屏资源放大到 5MB 看首响是否超 2s"
+        perf[1]["falsify_action"] = "注入 200 条长任务看是否卡住输入"
+        gate = self.report()["gate"]
+        self.assertNotIn("性能", gate["thin_views"])
+        self.assertEqual(len(gate["view_actions"]["性能"]), 2)
+
+    def test_same_page_state_and_single_action_is_still_thin(self):
+        items = self._passing_doc()
+        perf = [i for i in items if "performance" in i["attributes"]]
+        perf[1]["page_url"] = perf[0]["page_url"]
+        perf[1]["state"] = perf[0]["state"]
+        gate = self.report()["gate"]
+        self.assertIn("性能", gate["thin_views"])
+        self.assertIn("构造动作", gate["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

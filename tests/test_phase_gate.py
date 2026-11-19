@@ -366,6 +366,29 @@ class CollectionRecordTests(PhaseGateTestBase):
         self.assertEqual(self.pg.scan_collection_records(
             [self.clean(collection_state="blocked", evidence_paths=[])]), [])
 
+    def test_status_is_treated_like_verdict(self):
+        """实测漏洞：verdict 被拦、status 不拦——想绕的绕得过去，老实写的被拦。"""
+        for key in ("status", "result", "outcome", "assessment", "score"):
+            with self.subTest(key=key):
+                violations = self.pg.scan_collection_records([self.clean(**{key: "PASS"})])
+                self.assertTrue(any(v["code"] == "judgement_key" for v in violations))
+
+    def test_lead_channel_records_suspicion_without_verdict(self):
+        record = self.clean(lead={"suspicion": "审批卡片按钮顺序可疑",
+                                  "basis": "与同页其他弹窗的按钮顺序相反",
+                                  "where": "审批卡片"})
+        self.assertEqual(self.pg.scan_collection_records([record]), [])
+
+    def test_lead_without_basis_is_rejected(self):
+        record = self.clean(lead={"suspicion": "看着不对"})
+        codes = [v["code"] for v in self.pg.scan_collection_records([record])]
+        self.assertIn("lead_missing_basis", codes)
+
+    def test_lead_cannot_smuggle_a_verdict(self):
+        record = self.clean(lead={"suspicion": "x", "basis": "y", "verdict": "FAIL"})
+        codes = [v["code"] for v in self.pg.scan_collection_records([record])]
+        self.assertIn("lead_unknown_field", codes)
+
 
 class AdjudicationHonestyTests(PhaseGateTestBase):
     def valid(self, **overrides):

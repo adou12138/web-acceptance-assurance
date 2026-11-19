@@ -64,7 +64,12 @@ MANDATORY_ATTRIBUTES = ("security", "compatibility", "content", "visual", "usabi
 # 视角覆盖的最小单元数：一个"页面×状态"单元。同一页面同一状态的一条 PASS 不足以
 # 证明整个视角已覆盖——界面样式尤其容易被一张首页截图清空。
 MIN_VIEW_CELLS = 2
-ITEM_FIELDS = {"id", "requirement_ids", "page_url", "role", "viewport", "state", "action", "risk", "status", "observation", "evidence_paths", "blocked_reason", "side_effect_pending", "attributes"}
+ITEM_FIELDS = {"id", "requirement_ids", "page_url", "role", "viewport", "state", "action", "risk",
+               "status", "observation", "evidence_paths", "blocked_reason", "side_effect_pending",
+               "attributes"}
+# 可选字段：acknowledged_unexplored 是诚实记录的出口（带 next_action + owner 才生效），
+# falsify_action 是"这条观察构造了什么让它坏的条件"，用于替代凑页面的覆盖口径。
+ITEM_OPTIONAL = {"case_id", "acknowledged_unexplored", "falsify_action"}
 SCOPE = "仅清单进度与人工下一步候选；不判定业务或总体门禁；证据内容和外部引用需复核；不自动执行或重放"
 
 
@@ -139,6 +144,13 @@ def _evidence(paths, name):
     return result
 
 
+def _acknowledged(row):
+    """承认项（next_action + owner 齐备）才算出囗；缺字段的一律仍按待执行计。"""
+    value = row.get("acknowledged_unexplored")
+    return (isinstance(value, dict) and bool(str(value.get("next_action") or "").strip())
+            and bool(str(value.get("owner") or "").strip()))
+
+
 def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None):
     """按已提供清单计算执行门禁：未消费候选、必查视角覆盖不足、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
@@ -155,15 +167,37 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     rulings = rulings or {}
     view_scope = view_scope or {}
     executed_cells = executed_cells or {view: set() for view in VIEWS}
-    ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()]
+    ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip() and not _acknowledged(row)]
+    # 如实登记"看到可疑但还没设计探针"不该被罚：实测中同一份清单只把 3 条观察写成
+    # NOT_RUN，结论就从「通过」掉到「待核实」——等于"写下我还没查就自己降级"。
+    # 带 next_action + owner 的承认项单列跟踪，不计入 ready_pending；缺字段仍计入。
+    acknowledged = [{"id": row["id"],
+                     "next_action": row["acknowledged_unexplored"]["next_action"],
+                     "owner": row["acknowledged_unexplored"]["owner"],
+                     "risk": row["risk"]}
+                    for row in rows if _acknowledged(row)]
+    acknowledged_incomplete = [row["id"] for row in rows
+                               if row["status"] == "NOT_RUN"
+                               and isinstance(row.get("acknowledged_unexplored"), dict)
+                               and not _acknowledged(row)]
     missing = [view for view in REQUIRED_VIEWS if not executed_views[view]]
+    executed_actions = {}
+    for view, attrs in VIEWS.items():
+        executed_actions[view] = {row["falsify_action"] for row in rows
+                                  if row["status"] in {"PASS", "FAIL"}
+                                  and set(row["attributes"]) & attrs
+                                  and row.get("falsify_action")}
     thin, thin_detail = [], []
     for view in REQUIRED_VIEWS:
         need = int((view_scope.get(view) or {}).get("cells") or MIN_VIEW_CELLS)
         cells = executed_cells.get(view) or set()
-        if cells and len(cells) < need:
+        # 覆盖口径从"凑够几个页面×状态"改为"有没有两种不同的构造动作"：
+        # 前者可以靠人为多切一个状态凑满，后者凑不出来——写下的动作要能被执行。
+        actions = executed_actions.get(view) or set()
+        if cells and len(cells) < need and len(actions) < need:
             thin.append(view)
-            thin_detail.append(f"{view}（{len(cells)}/{need} 个页面×状态单元）")
+            thin_detail.append(f"{view}（{len(cells)}/{need} 个页面×状态单元，"
+                               f"{len(actions)}/{need} 种构造动作）")
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
     traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
@@ -238,6 +272,9 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
         "missing_views": missing,
         "thin_views": thin,
+        "view_actions": {view: sorted(actions) for view, actions in executed_actions.items()},
+        "acknowledged_unexplored": acknowledged,
+        "acknowledged_incomplete": acknowledged_incomplete,
         "view_cells": {view: sorted(cells) for view, cells in executed_cells.items()},
         "view_scope": {view: dict(scope) for view, scope in view_scope.items()},
         "executed_views": {view: list(ids) for view, ids in executed_views.items()},
@@ -296,7 +333,7 @@ def summarize(data):
     rows, seen = [], set()
     for number, item in enumerate(data["items"]):
         name = f"items[{number}]"
-        _object(item, ITEM_FIELDS, {"case_id"}, name)
+        _object(item, ITEM_FIELDS, ITEM_OPTIONAL, name)
         _ident(item["id"], name + ".id")
         if item["id"] in seen:
             raise ValueError(f"{name}.id: 重复的稳定 ID")
@@ -314,6 +351,17 @@ def summarize(data):
             raise ValueError(f"{name}.page_url: 必须与 target_url 同源")
         for key in ("observation", "blocked_reason"):
             _text(item[key], name + "." + key, False)
+        if "falsify_action" in item:
+            _text(item["falsify_action"], name + ".falsify_action")
+        if "acknowledged_unexplored" in item:
+            if item["status"] != "NOT_RUN":
+                raise ValueError(f"{name}.acknowledged_unexplored: 只适用于 NOT_RUN")
+            _object(item["acknowledged_unexplored"], {"next_action", "owner"}, set(),
+                    name + ".acknowledged_unexplored")
+            for key in ("next_action", "owner"):
+                # 允许空串：半填不算结构性错误，按"未完成"计入待执行（不给免罚）
+                _text(item["acknowledged_unexplored"][key],
+                      name + ".acknowledged_unexplored." + key, False)
         if type(item["side_effect_pending"]) is not bool:
             raise ValueError(f"{name}.side_effect_pending: 必须为布尔值")
         _strings(item["attributes"], name + ".attributes", True)
@@ -335,7 +383,7 @@ def summarize(data):
         "context": copy.deepcopy(context),
         "planned": len(rows),
         "counts": {status: sum(row["status"] == status for row in rows) for status in sorted(STATUSES)},
-        "ready": [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()],
+        "ready": [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip() and not _acknowledged(row)],
         "reproduction_candidates": [row["id"] for row in rows if row["status"] == "FAIL"],
         "needs_reconcile": [row["id"] for row in rows if row["side_effect_pending"]],
         "views": {view: [row["id"] for row in rows if set(row["attributes"]) & attributes] for view, attributes in VIEWS.items()},

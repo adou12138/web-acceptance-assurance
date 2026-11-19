@@ -654,3 +654,53 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 **边界（不宣称已解决的）**：`ui_metrics.py` 只判可量化项，不构成 WCAG 合规认证；对比度对渐变/半透明只能报待确认；攻击密度 0.30、视角单元 ≥2、方法多样性 ≥3 均为工程判断，未经真实轮次校准；`--residual-note`、`assumptions`、`regression` 仍属"愿不愿意填"层面的机械约束，防得了忘记、防不了决心造假。
 
 版本 1.41.0（v1.40.0→1.41.0）；480 tests + 217 subtests 全绿（新增 61 例：attack_coverage 12、execution_ledger 9、phase_gate 9、exploration 若干、ui_metrics 30）。
+
+## v1.42.0（2026-11-19）：把考核对象从「记录形状」换成「失效构造」
+
+**触发**：v1.41.0 拿真实数据实测审核，8 项自述声明只有 3 项成立；真实登录页 16 条界面 fail 里 11 条（68.75%）是工具算错的；817 行真实台账按新口径 0 行可用。根因是上轮 14 条整改**全是给流程加锁、0 条增加检测能力**——门禁只能减少虚报，不能增加发现。
+
+### A 组：修测量装置（不修则后面全不可信）
+
+| 项 | 变更 | 实测依据 |
+|---|---|---|
+| A1 背景来源 | 记录新增 `background_source ∈ solid/image/gradient/unknown`；非 solid 一律 `not_evaluable` 并转人工视觉通道（报告单列 `manual_review_required`）；取数层找不到不透明祖先时返回 `unknown`，**禁止兜底成白色** | 整页是照片时落白，白字算出 1.0:1，5 条误报 |
+| A2 目标尺寸例外 | 实现 2.5.8 四个例外（Inline/Spacing/UA/Essential）；欠尺寸但未做例外判定 → `pending_evidence`，命中例外 → `advisory`，例外不成立才 `fail` | 6 个欠尺寸目标全部 `spacingHits=0`，原判定 6/6 误报 |
+| A3 文本间距 | 改为 `text_spacing_override` 前后差分（`before_clipped`/`after_clipped`），只认**新增**裁剪；旧 `text_spacing` 返回 `not_evaluable` 并提示改口径 | 1.4.12 考的是用户覆盖后不丢内容，不是页面默认行高；真页覆盖后 0 处新增裁剪，旧判据 4 条全误报 |
+| A4 重排 | 新增 `two_d_layout_exempt`（数据表/地图等二维布局）→ advisory | 规范本身有该豁免 |
+| A5 误报回流 | 每条失败须 `human_ruling ∈ confirmed/exception/false_positive/pending`；输出 `false_positive_rate`；`--enforce` 仅在**有经确认缺陷且误报率 ≤15%** 时 rc=2 | 没有回流机制，68.75% 噪声无法收敛 |
+| 自审加固 | `kind=text_large` 不得自报豁免；字重 `700`/`"700"`/`"bold"` 归一；CSV 补 `ruling` 列 | 前两条实测得出，第三条靠通读交付物发现 |
+
+### B 组：拆掉反向激励（发现未知问题不再算违规）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| B1 计划外风险面 | `surf_unknown` 压上限 | `surfaces_beyond_plan` 计为产出，只披露 + `--amend-note` 要求纳入后续计划 |
+| B2 "没有设计攻击" | 全 incidental → `no_designed_probe` | 改判 `hypothesis`（如果 X 则 Y 会坏）；高风险面一条预测都没有才压上限；`broken` 是产出 |
+| B3 方法多样性 | ≥3 种否则压上限 | 降为 `single_method_surface` 提示 |
+| B4 诚实记录 | `NOT_RUN` 计入 `ready_pending` 压上限 | `acknowledged_unexplored{next_action, owner}` 齐备即不计入；缺字段仍计 |
+| B5 采集禁判定 | 禁用词漏 `status`（`verdict` 拦、`status` 不拦） | 补全 `status/result/outcome/assessment/score` 等；开 `lead{suspicion, basis, where}` 结构化出口 |
+| B6 视角覆盖 | 每视角 ≥2 个页面×状态单元 | ≥2 个**不同 `falsify_action`** 也算覆盖（二者满足其一），防"人为多切一个状态凑满" |
+
+同时删除 `attack_density_low`、`oracle_self_attested`（比例类）门禁，换为**绝对值**门禁：`no_attack_paths`（一条非正向都没有）、`oracle_no_independent_evidence`（一条独立判据都没有）。理由：比例能凑，绝对零凑不出来。
+
+### C 组：加装发现能力（本轮真正的增量）
+
+| 脚本 | 发现什么 |
+|---|---|
+| `scripts/ui_measure.js` | 页面内取数引擎：逐元素判定 `background_source`、24px 圆相交检测、间距覆盖前后差分、可交互控件清点 |
+| `scripts/state_matrix.py` | 角色×状态×数据条件格点展开，摊出未覆盖格点与"一次都没被行使的取值" |
+| `scripts/control_traversal.py` | 逐个控件的观察覆盖；"点了没反应"记为线索（须人工复核），死控件/无反馈在此暴露 |
+| `scripts/copy_consistency.py` | 未替换占位符、运行时原始值 `undefined/null`、重复标点/赘字、术语偏离、同角色近义异写 |
+| `scripts/assertion_mutation.py` | 断言杀伤率：**抽样由哈希决定不由人挑**；注入已知故障后仍通过 = 假绿 |
+
+### D 组：结论口径
+
+首屏改给攻击指标（误报率/检出数/杀伤率/前沿透明度/计划外发现数/被打破假设数），通过率降为附注；「待核实」分三级（缺能力/缺证据/主动未探明）；工具判定转缺陷须 `instrumented + confirmed`。
+
+### 验证
+
+- 544 tests + 222 subtests 全绿（v1.41.0 为 480 + 217；新增 64 例：ui_metrics 47 例重写、attack_coverage +7、exploration +4、phase_gate +4、v142_capabilities 29）
+- 真实页面端到端复测：16 条 fail → 11 条误报被消除（背景 5 / 例外 6），4 条间距误报消失，保留 4 条对比度候选 + 2 条待人工裁定
+- 三项探针双侧验证：真页 0 误报 + 注入已知故障必捕获（间距覆盖 `before=2/after=2` 证明必须做差分；2.5.8 例外 6/6；背景 `NONE` 与 `SOLID:#fff` 可区分）
+
+**边界（不宣称已解决的）**：`ui_metrics` 仍只判六类可量化项，不构成 WCAG 合规认证；图片/渐变/动效上的文字只能人工判；`state_matrix` 不排业务优先级；`copy_consistency` 判不了语义歧义；`assertion_mutation` 只证明抽样断言会响，不证明断言覆盖了该覆盖的东西。**A/B 两臂对照未跑，因此本轮不宣称"检出能力提升"**——只宣称"测量装置误报收敛、反激励拆除、新增 5 项可执行检测能力"。

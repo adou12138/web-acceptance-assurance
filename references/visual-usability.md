@@ -51,25 +51,29 @@
 | 普通文本对比度 | ≥ 4.5:1 | WCAG 2.2 SC 1.4.3（AA） | 正文、说明、表格内容、占位符以外的提示文本 |
 | 大号文本对比度 | ≥ 3:1 | WCAG 2.2 SC 1.4.3（AA） | 大号文本 = 字号 ≥ 24px，或 ≥ 18.66px 且字重 ≥ 700 |
 | 界面组件/图形对比度 | ≥ 3:1 | WCAG 2.2 SC 1.4.11（AA） | 控件边界、图标、状态指示、**焦点指示** |
-| 可点击区域 | ≥ 24×24 CSS px | WCAG 2.2 SC 2.5.8（AA） | 低于即缺陷；24~44 之间按建议档提示（2.5.5 AAA 与移动平台惯例 44×44） |
-| 正文行高 | ≥ 1.5 倍字号 | WCAG 2.2 SC 1.4.12（AA） | 文本间距可覆盖性；段落间距 2em、字间距 0.12em、词间距 0.16em 为用户覆盖要求 |
-| 320px 重排 | 无横向滚动 | WCAG 2.2 SC 1.4.10（AA） | `scrollWidth ≤ 视口宽`；更宽视口下的溢出不算 1.4.10 失败但仍记布局观察 |
+| 可点击区域 | ≥ 24×24 CSS px | WCAG 2.2 SC 2.5.8（AA） | 该条有四个例外，必须逐条排除后才判失败：**Inline**（位于句子中）、**Spacing**（24px 圆不与相邻目标相交）、**User-agent control**（尺寸由浏览器决定）、**Essential**（尺寸对功能必要）。命中任一 → 建议档而非 AA 失败；24~44 之间按 2.5.5/移动惯例提示 |
+| 文本间距可覆盖性 | 覆盖后不新增裁剪 | WCAG 2.2 SC 1.4.12（AA） | **判的是"用户覆盖后是否丢内容"，不是页面默认行高**。做法：注入行高 1.5 倍、段距 2em、字距 0.12em、词距 0.16em，比对覆盖前后的裁剪元素数，只认**新增**裁剪；覆盖前既有的裁剪属别的 SC（1.4.4 方向），单独归类 |
+| 320px 重排 | 无横向滚动 | WCAG 2.2 SC 1.4.10（AA） | `scrollWidth ≤ 视口宽`，**必须在 ≤320px 视口下测**；数据表/地图等需二维布局的内容可声明豁免（记为建议，须人工确认必要性）；更宽视口下的溢出不算 1.4.10 失败但仍记布局观察 |
 | 正文字号 | ≥ 12px（建议） | 可读性经验值，**无 WCAG 下限** | 只能作为建议档输出，不得当作 AA 失败 |
 
 **测量纪律（决定结论能不能立住）**：
 
-1. **取实际渲染色**：`getComputedStyle` 或截图取色；渐变、图片背景、半透明叠加必须按最终合成像素量，算不出来就报"待确认"，不许按纯色算出一个漂亮数字。
+1. **取实际渲染色，并声明背景来源**：记录必须带 `background_source ∈ solid/image/gradient/unknown`。**找不到不透明背景时绝不兜底成白色**——实测真实登录页整页是照片，取数脚本落回 `#fff`，白字算出 1.0:1，16 条失败里 5 条是这么来的。`image/gradient/unknown` 一律 `not_evaluable` 并转人工视觉通道（报告里单列 `manual_review_required`）：自动判定放弃的地方必须有人接手，否则这类问题会从系统里消失。
 2. **量到实际命中区域**：目标尺寸量可点击矩形（含 padding 与伪元素扩展），不是视觉图标本身。
 3. **逐状态量**：默认、悬停、聚焦、禁用、错误态各一次；禁用态的对比度豁免 SC 1.4.3，但焦点指示不豁免。
 4. **不冒充合规**：本脚本只覆盖上述可量化项，不构成 WCAG 合规认证；结论只能写"已核项通过/未核项缺口"。
 5. **可用性不得只靠算**：对比度达标不等于可读，字号达标不等于易懂——定量与定性分账。
-6. **大号资格按实测字号复核**：把 12px 文本标成 `text_large` 就能拿 3:1 的宽松阈值蒙过去，所以 `kind` 只是自报，工具会用实测 `font_size_px`/`font_weight` 复算资格，不符则回落 4.5:1 并在备注写明；未给字号时按声明计但备注"未核实"。字重同样要归一（`700`/`"700"`/`"bold"` 等价），否则 19px 粗体会被当 400 判失败，属假失败。
+6. **欠尺寸目标先排例外再判失败**：不排例外就直接判失败会把合规全判成问题。实测真实登录页 6 个欠尺寸目标**全部**命中 Spacing/Inline 例外，原判定 6/6 误报。只缺尺寸、没做例外判定时输出"待取证"，不给失败结论。
+7. **工具判 fail 只是候选**：每条失败要人工裁定 `confirmed / exception / false_positive / pending`，误报率（false_positive ÷ 已裁定）进报告首屏。**误报率超 15% 时先修测量装置**，不拿它的输出当缺陷依据——否则只会训练出"忽略工具"的习惯。
+8. **大号资格按实测字号复核**：把 12px 文本标成 `text_large` 就能拿 3:1 的宽松阈值蒙过去，所以 `kind` 只是自报，工具会用实测 `font_size_px`/`font_weight` 复算资格，不符则回落 4.5:1 并在备注写明；未给字号时按声明计但备注"未核实"。字重同样要归一（`700`/`"700"`/`"bold"` 等价），否则 19px 粗体会被当 400 判失败，属假失败。
 
 ```bash
 python scripts/ui_metrics.py --input ui-measurements.json --emit-csv ui-metrics.csv --enforce
 ```
 
-测量文件每条：`{id, page, element, kind, foreground, background, font_size_px, font_weight, target_width_px, target_height_px, line_height_px, viewport_width_px, scroll_width_px, evidence[]}`；`kind ∈ text_normal/text_large/ui_component/focus_indicator/target/text_spacing/reflow`。失败项无证据会被降级为待取证，不进缺陷账。
+测量文件每条：`{id, page, element, kind, background_source, foreground, background, font_size_px, font_weight, target_width_px, target_height_px, inline_in_text, spacing_clear, ua_controlled, essential, before_clipped, after_clipped, viewport_width_px, scroll_width_px, two_d_layout_exempt, evidence[]}`；`kind ∈ text_normal/text_large/ui_component/focus_indicator/target/text_spacing_override/reflow`。失败项无证据会被降级为待取证，不进缺陷账。
+
+取数交 `scripts/ui_measure.js`（在页面里跑，产出上面这套记录），判定交 `scripts/ui_metrics.py --rulings rulings.json`。旧的 `kind=text_spacing`（按默认行高判）已废：它不是 1.4.12 的判据，只会返回 not_evaluable 并提示改用覆盖口径。
 
 ## 基础无障碍实际检查
 

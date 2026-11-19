@@ -49,10 +49,19 @@ def rec(i, path_type=None, surf=True, method=None, oracle="independent",
 
 class AttackDensityGate(unittest.TestCase):
     def test_all_positive_ledger_lowers_ceiling(self):
+        """全正向不只是"密度低"：是一条失效条件都没构造，属绝对零缺口。"""
         result = ac.analyse([rec(i, "positive") for i in range(10)])
         self.assertEqual(result["attack_density"], 0.0)
-        self.assertIn("attack_density_low", [g["code"] for g in result["gaps"]])
+        self.assertIn("no_attack_paths", [g["code"] for g in result["gaps"]])
+        # 密度本身只作披露，不再压上限（配额可凑，构造凑不出来）
+        self.assertIn("attack_density_low", [n["code"] for n in result["notices"]])
         self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_small_all_positive_ledger_is_disclosed_not_gated(self):
+        """3 条全正向不足以判"没攻击"（可能就是冒烟），但密度要如实披露。"""
+        result = ac.analyse([rec(i, "positive") for i in range(3)], residual_note="x")
+        self.assertNotIn("no_attack_paths", [g["code"] for g in result["gaps"]])
+        self.assertIn("attack_density_low", [n["code"] for n in result["notices"]])
 
     def test_healthy_ledger_passes(self):
         records = [rec(i, "positive") for i in range(7)]
@@ -68,20 +77,28 @@ class AttackDensityGate(unittest.TestCase):
                              for i in range(5)])
         codes = [g["code"] for g in result["gaps"]]
         self.assertIn("path_type_missing", codes)
-        self.assertIn("surf_linkage_low", codes)
         self.assertIn("method_missing", codes)
+        # 关联率只作披露，不压上限
+        self.assertIn("surf_linkage_low", [n["code"] for n in result["notices"]])
         self.assertEqual(result["attack_density"], "NA")
         self.assertEqual(result["verdict_ceiling"], "待核实")
 
     def test_self_attested_oracle_is_a_gap(self):
-        records = [rec(i, "boundary", oracle="self_attested") for i in range(4)]
-        result = ac.analyse(records)
-        self.assertIn("oracle_self_attested", [g["code"] for g in result["gaps"]])
+        """一条独立通道都没有是"证据结构缺失"，与"比例偏低"不是一件事。"""
+        records = [rec(i, "boundary", oracle="self_attested") for i in range(12)]
+        result = ac.analyse(records, residual_note="x")
+        self.assertIn("oracle_no_independent_evidence", [g["code"] for g in result["gaps"]])
 
-    def test_incidental_only_without_designed_probe(self):
-        records = [rec(i, "boundary", mode="incidental") for i in range(4)]
-        result = ac.analyse(records)
-        self.assertIn("no_designed_probe", [g["code"] for g in result["gaps"]])
+    def test_incidental_only_is_not_punished_but_needs_hypothesis(self):
+        """偶然发现不该被判"没设计攻击"——改标注就能过关的门禁只会训练标注。
+
+        换成的判据是"有没有可证伪预测"：凑不出来，编了要能被执行出来。
+        """
+        few = [rec(i, "boundary", mode="incidental") for i in range(4)]
+        self.assertNotIn("no_designed_probe", [g["code"] for g in ac.analyse(few)["gaps"]])
+        many = [rec(i, "boundary", mode="incidental") for i in range(24)]
+        result = ac.analyse(many, residual_note="x")
+        self.assertIn("no_falsifiable_hypothesis", [g["code"] for g in result["gaps"]])
 
     def test_inferred_values_do_not_gate(self):
         # 显式声明全部达标，但文本里满是"边界/异常"字样 → 推断值不应影响判定
@@ -167,9 +184,9 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
         records = [rec(i, "boundary") for i in range(4)]
         for record in records:
             record["surf_id"] = "x"
-        codes = [g["code"] for g in ac.analyse(records)["gaps"]]
-        self.assertIn("surf_format_invalid", codes)
-        self.assertIn("surf_linkage_low", codes)
+        result = ac.analyse(records)
+        self.assertIn("surf_format_invalid", [g["code"] for g in result["gaps"]])
+        self.assertIn("surf_linkage_low", [n["code"] for n in result["notices"]])
 
     def test_independent_without_channel_is_a_gap(self):
         records = [rec(i, "boundary") for i in range(4)]
@@ -204,7 +221,7 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
                     "discovery_mode": "designed_probe"} for i in range(10)]
         result = ac.analyse(records, residual_note="未破：并发删除")
         self.assertEqual(result["verdict_ceiling"], "待核实")
-        self.assertIn("oracle_self_attested", [g["code"] for g in result["gaps"]])
+        self.assertIn("oracle_no_independent_evidence", [g["code"] for g in result["gaps"]])
 
     def test_residual_note_required_before_pass(self):
         records = [rec(i, "positive") for i in range(7)] + [rec(i, "boundary") for i in range(3)]
@@ -220,13 +237,31 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
         for record in records:
             record["surf_id"] = "SURF-99"
         result = ac.analyse(records, plan_surfaces={"SURF-01"}, residual_note="x")
-        self.assertIn("surf_unknown", [g["code"] for g in result["gaps"]])
+        # 计划外发现是产出不是违规：只披露并要求 amend，不压上限
+        self.assertNotIn("surf_unknown", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["surfaces_beyond_plan"], 1)
+        self.assertIn("SURF-99", result["surfaces_beyond_plan_ids"])
+        self.assertIn("new_surface", [n["code"] for n in result["notices"]])
+        self.assertIn("new_surface_amend_missing", [n["code"] for n in result["notices"]])
         self.assertTrue(result["surf_plan_checked"])
 
-    def test_method_diversity_required_on_large_ledger(self):
+    def test_new_surface_amend_note_clears_the_notice(self):
+        records = [rec(i, "boundary") for i in range(4)]
+        for record in records:
+            record["surf_id"] = "SURF-99"
+        result = ac.analyse(records, plan_surfaces={"SURF-01"}, amend_note="已纳入第 2 轮计划")
+        codes = [n["code"] for n in result["notices"]]
+        self.assertIn("new_surface", codes)
+        self.assertNotIn("new_surface_amend_missing", codes)
+        self.assertEqual(result["amend_note"], "已纳入第 2 轮计划")
+
+    def test_single_method_surface_is_disclosed_not_gated(self):
+        """方法多样性不再当配额：逼人拆碎去测没打算测的东西，只换来好看的分布。"""
         records = [rec(i, "boundary") for i in range(25)]
         result = ac.analyse(records, residual_note="x")
-        self.assertIn("method_low_diversity", [g["code"] for g in result["gaps"]])
+        self.assertNotIn("method_low_diversity", [g["code"] for g in result["gaps"]])
+        self.assertIn("single_method_surface", [n["code"] for n in result["notices"]])
+        self.assertEqual(result["single_method_surfaces"], ["SURF-01"])
 
 
 class EventStreamIntake(unittest.TestCase):
@@ -247,6 +282,71 @@ class EventStreamIntake(unittest.TestCase):
         self.assertEqual(result["oracle_source"]["independent"], 1)
         self.assertEqual(result["oracle_source"]["unproven_independent"], 0)
         self.assertEqual(result["method_diversity"], 1)
+
+
+class HypothesisLedger(unittest.TestCase):
+    """失效假设台账：这套门禁的核心判据是"你构造了什么让它坏的条件"。
+
+    与配额的差别：配额问"非正向占比够不够"，能被标注操纵；假设问"如果 X 则 Y 会坏"，
+    写了就得能被执行出来，而且"打破了几个"是产出而不是违规。
+    """
+
+    def test_broken_hypothesis_is_counted_as_output(self):
+        records = [rec(1, "boundary")]
+        records[0]["hypothesis"] = "题干含 5000 字时保存应截断且给出提示"
+        records[0]["hypothesis_outcome"] = "broken"
+        result = ac.analyse(records, residual_note="x")
+        self.assertEqual(result["hypotheses"]["declared"], 1)
+        self.assertEqual(result["hypotheses"]["broken"], 1)
+        self.assertEqual(result["hypotheses"]["break_rate"], 1.0)
+
+    def test_outcome_derived_from_status_when_absent(self):
+        records = [rec(1, "boundary", status="FAIL"), rec(2, "boundary", status="PASS"),
+                   rec(3, "boundary", status="BLOCKED")]
+        for index, record in enumerate(records, start=1):
+            record["hypothesis"] = f"假设 {index}"
+        result = ac.analyse(records, residual_note="x")
+        self.assertEqual(result["hypotheses"]["broken"], 1)
+        self.assertEqual(result["hypotheses"]["held"], 1)
+        self.assertEqual(result["hypotheses"]["blocked"], 1)
+
+    def test_high_risk_surface_without_hypothesis_is_a_gap(self):
+        records = [rec(i, "boundary") for i in range(4)]
+        result = ac.analyse(records, plan_surfaces={"SURF-01"},
+                            plan_risks={"SURF-01": "high"}, residual_note="x")
+        self.assertIn("surface_without_hypothesis", [g["code"] for g in result["gaps"]])
+
+    def test_high_risk_surface_with_hypothesis_passes(self):
+        records = [rec(i, "boundary") for i in range(4)]
+        records[0]["hypothesis"] = "并发建卷时卷名重复应拒绝"
+        result = ac.analyse(records, plan_surfaces={"SURF-01"},
+                            plan_risks={"SURF-01": "high"}, residual_note="x")
+        self.assertEqual(result["gaps"], [])
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_low_risk_surface_needs_no_hypothesis(self):
+        records = [rec(i, "boundary") for i in range(4)]
+        result = ac.analyse(records, plan_surfaces={"SURF-01"},
+                            plan_risks={"SURF-01": "low"}, residual_note="x")
+        self.assertEqual(result["gaps"], [])
+
+    def test_hypothesis_without_surface_is_a_gap(self):
+        records = [rec(1, "boundary", surf=False)]
+        records[0]["hypothesis"] = "删除后条目应消失"
+        result = ac.analyse(records, residual_note="x")
+        self.assertIn("hypothesis_without_surface", [g["code"] for g in result["gaps"]])
+
+    def test_surface_coverage_breakdown(self):
+        records = [rec(1, "boundary"), rec(2, "exception"), rec(3, "combo")]
+        for index, record in enumerate(records, start=1):
+            record["hypothesis"] = f"假设 {index}"
+        records[0]["hypothesis_outcome"] = "broken"
+        result = ac.analyse(records, residual_note="x")
+        bucket = result["surface_coverage"]["SURF-01"]
+        self.assertEqual(bucket["records"], 3)
+        self.assertEqual(bucket["hypotheses"], 3)
+        self.assertEqual(bucket["broken"], 1)
+        self.assertEqual(len(bucket["methods"]), 3)
 
 
 if __name__ == "__main__":

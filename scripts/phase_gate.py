@@ -66,10 +66,15 @@ HANDOFF_FILE = "handoff-{phase}.md"
 HANDOFF_JSON = "handoff-{phase}.json"
 
 # 采集阶段禁入的判定类键名（出现即视为越界判定）
+# 采集阶段禁判定：同义字段必须一起禁，否则老实写 verdict 的被拦、写 status 的绕过。
+# 实测过这个漏洞：verdict 触发 judgement_key，status 不触发，等于教人换个键名。
 COLLECTION_FORBIDDEN_KEYS = (
-    "verdict", "verdicts", "judgement", "judgment", "conclusion", "severity",
-    "defect", "defects", "classification", "root_cause", "pass_fail",
+    "verdict", "verdicts", "judgement", "judgment", "conclusion", "conclusions",
+    "severity", "defect", "defects", "classification", "root_cause", "pass_fail",
+    "status", "result", "results", "outcome", "assessment", "rating", "score",
 )
+# 现场怀疑的合法出口：结构化记下"哪可疑、依据是什么"，不冒充判定。
+LEAD_FIELDS = {"suspicion", "basis", "where"}
 COLLECTION_STATE_ALLOWED = {"collected", "blocked", "not_run", "skipped", "partial"}
 JUDGEMENT_TOKENS = {"PASS", "FAIL", "通过", "不通过", "已通过", "判定通过", "判定失败"}
 
@@ -856,6 +861,24 @@ def scan_collection_records(records):
         else:
             violations.append({"index": index, "id": ident, "code": "missing_state",
                                "message": "缺少 collection_state（collected/blocked/not_run/skipped/partial）"})
+        lead = record.get("lead")
+        if lead is not None:
+            if not isinstance(lead, dict):
+                violations.append({"index": index, "id": ident, "code": "lead_not_object",
+                                   "message": "lead 必须是对象 {suspicion, basis, where}"})
+            else:
+                unknown = set(lead) - LEAD_FIELDS
+                if unknown:
+                    violations.append({"index": index, "id": ident, "code": "lead_unknown_field",
+                                       "keys": sorted(unknown),
+                                       "message": f"lead 只接受 {sorted(LEAD_FIELDS)}，"
+                                                  "不得夹带判定字段"})
+                for key in ("suspicion", "basis"):
+                    if not str(lead.get(key) or "").strip():
+                        violations.append({"index": index, "id": ident,
+                                           "code": "lead_missing_basis",
+                                           "key": key,
+                                           "message": f"lead.{key} 不能为空：现场怀疑必须写清依据"})
         if record.get("collection_state") == "collected" and not record.get("evidence_paths"):
             violations.append({"index": index, "id": ident, "code": "no_evidence",
                                "message": "采集完成的记录必须附 evidence_paths，否则无法在裁决阶段复核"})
