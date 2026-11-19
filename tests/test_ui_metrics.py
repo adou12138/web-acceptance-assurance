@@ -254,6 +254,10 @@ class EvidenceAndGate(unittest.TestCase):
         with out_csv.open(encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 2)
+        # 只给判定不给实测值的 CSV 无法复核，measured 必须在列里
+        self.assertIn("measured", rows[0])
+        self.assertEqual(json.loads(rows[0]["measured"])["ratio"], 2.32)
+        self.assertIn("threshold", rows[0])
 
     def test_cli_clean_run_exits_zero(self):
         payload = self.folder / "clean.jsonl"

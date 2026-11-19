@@ -311,7 +311,9 @@ def _load(path):
 
 
 def _emit_csv(report, path):
-    fields = ["id", "page", "element", "kind", "status", "standard", "threshold", "note", "evidence"]
+    # measured 必须在列里：只给判定不给实测值，复核者无法验证这个判定是怎么来的
+    fields = ["id", "page", "element", "kind", "status", "standard", "threshold",
+              "measured", "note", "evidence"]
     with Path(path).open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
