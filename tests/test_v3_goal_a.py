@@ -40,7 +40,9 @@ class ExplorationGateObligations(unittest.TestCase):
         self.data = {
             "schema_version": "1.0",
             "context": {"target_url": "https://example.invalid/app", "application_version": "b1", "environment": "test"},
-            "items": [copy.deepcopy(base)],
+            "items": [copy.deepcopy(base),
+                      dict(copy.deepcopy(base), id="EXP-TRAV-02",
+                           page_url="https://example.invalid/app/list", state="列表")],
         }
 
     def gate(self, extra):

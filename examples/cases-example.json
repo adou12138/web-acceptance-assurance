@@ -16,7 +16,9 @@
     "accessibility": {"state": "insufficient_evidence", "reason": "示例未包含无障碍验收要求，缺键盘与语义标签的可观测判据"},
     "compatibility": {"state": "not_applicable", "reason": "教学示例未声明端差异、浏览器或分辨率范围"},
     "visual": {"state": "insufficient_evidence", "reason": "示例未提供设计基线，无法做视觉一致性对照"},
-    "reliability": {"state": "not_applicable", "reason": "示例不涉及外部依赖、异步计算、重试或数据恢复要求"}
+    "reliability": {"state": "not_applicable", "reason": "示例不涉及外部依赖、异步计算、重试或数据恢复要求"},
+    "usability": {"state": "insufficient_evidence", "reason": "示例未声明任务反馈、防重与恢复要求，无法给出可观测判据"},
+    "content": {"state": "insufficient_evidence", "reason": "示例未提供文案与术语基线，仅演示字段与校验"}
   },
   "decisions": [{"topic": "范围", "reason": "此文件仅演示字段与校验，不是完整边界用例或真实业务验收"}],
   "open_questions": ["真实需求的长度、异常和权限规则待业务确认；本文件不得用于声称已完成测试。"]

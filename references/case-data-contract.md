@@ -28,7 +28,7 @@
 | scenarios | workflow/stateful 必填且非空，simple可省略；场景 id/name/goal/feature_ids/paths/not_applicable |
 | testcases | 非空用例数组，字段见下表 |
 | diagrams | 按需数组：id/scenario_ids/mermaid；源码无代码围栏；脚本只检查基本字段，不能证明图可渲染或语义正确 |
-| applicability | 按需对象：键限于 functional/security/performance/accessibility/compatibility/visual/reliability，每项含 state 与 reason；缺类或状态非法产生告警/错误 |
+| applicability | 按需对象：键限于 functional/security/performance/accessibility/compatibility/visual/reliability/usability/content，每项含 state 与 reason；缺类或状态非法产生告警/错误 |
 | decisions / open_questions | 按需记录拆解、分类、范围、图和评审决定，以及待澄清问题；由人或专家分析，脚本不代判 |
 
 ID 跨所有节点全局唯一，引用按 ID；名称修改不影响关联。每个 REQ 至少一个必选 AC；每个 AC 至少一个必要 TC，必选 AC 的必要 TC 必须 required=true。AC.case_ids 与必要 TC.acceptance_ids 保持反向关系；TC可关联多个AC和FP，但AC的需求必须在关联FP的需求范围内。补充非必选TC可关联AC而不进入必要组合。必要组合不能测试失败后临时修改以获得通过。
@@ -50,7 +50,7 @@ ID 跨所有节点全局唯一，引用按 ID；名称修改不影响关联。�
 | scenario_id/path_id | workflow/stateful 必填，simple按需；保持所属关系 |
 | priority/required | P0/P1/P2；布尔，与必要AC组合一致 |
 | layer | ui/api/component/integration/e2e，表示主要验证层级 |
-| attributes | 非空数组：functional/security/performance/accessibility/compatibility/visual/reliability，可多选 |
+| attributes | 非空数组：functional/security/performance/accessibility/compatibility/visual/reliability/usability/content，可多选 |
 | suites | 非空数组：feature/smoke/regression/exploratory/e2e，可多选，汇总按TC去重 |
 | classification_reason | 根据测试目标与断言解释分类，关键词仅辅助提醒，不强制覆盖人工判断 |
 | role/preconditions/data | 角色、非空前置字符串数组、具体数据对象；未知认证不得编造 |

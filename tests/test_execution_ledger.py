@@ -289,5 +289,102 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertIn("qa-req2testcase-generator", str(raised.exception))
 
 
+class LedgerEmitsAttackFields(unittest.TestCase):
+    """台账必须产出攻击面字段，否则守规矩的执行方必然被压「待核实」。
+
+    历史行为：finish() 的 payload 里没有 path_type/surf_id/method/oracle_source/
+    discovery_mode，全仓只有消费者没有生产者——按官方接口记录的执行人拿不到"通过"，
+    只能绕过单写者纪律手搓 JSONL。门禁不能惩罚守规矩的人。
+    """
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("execution_ledger_attack", SCRIPT)
+        self.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tool)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name)
+        self.workspace = self.folder / "run"
+        self.design = json.loads((ROOT / "examples" / "cases-example.json").read_text(encoding="utf-8"))
+        self.context = {"target_url": "https://example.invalid/test", "environment": "test",
+                        "application_version": "build-1", "feature_flags": {"rename": True},
+                        "role_scope": ["editor"], "dependency_mode": "sandbox"}
+        self.evidence = self.folder / "shot.png"
+        self.evidence.write_text("fixture evidence", encoding="utf-8")
+        self.tool.initialize(self.workspace, self.design, self.context, "ROUND-1", [])
+
+    def attack(self, **changes):
+        payload = {"path_type": "ui_content", "surf_id": "SURF-UI-01",
+                   "method": "copy_audit", "oracle_source": "independent",
+                   "oracle_channel": "网页端截图 + DOM 文本", "discovery_mode": "designed_probe",
+                   "probes": 3}
+        payload.update(changes)
+        return payload
+
+    def finish(self, attack=None, status="FAIL"):
+        self.tool.begin(self.workspace, self.design, self.context, "ATT-1", "TC-NAME-001", "检查文案")
+        return self.tool.finish(self.workspace, self.design, self.context, "ATT-1", status,
+                                "按钮文案显示 {{name}} 未渲染", [str(self.evidence)],
+                                [{"check": "项目重新打开后的名称", "actual": "{{name}}", "matched": False}],
+                                "product", ["BUG-1"], "无远程数据", attack=attack)
+
+    def last_finish(self):
+        events = self.tool.read_events(self.workspace)
+        return [e for e in events if e["kind"] == "FINISH"][-1]
+
+    def test_finish_records_attack_fields(self):
+        self.finish(self.attack())
+        event = self.last_finish()
+        self.assertEqual(event["path_type"], "ui_content")
+        self.assertEqual(event["surf_id"], "SURF-UI-01")
+        self.assertEqual(event["method"], "copy_audit")
+        self.assertEqual(event["oracle_source"], "independent")
+        self.assertEqual(event["oracle_channel"], "网页端截图 + DOM 文本")
+        self.assertEqual(event["discovery_mode"], "designed_probe")
+        self.assertEqual(event["probes"], 3)
+
+    def test_unknown_path_type_rejected(self):
+        with self.assertRaises(ValueError):
+            self.finish(self.attack(path_type="visual"))  # 旧名不在枚举内
+
+    def test_bad_surf_id_rejected(self):
+        with self.assertRaises(ValueError):
+            self.finish(self.attack(surf_id="x"))
+
+    def test_unknown_method_rejected(self):
+        with self.assertRaises(ValueError):
+            self.finish(self.attack(method="whatever"))
+
+    def test_independent_requires_channel(self):
+        payload = self.attack()
+        payload.pop("oracle_channel")
+        with self.assertRaises(ValueError):
+            self.finish(payload)
+
+    def test_unknown_attack_key_rejected(self):
+        with self.assertRaises(ValueError):
+            self.finish(self.attack(path="x"))
+
+    def test_legacy_finish_without_attack_still_works(self):
+        self.finish(None)
+        self.assertNotIn("path_type", self.last_finish())
+
+    def test_ledger_events_feed_attack_coverage(self):
+        """端到端：官方接口写出的台账能被 attack_coverage 直接消费，不判「字段缺失」。"""
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import attack_coverage as ac
+        self.finish(self.attack())
+        events = self.tool.read_events(self.workspace)
+        result = ac.analyse(events, residual_note="未破：并发删除")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["path_type"]["ui_content"], 1)
+        self.assertEqual(result["oracle_source"]["independent"], 1)
+        self.assertEqual(result["oracle_source"]["unproven_independent"], 0)
+        codes = [g["code"] for g in result["gaps"]]
+        self.assertNotIn("path_type_missing", codes)
+        self.assertNotIn("method_missing", codes)
+        self.assertNotIn("oracle_independence_unproven", codes)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -60,7 +60,10 @@ REQUIRED_VIEWS = ("界面样式", "交互易用性", "基础无障碍", "功能"
 # 不得由同视角的一条 functional PASS 记录清空（v3 目标审计 G08/G16）。
 # content=文案（术语/单位/错误提示/未渲染变量）；compatibility=兼容内核/设备；
 # security=权限/会话。三者均有独立必选义务，不能被功能视角覆盖稀释。
-MANDATORY_ATTRIBUTES = ("security", "compatibility", "content")
+MANDATORY_ATTRIBUTES = ("security", "compatibility", "content", "visual", "usability", "accessibility")
+# 视角覆盖的最小单元数：一个"页面×状态"单元。同一页面同一状态的一条 PASS 不足以
+# 证明整个视角已覆盖——界面样式尤其容易被一张首页截图清空。
+MIN_VIEW_CELLS = 2
 ITEM_FIELDS = {"id", "requirement_ids", "page_url", "role", "viewport", "state", "action", "risk", "status", "observation", "evidence_paths", "blocked_reason", "side_effect_pending", "attributes"}
 SCOPE = "仅清单进度与人工下一步候选；不判定业务或总体门禁；证据内容和外部引用需复核；不自动执行或重放"
 
@@ -136,17 +139,31 @@ def _evidence(paths, name):
     return result
 
 
-def _gate(rows, executed_views, rulings=None):
-    """按已提供清单计算执行门禁：未消费候选、必查视角无实测记录、缺控件遍历条目或存在 FAIL 时降低结论上限。
+def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None):
+    """按已提供清单计算执行门禁：未消费候选、必查视角覆盖不足、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
     SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
     FAIL 属"已实测到异常"，同样不得写"通过"。
-    必选质量属性（安全/兼容/文案）须逐类裁定：要么有 PASS 实测，要么显式写明 not_applicable 理由；
-    整类不出现不等于不适用（v3 G16）。
+    必选质量属性（安全/兼容/文案/界面/易用/无障碍）须逐类裁定：要么有 PASS 实测，
+    要么显式写明 not_applicable 理由；整类不出现不等于不适用。
+
+    视角覆盖按**页面×状态单元**计数，不按"有没有一条记录"：曾出现 7 条同页面同状态的
+    记录各带一个属性，就把界面样式/易用性/无障碍三个视角全部点亮——等于截一张首页图
+    就算"UI 已测"。每视角至少 MIN_VIEW_CELLS 个不同 (page_url, state) 单元，或在
+    view_scope 里写明该视角只有 N 个单元及理由。
     """
     rulings = rulings or {}
+    view_scope = view_scope or {}
+    executed_cells = executed_cells or {view: set() for view in VIEWS}
     ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip()]
     missing = [view for view in REQUIRED_VIEWS if not executed_views[view]]
+    thin, thin_detail = [], []
+    for view in REQUIRED_VIEWS:
+        need = int((view_scope.get(view) or {}).get("cells") or MIN_VIEW_CELLS)
+        cells = executed_cells.get(view) or set()
+        if cells and len(cells) < need:
+            thin.append(view)
+            thin_detail.append(f"{view}（{len(cells)}/{need} 个页面×状态单元）")
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
     traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
@@ -197,6 +214,11 @@ def _gate(rows, executed_views, rulings=None):
     elif missing:
         ceiling = "待核实"
         message = "必查视角无实测记录（PASS/FAIL）：" + "、".join(missing) + "；需补执行或写明不适用理由"
+    elif thin:
+        ceiling = "待核实"
+        message = ("必查视角覆盖过薄（同一页面同一状态的一条记录不能清空整个视角）："
+                   + "、".join(thin_detail)
+                   + "；需补不同页面/状态，或在 view_scope 里写明该视角只有 N 个单元及理由")
     elif not traversal_recorded:
         ceiling = "待核实"
         message = "清单中无控件遍历条目（EXP-TRAV- 前缀）：按 exploration-runtime.md 的控件遍历约定补充条目或写明不适用理由；技术结论上限为待核实"
@@ -215,6 +237,9 @@ def _gate(rows, executed_views, rulings=None):
         "ready_pending_ids": ready,
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
         "missing_views": missing,
+        "thin_views": thin,
+        "view_cells": {view: sorted(cells) for view, cells in executed_cells.items()},
+        "view_scope": {view: dict(scope) for view, scope in view_scope.items()},
         "executed_views": {view: list(ids) for view, ids in executed_views.items()},
         "failed_items": failed,
         "unreconciled_pending": unreconciled_pending,
@@ -231,7 +256,7 @@ def _gate(rows, executed_views, rulings=None):
 
 def summarize(data):
     """校验单份探索输入，返回当前进度、候选 ID、检查视角和带证据指纹的记录。"""
-    _object(data, {"schema_version", "context", "items"}, {"attribute_rulings"}, "root")
+    _object(data, {"schema_version", "context", "items"}, {"attribute_rulings", "view_scope"}, "root")
     if data["schema_version"] != "1.0":
         raise ValueError("schema_version: 必须为字符串 1.0")
     rulings = data.get("attribute_rulings")
@@ -248,6 +273,19 @@ def summarize(data):
             _text(ruling["reason"], name + ".reason")
             if ruling["state"] not in {"applicable", "not_applicable", "blocked"}:
                 raise ValueError(f"{name}.state: 必须为 applicable/not_applicable/blocked")
+    view_scope = data.get("view_scope")
+    if view_scope is not None:
+        if not isinstance(view_scope, dict):
+            raise ValueError("view_scope: 必须为对象")
+        unknown = set(view_scope) - set(REQUIRED_VIEWS)
+        if unknown:
+            raise ValueError(f"view_scope: 未知视角 {sorted(unknown)}")
+        for view, scope in view_scope.items():
+            name = "view_scope." + view
+            _object(scope, {"cells", "reason"}, set(), name)
+            if type(scope["cells"]) is not int or not 1 <= scope["cells"] <= MIN_VIEW_CELLS:
+                raise ValueError(f"{name}.cells: 必须为 1~{MIN_VIEW_CELLS} 的整数（缩小覆盖下限须留痕）")
+            _text(scope["reason"], name + ".reason")
     context = data["context"]
     _object(context, {"target_url", "application_version", "environment"}, set(), "context")
     for key in context:
@@ -303,10 +341,15 @@ def summarize(data):
         "views": {view: [row["id"] for row in rows if set(row["attributes"]) & attributes] for view, attributes in VIEWS.items()},
         "executed_views": {view: [row["id"] for row in rows if row["status"] in {"PASS", "FAIL"} and set(row["attributes"]) & attributes]
                            for view, attributes in VIEWS.items()},
+        "executed_cells": {view: sorted({f'{row["page_url"]}|{row["state"]}' for row in rows
+                                         if row["status"] in {"PASS", "FAIL"} and set(row["attributes"]) & attributes})
+                           for view, attributes in VIEWS.items()},
         "items": rows,
         "scope": SCOPE,
     }
-    report["gate"] = _gate(rows, report["executed_views"], data.get("attribute_rulings"))
+    report["gate"] = _gate(rows, report["executed_views"],
+                           {view: set(cells) for view, cells in report["executed_cells"].items()},
+                           data.get("attribute_rulings"), data.get("view_scope"))
     return report
 
 

@@ -32,6 +32,18 @@ NEXT_PHASE = {"plan": "execute", "execute": "adjudicate", "adjudicate": None}
 PHASE_LABELS = {"plan": "规划与用例生成", "execute": "批量执行与状态采集",
                 "adjudicate": "结果裁决与缺陷分类"}
 
+# 交接产物：submit 时逐条要求真实存在（不认占位路径），plan 交棒给 execute 时
+# 还必须凑齐三件——需求评审、用例集、对抗 plan。缺任何一件都说明规划阶段只是走
+# 了个状态流转：曾经零产物 + 三个不存在的路径也能一路推进到执行阶段。
+HANDOFF_REQUIRED_ARTIFACTS = {
+    "execute": ("review", "cases", "adversarial"),
+}
+ARTIFACT_HINT = {
+    "review": "需求评审结论 review-result.json",
+    "cases": "用例资产 cases-*.json",
+    "adversarial": "对抗计划 adversarial-plan.json（风险面 SURF / 判据 ORC / 探针义务 ADV）",
+}
+
 # 路由表：类别（class）是机械可核对项，model_hint 只是建议，不作判据。
 ROUTING = {
     "plan": {"model_class": "strong-reasoning",
@@ -268,6 +280,19 @@ def submit(state, phase, artifacts=None, model_class=None, model_name=None, note
     artifacts = artifacts or []
     for item in artifacts:
         _text(item, "artifact")
+        path = Path(item)
+        if not path.is_absolute() or not path.is_file():
+            raise ValueError(f"交接产物不存在或不是绝对路径：{item}"
+                             "（只认真实文件，占位路径不算做过）")
+    required = HANDOFF_REQUIRED_ARTIFACTS.get(phase) or ()
+    if required:
+        names = [Path(a).name.lower() for a in artifacts]
+        missing = [key for key in required
+                   if not any(key in name for name in names)]
+        if missing:
+            detail = "、".join(f"{key}（{ARTIFACT_HINT[key]}）" for key in missing)
+            raise ValueError(f"阶段 {phase} 的交接产物缺 {detail}："
+                             "规划阶段的状态流转不能代替评审/用例/对抗 plan 三件产物")
     entry["artifacts"] = artifacts
     entry["submitted_at"] = _now()
     entry["routing"] = {
@@ -663,7 +688,70 @@ def _routing_warnings(state):
     return warnings
 
 
-def check_verdict(state):
+def _assumption_reasons(payload):
+    """风险假设清算：假设必须逐条给出证伪动作与结果，未证伪的必须留成显式风险。
+
+    只有需求可疑点有机械门禁是不够的——「应该没问题」「暂不涉及」这类判断如果不需要
+    落成可证伪条目，就会一直停在文字里，既不验证也不登记缺口。空清单允许，但必须
+    显式声明 reviewed=true，避免"没写"与"没有"被混为一谈。
+    """
+    if payload is None:
+        return ["未提供风险假设清算（check-verdict --assumptions）："
+                "无法区分「本来没有假设」与「没审」"]
+    if not isinstance(payload, dict):
+        raise ValueError("assumptions 必须为 JSON 对象")
+    if payload.get("reviewed") is not True:
+        return ["风险假设清单未声明 reviewed=true：空数组不等于已审阅"]
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ValueError("assumptions.items 必须为数组（无假设时给空数组）")
+    reasons = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            reasons.append(f"assumptions.items[{index}] 不是对象")
+            continue
+        missing = [k for k in ("id", "assumption", "basis", "falsify_action", "result")
+                   if not str(item.get(k) or "").strip()]
+        if missing:
+            reasons.append(f"assumptions.items[{index}] 缺 {'/'.join(missing)}")
+            continue
+        result = item["result"]
+        if result == "open":
+            reasons.append(f"风险假设 {item['id']} 仍未证伪（result=open）：{item['assumption']}")
+        elif result not in {"confirmed", "refuted"}:
+            reasons.append(f"风险假设 {item['id']} 的 result 必须为 confirmed/refuted/open")
+    return reasons
+
+
+def _regression_reasons(payload):
+    """回归影响面：有变更就得有回归候选，或者写明为什么认为无影响。
+
+    变更 → 依赖 → 旅程 → 用例这条链此前只存在于文档：不生成回归清单也能拿到"通过"。
+    """
+    if payload is None:
+        return ["未提供回归影响面结论（check-verdict --regression）："
+                "「本次改动是否破坏旧功能」没有机械要求"]
+    if not isinstance(payload, dict):
+        raise ValueError("regression 必须为 JSON 对象")
+    changed = payload.get("changed_areas", [])
+    candidates = payload.get("candidates", [])
+    if not isinstance(changed, list) or not isinstance(candidates, list):
+        raise ValueError("regression 的 changed_areas/candidates 必须为数组")
+    reason = str(payload.get("no_impact_reason") or "").strip()
+    if changed and not candidates and not reason:
+        return [f"声明了 {len(changed)} 个变更面但回归候选为空，且未写 no_impact_reason："
+                "影响面未被评估"]
+    if changed and candidates:
+        empty_basis = [str(c.get("id") or "?") for c in candidates
+                       if not isinstance(c, dict) or not str(c.get("basis") or "").strip()]
+        if empty_basis:
+            return [f"回归候选缺依据（basis，指向依赖/旅程来源）：{empty_basis[:5]}"]
+    if not changed and not reason:
+        return ["未声明变更面（changed_areas 空）且未写 no_impact_reason"]
+    return []
+
+
+def check_verdict(state, assumptions=None, regression=None):
     """裁决前置检查：返回是否允许给技术结论，以及阶段层面的结论上限。"""
     reasons, warnings = [], []
     for phase in PHASES:
@@ -690,6 +778,8 @@ def check_verdict(state):
                        "无法区分“用例铺得全”与“攻击面打得深”，结论上限压待核实")
     elif attack.get("ceiling") != "通过":
         reasons.extend(attack.get("reasons") or ["攻击覆盖不达标，结论上限压待核实"])
+    reasons.extend(_assumption_reasons(assumptions))
+    reasons.extend(_regression_reasons(regression))
     routing_warnings = _routing_warnings(state)
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
@@ -924,6 +1014,10 @@ def main(argv=None):
 
     p = sub.add_parser("check-verdict", help="裁决前置检查（未通过则结论上限待核实）")
     p.add_argument("state")
+    p.add_argument("--assumptions",
+                   help="风险假设清算 JSON（reviewed + items[id/assumption/basis/falsify_action/result]）")
+    p.add_argument("--regression",
+                   help="回归影响面 JSON（changed_areas + candidates[basis] 或 no_impact_reason）")
 
     p = sub.add_parser("scan-collection", help="采集记录合规检查（禁判定字段）")
     p.add_argument("records", help="JSONL 或 JSON 数组文件")
@@ -984,7 +1078,12 @@ def main(argv=None):
         if args.command != "status":
             save(args.state, state)
         if args.command == "check-verdict":
-            check = check_verdict(state)
+            check = check_verdict(
+                state,
+                json.loads(Path(args.assumptions).read_text(encoding="utf-8-sig"))
+                if getattr(args, "assumptions", None) else None,
+                json.loads(Path(args.regression).read_text(encoding="utf-8-sig"))
+                if getattr(args, "regression", None) else None)
             print(json.dumps(check, ensure_ascii=False, indent=2))
             return 0 if check["verdict_allowed"] else 1
         print(json.dumps(status(state), ensure_ascii=False, indent=2))

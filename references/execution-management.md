@@ -43,6 +43,22 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 
 对抗批次的扰动、注入与探针结果统一回到本台账体系登记：能力探测、预算停机与扰动启停纪律见 `adversarial-testing.md`；扰动残留按本文件「写操作台账」收尾，探针事件与候选复核另见 `finding-triage.md`。对抗不建立第二台账，不绕过单写者锁。
 
+## 攻击面字段（每条 FINISH 必填）
+
+`finish(..., attack={...})` 把攻击面字段写进 FINISH 事件，供 `attack_coverage.py` 直接消费。**不要另建台账**：自建 JSONL 会绕过单写者锁、证据 SHA-256 绑定与轮次一致性校验。
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `path_type` | positive / boundary / exception / permission / combo / ui_content / usability / accessibility / data_consistency / regression | 本用例打的是哪个攻击维度；`positive` 只用于"确认功能可用" |
+| `surf_id` | `SURF-…` | 对应的风险面，须在对抗 plan 的 surfaces 清单内 |
+| `method` | 方法库稳定 ID（`probe-playbook.md` B 节） | 用了哪种方法；多样性会被核对 |
+| `oracle_source` | independent / self_attested | 判据来自独立通道还是被测物自己的回显 |
+| `oracle_channel` | 自由文本 | `independent` 必填且要点名通道（网页端 DOM/接口响应/持久化读回）；只写"读回一致"不算 |
+| `discovery_mode` | designed_probe / incidental / undetermined | 这条来自为失效假设设计的探针，还是碰巧撞见 |
+| `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现 |
+
+收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>"`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
+
 ## 结果与证据
 
 同一轮每TC保留所有attempt。已证实product失败优先保持FAIL，即使随后成功；未归因FAIL/PASS混合为BLOCKED并标flaky，保留首败。前置BLOCKED后条件恢复再PASS，不自动当flaky。新版本修复复测使用新轮次，旧失败仍留历史，缺陷关闭仍需要原场景和必需回归证据。

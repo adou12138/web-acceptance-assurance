@@ -620,3 +620,36 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 **残余缺口（不宣称已堵）**：自建台账、伪造 coverage JSON 仍可绕过门禁——属"有意伪造"，与既有诚实边界同类；机械层防的是"忘了做/懒得做"，防不了"决心造假"。攻击密度门槛 0.30 是"每 3 条至少 1 条非正向"的最低线，不是质量目标。
 
 版本 1.40.0（v1.39.0→1.40.0）；备份 `backup/web-acceptance-assurance-1.39.0`（git archive 导出 HEAD）；419 tests + 207 subtests 全绿（新增 29 例：attack_coverage 10、attack_precondition 6、forbidden_sources 6、blind_eval 5、phase_gate 2）。
+
+## 攻击面维度补全、量化界面标准与交接产物校验（v1.41.0，2026-11-19）
+
+触发：用户要求「以批判者/挑刺者身份自主全面测试」并明确点名「页面文案、样式、布局、操作逻辑不合理」也要能测出来；同时要求颜色对比度按公开规范核查（普通文本 4.5:1、大号文本与界面组件 3:1），并检查字号、间距、可点击区域等可量化问题。
+
+**先更正上一版的错误归因（M1）**：v1.40.0 把「自建台账」记为"有意伪造"。实测证明 `execution_ledger.finish()` 的 payload 里根本没有 path_type/surf_id/method/oracle_source/discovery_mode，全仓只有消费者没有生产者——按官方接口记录的人必然被压「待核实」，手搓 JSONL 反而是唯一可行路径。**这是设计缺陷，不是道德问题**，已在「攻击面字段」一节改为由 finish() 正式产出。
+
+| 项 | 整改 |
+|---|---|
+| 路径维度（S1，阻断） | `attack_coverage.PATH_TYPES` 由功能五类扩到十类：新增 `ui_content`/`usability`/`accessibility`/`data_consistency`/`regression`，全部计入非正向分子。此前 UI 类发现如实标 `visual` 被判 `path_type_missing`、塞进 `positive` 又被判 `attack_density_low`，两条路都挨罚 = 制度性劝阻登记界面问题 |
+| 探针/方法枚举（S1） | `adversarial-plan.schema.json` 与 `adversarial_data.py` 的 `probe_type` 增 visual_walkthrough/copy_audit/heuristic_review/consistency/regression；`method` 增 visual_walkthrough/copy_audit/heuristic_review/consistency_check/regression_impact；`playbook_ref` 扩到 P1~P20 |
+| 台账产出（S2，阻断） | `execution_ledger.finish(attack={...})` 新增七个字段并做枚举校验；`attack_coverage` 可直接消费 `events.jsonl`（自动取 FINISH 并补 case_id）。端到端用例：官方接口写出的台账不再被判"字段缺失" |
+| 声明≠行为（S3，高） | `surf_id` 须匹配 `SURF-` 且（传 `--plan` 时）在风险面清单内；`oracle_source=independent` 须有 `oracle_channel` 且不得只写"读回一致/助手自述"，并须带证据；`method` 须落枚举；新增 `method_diversity`（≥20 条记录至少 3 种方法）与 `probes` 计数 |
+| 通过档下限（S8） | 无缺口还不够：`designed_probe=0` 或未声明未破攻击面（`--residual-note`）都压上限。空记录+漂亮字段不再能拿「通过」 |
+| 交接产物（N1，阻断） | `phase_gate.submit` 逐条校验 `--artifact` 为**存在的绝对路径**；plan→execute 必须凑齐 review / cases / adversarial 三件，缺一即拒。此前零产物 + 三个不存在的路径也能推进到执行阶段 |
+| 视角覆盖（S4，高） | `executed_views` 改为按 `(page_url, state)` 单元计数，每个必查视角至少 2 个单元（可用根对象 `view_scope` 带理由缩到 1）；`visual`/`usability`/`accessibility` 纳入 `MANDATORY_ATTRIBUTES`。此前 7 条同页同状态的记录就能把三个视角全部点亮 |
+| 探针模板（S5，高） | `probe-playbook` 增 P16 文案 / P17 布局 / P18 操作逻辑 / P19 数据一致性 / P20 可量化界面，B 节增五个方法；`business-pitfalls` 增界面样式、文案术语、操作逻辑、数据一致性四个模块 |
+| 数据一致性（S7/N3） | `methodology.md` 增「数据一致性三通道」专章（前端展示/后端接口/缓存副本；跨视图/跨会话/跨时间/跨缓存；"谁赢谁输必须有提示"不变量） |
+| 风险假设（B1） | `phase_gate check-verdict --assumptions`：须 `reviewed=true`，每条含 assumption/basis/falsify_action/result，`result=open` 压上限 |
+| 回归门禁（N2） | `phase_gate check-verdict --regression`：有变更却零候选、候选无 `basis`、未写 `no_impact_reason` 均压上限 |
+| 可量化界面标准（新增） | 新增 `scripts/ui_metrics.py`：按 WCAG 2.2 SC 1.4.3（4.5:1 / 大号文本 3:1）、1.4.11（非文本 3:1）、2.5.8（≥24×24 CSS px，44×44 为建议档）、1.4.12（行高 ≥1.5）、1.4.10（320px 无横向滚动）机械核算；渐变/半透明/图片背景返回 `not_evaluable` 而不是按纯色算个漂亮数字；失败无证据降级 `pending_evidence`。30 例测试覆盖算法锚点（#767676 过 / #777777 不过）与各阈值边界 |
+| schema 对齐（S6） | `case_data.ATTRIBUTES` 补 `usability`/`content`，与探索清单 9 类对齐；`examples/cases-example.json` 补两项裁定。此前这两维在需求→用例这一跳可被静默豁免 |
+| 文档口径（S9/C1C2） | `phase-workflow.md` 增两套状态枚举映射表（`collection_state` ≠ `status`）；角色定义明确"路径维度不等于功能维度"；输出模板首屏增界面量化项与未破攻击面 |
+
+**端到端实测（不是手填数字）**：用 Playwright 在 `outputs/ui-metrics-demo-20261119/` 建 7 个已知状态元素（4 个应失败 + 3 个合规对照），从真实浏览器 `getComputedStyle`/`getBoundingClientRect` 取数后交 `ui_metrics.py --enforce`：`#c1` 2.32:1 fail、`#c2` 3.23:1 pass（同色不同字号，验证大号阈值真生效）、18×18 目标 fail、行高 1.3 fail、`#c6` 4.54:1 pass、32×32 advisory、320px 视口 `scrollWidth=492` fail，rc=2。**合规对照必须不报警**（防假阳性）与**已知故障必须报警**（防假阴性）两侧同时验证。
+
+**自审补的两处加固（本轮实测中发现）**：
+- `kind=text_large` 是自报的，12px 标成大号就能拿 3:1 宽松阈值 → 改为按实测 `font_size_px`/`font_weight` 复算资格，不符回落 4.5:1 并在备注写明；未给字号时按声明计但标注"未核实"。
+- 字重写成 `"bold"` 会被当 400，19px 粗体因此被判 4.5:1 失败（假失败）→ 新增 `normalize_weight`，`700`/`"700"`/`"bold"`/`"bolder"` 等价。
+
+**边界（不宣称已解决的）**：`ui_metrics.py` 只判可量化项，不构成 WCAG 合规认证；对比度对渐变/半透明只能报待确认；攻击密度 0.30、视角单元 ≥2、方法多样性 ≥3 均为工程判断，未经真实轮次校准；`--residual-note`、`assumptions`、`regression` 仍属"愿不愿意填"层面的机械约束，防得了忘记、防不了决心造假。
+
+版本 1.41.0（v1.40.0→1.41.0）；480 tests + 217 subtests 全绿（新增 61 例：attack_coverage 12、execution_ledger 9、phase_gate 9、exploration 若干、ui_metrics 30）。

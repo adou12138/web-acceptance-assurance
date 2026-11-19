@@ -26,6 +26,28 @@ class PhaseGateTestBase(unittest.TestCase):
         self.state = self.pg.init_state(self.state_path, "TASK-1", "SESS-1",
                                         self.pg.ROUTING["plan"]["model_class"],
                                         self.pg.ROUTING["plan"]["model_hint"])
+        self.artifacts = self._write_artifacts()
+
+    def _write_artifacts(self):
+        """plan→execute 交接的三件真实产物：评审结论、用例集、对抗 plan。"""
+        made = {}
+        for name in ("review-result.json", "cases-demo.json", "adversarial-plan.json"):
+            path = self.folder / name
+            path.write_text("{}", encoding="utf-8")
+            made[name.split("-")[0]] = str(path)
+        return [made["review"], made["cases"], made["adversarial"]]
+
+    def submit_phase(self, phase, session="SESS-1", **kwargs):
+        kwargs.setdefault("artifacts", self.artifacts if phase == "execute" else None)
+        kwargs.setdefault("model_class", self.pg.ROUTING[phase]["model_class"])
+        return self.pg.submit(self.state, phase, session=session, **kwargs)
+
+    def check(self, **kwargs):
+        """带齐风险假设与回归影响面的裁决前置检查（缺任一项都该被压上限）。"""
+        kwargs.setdefault("assumptions", {"reviewed": True, "items": []})
+        kwargs.setdefault("regression", {"changed_areas": ["AI 主页整页替换"],
+                                         "candidates": [{"id": "RG-01", "basis": "旧会话列表渲染"}]})
+        return self.pg.check_verdict(self.state, **kwargs)
 
     def session_for(self, phase):
         return f"SESS-{self.pg.PHASES.index(phase) + 1}"
@@ -57,6 +79,7 @@ class PhaseGateTestBase(unittest.TestCase):
         nxt = self.pg.NEXT_PHASE[phase]
         if nxt:
             self.pg.submit(self.state, nxt, session=session,
+                           artifacts=self.artifacts if nxt == "execute" else None,
                            model_class=model_classes.get(nxt, self.pg.ROUTING[nxt]["model_class"]),
                            model_name=self.pg.ROUTING[nxt]["model_hint"])
         self.pg.checkpoint(self.state, phase, self.handoff_dir, session=session)
@@ -75,7 +98,7 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.assertEqual(self.state["phases"]["plan"]["approval"]["mode"], "task_start")
         for phase in ("execute", "adjudicate"):
             self.assertEqual(self.state["phases"][phase]["status"], "pending")
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "待核实")
 
@@ -83,21 +106,21 @@ class PhaseMachineTests(PhaseGateTestBase):
         # 真实教训：154 项执行里 143 项走正向、风险面关联 0，却一路进到裁决
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.complete(self.state, "plan", session="SESS-1")
-        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.submit_phase("execute")
         self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
         self.resume("execute")
         self.pg.start(self.state, "execute", self.session_for("execute"))
         self.pg.complete(self.state, "execute", session=self.session_for("execute"))
         entry = self.state["phases"]["execute"]["attack_coverage"]
         self.assertEqual(entry["state"], "missing")
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"])
         self.assertTrue(any("attack_coverage" in r for r in check["reasons"]))
 
     def test_low_attack_density_blocks_verdict(self):
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.complete(self.state, "plan", session="SESS-1")
-        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.submit_phase("execute")
         self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
         self.resume("execute")
         self.pg.start(self.state, "execute", self.session_for("execute"))
@@ -105,25 +128,25 @@ class PhaseMachineTests(PhaseGateTestBase):
                          attack_coverage={"verdict_ceiling": "待核实", "attack_density": 0.078,
                                           "gaps": [{"code": "attack_density_low",
                                                     "message": "密度 0.078 低于门槛 0.3"}]})
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"])
         self.assertTrue(any("攻击覆盖不达标" in r for r in check["reasons"]))
 
     def test_execute_cannot_start_before_cross_session_resume(self):
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.complete(self.state, "plan", session="SESS-1")
-        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.submit_phase("execute")
         # 只 submit 申请，不得开始——必须新会话 resume
         with self.assertRaises(ValueError):
             self.pg.start(self.state, "execute", "SESS-1")
 
     def test_execute_requires_plan_done(self):
         with self.assertRaises(ValueError):
-            self.pg.submit(self.state, "execute", session="SESS-1")
+            self.submit_phase("execute")
 
     def test_happy_path_across_three_sessions_unlocks_verdict(self):
         self.finish_all()
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertTrue(check["verdict_allowed"], check["reasons"])
         self.assertIsNone(check["phase_ceiling"])
         ids = [item["id"] for item in self.state["sessions"]]
@@ -139,11 +162,11 @@ class PhaseMachineTests(PhaseGateTestBase):
     def test_reject_then_resubmit(self):
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.complete(self.state, "plan", session="SESS-1")
-        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.submit_phase("execute")
         self.pg.reject(self.state, "execute", "user", "缺少异常路径")
         self.assertEqual(self.state["phases"]["execute"]["status"], "rejected")
         self.assertEqual(self.state["phases"]["execute"]["rejections"][0]["reason"], "缺少异常路径")
-        self.pg.submit(self.state, "execute", session="SESS-1")
+        self.submit_phase("execute")
         self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
 
     def test_complete_requires_in_progress(self):
@@ -154,7 +177,7 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.request_amendment(self.state, "plan", "agent", "采集期发现新风险面需补设计",
                                   session="SESS-1")
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"])
         self.assertTrue(any("修订" in reason for reason in check["reasons"]))
         self.pg.approve_amendment(self.state, "AMD-1", "user", "同意补充设计")
@@ -162,11 +185,11 @@ class PhaseMachineTests(PhaseGateTestBase):
 
     def test_routing_mismatch_blocks_until_acknowledged(self):
         self.finish_all(model_classes={"plan": self.pg.ROUTING["execute"]["model_class"]})
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"], "规划用快模型属路由误配，须压上限")
         self.assertTrue(any(w["code"] == "routing_mismatch" for w in check["warnings"]))
         self.pg.acknowledge_routing(self.state, "plan", "本会话仅有快模型可用，已在报告中披露")
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertTrue(check["verdict_allowed"], check["reasons"])
 
     def test_state_persists_and_reloads(self):
@@ -174,7 +197,7 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.pg.save(self.state_path, self.state)
         reloaded = self.pg.load(self.state_path)
         self.assertEqual(reloaded["phases"]["adjudicate"]["status"], "done")
-        self.assertTrue(self.pg.check_verdict(reloaded)["verdict_allowed"])
+        self.assertTrue(self.pg.check_verdict(reloaded, assumptions={"reviewed": True, "items": []}, regression={"changed_areas": [], "candidates": [], "no_impact_reason": "重载校验"})["verdict_allowed"])
         self.assertGreaterEqual(len(reloaded["history"]), len(self.pg.PHASES) * 4)
 
     def test_init_refuses_existing_state(self):
@@ -188,7 +211,7 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
     def to_handoff(self):
         self.pg.start(self.state, "plan", "SESS-1")
         self.pg.complete(self.state, "plan", session="SESS-1")
-        self.pg.submit(self.state, "execute", session="SESS-1", artifacts=["cases.json"])
+        self.submit_phase("execute")
         self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
         return self.state["phases"]["plan"]["handoff"]
 
@@ -243,7 +266,7 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast")
         self.pg.start(self.state, "execute", "SESS-2")
         self.pg.complete(self.state, "execute", session="SESS-2")
-        self.pg.submit(self.state, "adjudicate", session="SESS-2")
+        self.submit_phase("adjudicate", session="SESS-2")
         self.pg.checkpoint(self.state, "execute", self.handoff_dir, session="SESS-2")
         token2 = self.state["phases"]["execute"]["handoff"]["token"]
         # 复用交接会话本身：直接拦
@@ -277,7 +300,7 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
     def test_foreign_session_cannot_operate_state(self):
         self.to_handoff()
         with self.assertRaises(ValueError) as ctx:
-            self.pg.submit(self.state, "adjudicate", session="SESS-9")
+            self.submit_phase("adjudicate", session="SESS-9")
         self.assertIn("无权操作", str(ctx.exception))
 
     def test_handoff_reject_from_new_session(self):
@@ -291,12 +314,11 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         """同会话放行是兼容路径：能走完流程，但结论上限只能待核实。"""
         for phase in self.pg.PHASES:
             if phase != "plan":
-                self.pg.submit(self.state, phase,
-                               model_class=self.pg.ROUTING[phase]["model_class"])
+                self.submit_phase(phase)
                 self.pg.approve(self.state, phase, "user", "同会话同意")
             self.pg.start(self.state, phase, self.session_for("plan"))
             self.pg.complete(self.state, phase, session=self.session_for("plan"))
-        check = self.pg.check_verdict(self.state)
+        check = self.check()
         self.assertFalse(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "待核实")
         self.assertTrue(any("同会话放行" in reason for reason in check["reasons"]))
@@ -412,8 +434,10 @@ class PhaseGateCliTests(PhaseGateTestBase):
                                   "--session", "SESS-1").returncode, 0)
         self.assertEqual(self.cli("complete", str(state), "--phase", "plan",
                                   "--session", "SESS-1").returncode, 0)
-        self.assertEqual(self.cli("submit", str(state), "--phase", "execute",
-                                  "--session", "SESS-1").returncode, 0)
+        cmd = ["submit", str(state), "--phase", "execute", "--session", "SESS-1"]
+        for artifact in self.artifacts:
+            cmd += ["--artifact", artifact]
+        self.assertEqual(self.cli(*cmd).returncode, 0)
         premature = self.cli("start", str(state), "--phase", "execute", "--session", "SESS-1")
         self.assertEqual(premature.returncode, 2, "未交接不得开始")
 
@@ -492,7 +516,7 @@ class TamperResistanceTests(PhaseGateTestBase):
         self.finish_all()
         self.pg.save(self.state_path, self.state)
         reloaded = self.pg.load(self.state_path)
-        self.assertTrue(self.pg.check_verdict(reloaded)["verdict_allowed"])
+        self.assertTrue(self.pg.check_verdict(reloaded, assumptions={"reviewed": True, "items": []}, regression={"changed_areas": [], "candidates": [], "no_impact_reason": "重载校验"})["verdict_allowed"])
 
 
 class PhaseLedgerIntegrationTests(PhaseGateTestBase):
@@ -555,8 +579,7 @@ class PhaseLedgerIntegrationTests(PhaseGateTestBase):
         """同会话放行虽走完流程，台账侧也必须压住结论。"""
         for phase in self.pg.PHASES:
             if phase != "plan":
-                self.pg.submit(self.state, phase,
-                               model_class=self.pg.ROUTING[phase]["model_class"])
+                self.submit_phase(phase)
                 self.pg.approve(self.state, phase, "user", "同会话同意")
             self.pg.start(self.state, phase, "SESS-1")
             self.pg.complete(self.state, phase, session="SESS-1")
@@ -596,6 +619,117 @@ class PhaseLedgerIntegrationTests(PhaseGateTestBase):
         self.assertEqual(run.returncode, 0, run.stderr)
         baseline = json.loads((workspace / "baseline.json").read_text(encoding="utf-8"))
         self.assertEqual(baseline["gate_precondition"]["phase_state"], "incomplete")
+
+
+class HandoffArtifactValidation(PhaseGateTestBase):
+    """交接产物必须是真实文件：状态流转不能代替评审/用例/对抗 plan。"""
+
+    def complete_plan(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+
+    def test_nonexistent_artifact_rejected(self):
+        self.complete_plan()
+        ghost = self.folder / "ghost"
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.submit(self.state, "execute", session="SESS-1",
+                           artifacts=[str(ghost / "review-result.json"),
+                                      str(ghost / "cases-demo.json"),
+                                      str(ghost / "adversarial-plan.json")])
+        self.assertIn("不存在", str(ctx.exception))
+
+    def test_relative_artifact_rejected(self):
+        self.complete_plan()
+        with self.assertRaises(ValueError):
+            self.pg.submit(self.state, "execute", session="SESS-1",
+                           artifacts=["review-result.json", "cases-demo.json",
+                                      "adversarial-plan.json"])
+
+    def test_plan_handoff_requires_three_artifacts(self):
+        self.complete_plan()
+        for artifacts in (None, [], [self.artifacts[0]],
+                          self.artifacts[:2], [self.artifacts[0], self.artifacts[2]]):
+            with self.subTest(count=0 if not artifacts else len(artifacts)):
+                with self.assertRaises(ValueError):
+                    self.pg.submit(self.state, "execute", session="SESS-1",
+                                   artifacts=artifacts)
+
+    def test_complete_plan_with_three_real_artifacts_passes(self):
+        self.complete_plan()
+        self.pg.submit(self.state, "execute", session="SESS-1", artifacts=self.artifacts)
+        self.assertEqual(self.state["phases"]["execute"]["status"], "awaiting_approval")
+        self.assertEqual(len(self.state["phases"]["execute"]["artifacts"]), 3)
+
+
+class AssumptionAndRegressionGate(PhaseGateTestBase):
+    """风险假设必须逐条证伪，回归影响面必须被评估——两者缺一即压上限。"""
+
+    def finished(self):
+        self.finish_all()
+        return self.check()
+
+    def test_missing_assumptions_blocks(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state, assumptions=None,
+            regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("风险假设" in reason for reason in check["reasons"]))
+
+    def test_empty_assumptions_need_reviewed_flag(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state, assumptions={"items": []},
+            regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("reviewed" in reason for reason in check["reasons"]))
+
+    def test_open_assumption_blocks(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state,
+            assumptions={"reviewed": True, "items": [{
+                "id": "ASM-01", "assumption": "发布后立即可见",
+                "basis": "产品口头说明", "falsify_action": "发布后刷新列表核对",
+                "result": "open"}]},
+            regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("ASM-01" in reason for reason in check["reasons"]))
+
+    def test_missing_regression_blocks(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state, assumptions={"reviewed": True, "items": []}, regression=None)
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("回归影响面" in reason for reason in check["reasons"]))
+
+    def test_changed_area_without_candidates_blocks(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state, assumptions={"reviewed": True, "items": []},
+            regression={"changed_areas": ["主页整页替换"], "candidates": []})
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("回归候选" in reason for reason in check["reasons"]))
+
+    def test_candidate_without_basis_blocks(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state, assumptions={"reviewed": True, "items": []},
+            regression={"changed_areas": ["主页"], "candidates": [{"id": "RG-01"}]})
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("basis" in reason for reason in check["reasons"]))
+
+    def test_full_declaration_allows_verdict(self):
+        self.finish_all()
+        check = self.pg.check_verdict(
+            self.state,
+            assumptions={"reviewed": True, "items": [{
+                "id": "ASM-01", "assumption": "发布后立即可见",
+                "basis": "产品说明", "falsify_action": "发布后刷新列表核对",
+                "result": "refuted"}]},
+            regression={"changed_areas": ["主页整页替换"],
+                        "candidates": [{"id": "RG-01", "basis": "旧会话列表渲染依赖主页配置"}]})
+        self.assertTrue(check["verdict_allowed"], check["reasons"])
 
 
 if __name__ == "__main__":

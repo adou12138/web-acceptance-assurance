@@ -170,7 +170,9 @@ class MandatoryAttributeRulings(unittest.TestCase):
         self.data = {"schema_version": "1.0",
                      "context": {"target_url": "https://example.invalid/app", "application_version": "b",
                                  "environment": "test"},
-                     "items": [dict(self.base)]}
+                     "items": [dict(self.base),
+                               dict(self.base, id="EXP-TRAV-02",
+                                    page_url="https://example.invalid/app/list", state="列表")]}
 
     def ceiling(self):
         return self.tool.summarize(self.data)["gate"]["verdict_ceiling"]

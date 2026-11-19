@@ -25,23 +25,36 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 使用绝对路径或以专家包根为当前目录；输出父目录必须存在，拒绝覆盖。退出码0仅表示校验/导出完成，2表示数据或工具错误，不是网站质量门禁。
 
-摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）、`failed_items`非空或必选质量属性未闭合时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
+摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录或**覆盖过薄**（同一视角的 `(page_url, state)` 单元少于 2 个）、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）、`failed_items`非空或必选质量属性未闭合时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
 
 ### 必选质量属性逐类裁定（`attribute_rulings`）
 
-安全、兼容、文案三类**不能靠"本次没提"默认不需要**。清单根对象用可选 `attribute_rulings` 逐类给出裁定，否则 `gate.mandatory_attributes` 记为 `undeclared`、上限压到"待核实"：
+安全、兼容、文案、**界面样式、交互易用性、基础无障碍**六类**不能靠"本次没提"默认不需要**。清单根对象用可选 `attribute_rulings` 逐类给出裁定，否则 `gate.mandatory_attributes` 记为 `undeclared`、上限压到"待核实"：
 
 ```json
 "attribute_rulings": {
   "security": {"state": "not_applicable", "reason": "本次仅改列表文案，无权限/会话变更"},
   "compatibility": {"state": "applicable", "reason": "需求承诺 Chrome/Firefox 双内核"},
-  "content": {"state": "applicable", "reason": "新增错误提示与按钮文案"}
+  "content": {"state": "applicable", "reason": "新增错误提示与按钮文案"},
+  "visual": {"state": "applicable", "reason": "新增弹层与表格列"},
+  "usability": {"state": "applicable", "reason": "新增批量操作入口"},
+  "accessibility": {"state": "applicable", "reason": "新增自定义下拉与快捷键"}
 }
 ```
+
+界面/易用/无障碍纳入必选的理由：这三类最容易被一张首页截图"顺带通过"，而用户实际投诉最多的正是文案错误、布局遮挡、按钮太小、提示误导。判 `applicable` 就要有同属性 PASS 实测记录，判 `not_applicable` 要写清为什么（例如"本批次为纯接口验证，无页面渲染"）。
 
 - `state`：`applicable`（必须有同属性 PASS 实测记录才算闭合）/ `not_applicable`（必须写理由）/ `blocked`（写明缺什么环境或角色）。
 - 判为 `applicable` 但只有 NOT_RUN/BLOCKED，或根本没写裁定，都进入"必选质量属性未闭合"，不得由功能视角的一条 PASS 抵消。
 - 文案类检查面（术语、单位、未渲染变量、错误定位与恢复指引）见 `references/visual-usability.md`；兼容须记录真实内核/设备，视口模拟不得冒充。
+
+**视角覆盖按页面×状态单元计**（`executed_cells`）：同一页面同一状态下的一条 PASS 不能清空整个视角——曾出现 7 条同页同状态的记录各带一个属性，就把界面样式/易用性/无障碍全部点亮，等于"截一张首页图 = UI 已测"。每个必查视角至少 2 个不同 `(page_url, state)` 单元；确属单页单状态的小任务，用根对象可选 `view_scope` 显式缩小下限并写理由：
+
+```json
+"view_scope": {"界面样式": {"cells": 1, "reason": "本需求仅一个弹窗，无其他页面"}}
+```
+
+`cells` 取 1~2 的整数；不写则默认 2。
 
 根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`。每个item必填：
 

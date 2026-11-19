@@ -7,7 +7,10 @@ import sys
 
 PATH_KINDS = ("positive", "boundary", "exception", "permission")
 LAYERS = {"ui", "api", "component", "integration", "e2e"}
-ATTRIBUTES = {"functional", "security", "performance", "accessibility", "compatibility", "visual", "reliability"}
+# 与 exploration_state.ATTRIBUTES 对齐：易用性（usability）与文案（content）此前只在探索域存在，
+# 导致需求→用例这一跳可以不需要回答"这两维是否适用"，等于静默豁免。
+ATTRIBUTES = {"functional", "security", "performance", "accessibility", "compatibility",
+              "visual", "reliability", "usability", "content"}
 SUITES = {"feature", "smoke", "regression", "exploratory", "e2e"}
 APPLICABILITY_STATES = {"applicable", "not_applicable", "insufficient_evidence", "deferred"}
 ELEMENT_KEYS = ("scene", "object", "condition", "focus")

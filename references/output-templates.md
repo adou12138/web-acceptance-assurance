@@ -181,7 +181,10 @@ EXP ID；目标风险；范围/排除项；环境/角色/数据；时间盒与�
 - 本次需求、目标环境与版本、已测范围及链路模式。
 - 计划 TC、PASS、FAIL、BLOCKED、NOT_RUN、SKIPPED 数量，重试/波动项单列；总数按 ID 去重。
 - 执行率、已执行通过率、需求证据覆盖率、需求满足率，给出分子/分母，零分母用 N/A。
-- **攻击面（报告首屏必列，优先于通过率）**：非正向路径条数与占比（boundary/exception/permission/combo）、被打破的失效假设数、独立判据占比、`designed_probe` 与 `incidental` 的缺陷构成、有效缺陷/每百探针。数据取自 `scripts/attack_coverage.py`，不得手写；缺口（`gaps`）逐条原样呈现。
+- **攻击面（报告首屏必列，优先于通过率）**：非正向路径条数与占比，按组拆分——功能逻辑（boundary/exception/permission/combo）、界面与文案（ui_content/usability/accessibility）、数据与回归（data_consistency/regression）；被打破的失效假设数、独立判据占比、方法多样性、`designed_probe` 与 `incidental` 的缺陷构成、有效缺陷/每百探针。数据取自 `scripts/attack_coverage.py`，不得手写；缺口（`gaps`）逐条原样呈现。
+- **界面量化项单列**：对比度/目标尺寸/行高/重排的实测值与阈值（`scripts/ui_metrics.py` 输出），通过项写"已核 x 项"，失败与待取证逐条列；不得用"界面看起来正常"代替。
+- **未破攻击面必写**：本轮"最值得怀疑但没打穿的假设"至少一条（`--residual-note` 的原文），否则"通过"不成立。
+- **风险假设与回归影响面**：从 `assumptions.json` 与 `regression.json` 原样带出，`result=open` 的假设与未覆盖的回归候选都要在首屏点名。
 - **通过率不是战果**：`150/154 = 97.4%` 只说明"确认了多少条可用"，不说明"打坏了多少种失效方式"。两者并列时，前者作附注。若攻击密度低于门槛而通过率很高，这本身就是一条需要在报告里点明的风险信号。
 - 阻断/严重产品缺陷、其余问题、覆盖缺口及未观测依赖。
 - 修复复测结果、尚未闭环事项、下轮最小复评集合。

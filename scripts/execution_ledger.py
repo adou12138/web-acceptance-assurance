@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import argparse
 
@@ -16,6 +17,28 @@ except ImportError:
     _module = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_module)
     validate_design = _module.validate
+
+
+def _sibling(name):
+    """按文件路径加载同目录脚本，不依赖 sys.path（CLI 与测试导入都能用）。"""
+    try:
+        return __import__(name)
+    except ImportError:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+# 枚举以 attack_coverage / adversarial_data 为单一事实源：路径类型、判据来源、发现方式
+# 与方法库 ID 都从那里取，避免生产端与消费端各写一份然后悄悄漂移。
+_ATTACK = _sibling("attack_coverage")
+_ADV = _sibling("adversarial_data")
+ATTACK_PATH_TYPES = tuple(_ATTACK.PATH_TYPES)
+ORACLE_SOURCES = tuple(_ATTACK.ORACLE_SOURCES)
+DISCOVERY_MODES = tuple(_ATTACK.DISCOVERY_MODES)
+METHOD_IDS = frozenset(_ADV.METHOD_IDS)
 
 STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED"}
 SEVERITIES = {"blocker", "major", "normal", "minor"}
@@ -458,7 +481,72 @@ def begin(workspace, design, context, attempt_id, case_id, intended_action):
         return _append(workspace, events, "BEGIN", {"attempt_id": attempt_id, "case_id": case_id, "round_id": baseline["round_id"], "intended_action": intended_action})
 
 
-def finish(workspace, design, context, attempt_id, status, actual, evidence_paths, assertions, cause, bug_ids, cleanup, evidence_grade=None):
+ATTACK_FIELDS = ("path_type", "surf_id", "method", "oracle_source", "oracle_channel",
+                 "discovery_mode", "probes")
+SURF_ID_RE = re.compile(r"^SURF-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+
+
+def _attack_fields(attack, evidence_paths):
+    """校验并归一每次执行的攻击面字段（path_type/surf_id/method/oracle_source/…）。
+
+    存在目的：这些字段是 attack_coverage.py 判「攻击面是否真被打过」的唯一输入。
+    此前 finish() 根本不产这些字段，全仓只有消费者没有生产者——守规矩执行的人
+    必然被压「待核实」，而手搓 JSONL 反而能通过。门禁不能惩罚守规矩的人。
+
+    independent 在此处就要能指出独立通道并带上证据：等到门禁阶段再查，
+    声明已经写进台账了，改口成本变高。
+    """
+    if attack is None:
+        return {}
+    if not isinstance(attack, dict):
+        raise ValueError("attack 必须为对象（path_type/surf_id/method/oracle_source/…）")
+    unknown = set(attack) - set(ATTACK_FIELDS)
+    if unknown:
+        raise ValueError(f"attack 含未知字段 {sorted(unknown)}；允许 {list(ATTACK_FIELDS)}")
+    out = {}
+    if "path_type" in attack:
+        value = str(attack["path_type"]).strip().lower()
+        if value not in ATTACK_PATH_TYPES:
+            raise ValueError(f"attack.path_type 必须为 {list(ATTACK_PATH_TYPES)} 之一")
+        out["path_type"] = value
+    if "surf_id" in attack:
+        value = str(attack["surf_id"]).strip()
+        if not SURF_ID_RE.match(value):
+            raise ValueError("attack.surf_id 必须形如 SURF-XXX（关联对抗 plan 的风险面）")
+        out["surf_id"] = value
+    if "method" in attack:
+        value = str(attack["method"]).strip()
+        if value not in METHOD_IDS:
+            raise ValueError(f"attack.method 必须为方法库稳定 ID {sorted(METHOD_IDS)} 之一")
+        out["method"] = value
+    if "discovery_mode" in attack:
+        value = str(attack["discovery_mode"]).strip().lower()
+        if value not in DISCOVERY_MODES:
+            raise ValueError(f"attack.discovery_mode 必须为 {list(DISCOVERY_MODES)} 之一")
+        out["discovery_mode"] = value
+    if "oracle_source" in attack:
+        value = str(attack["oracle_source"]).strip().lower()
+        if value not in ORACLE_SOURCES:
+            raise ValueError(f"attack.oracle_source 必须为 {list(ORACLE_SOURCES)} 之一")
+        out["oracle_source"] = value
+    if "oracle_channel" in attack:
+        value = attack["oracle_channel"]
+        _text(value, "attack.oracle_channel")
+        out["oracle_channel"] = value.strip()
+    if out.get("oracle_source") == "independent":
+        if not out.get("oracle_channel"):
+            raise ValueError("oracle_source=independent 必须同时给出 oracle_channel（哪个独立通道）")
+        if not evidence_paths:
+            raise ValueError("oracle_source=independent 必须有证据文件，否则独立判据无法复核")
+    if "probes" in attack:
+        probes = attack["probes"]
+        if type(probes) is not int or probes < 0:
+            raise ValueError("attack.probes 必须为非负整数（本用例实际发出的探针数）")
+        out["probes"] = probes
+    return out
+
+
+def finish(workspace, design, context, attempt_id, status, actual, evidence_paths, assertions, cause, bug_ids, cleanup, evidence_grade=None, attack=None):
     _text(attempt_id, "attempt_id")
     _text(actual, "actual")
     _text(cleanup, "cleanup")
@@ -489,6 +577,7 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
         if not path.is_absolute() or not path.is_file():
             raise ValueError("evidence must be existing absolute local file")
         evidence.append({"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    attack_fields = _attack_fields(attack, evidence_paths)
     with _lock(workspace):
         baseline, cases, _, same = _compatible(workspace, design, context)
         if not same:
@@ -505,6 +594,7 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
         payload = {"attempt_id": attempt_id, "case_id": started["case_id"], "round_id": baseline["round_id"], "status": status, "actual": actual, "evidence": evidence, "assertions": assertions, "cause": cause, "bug_ids": bug_ids, "cleanup": cleanup}
         if evidence_grade is not None:
             payload["evidence_grade"] = evidence_grade
+        payload.update(attack_fields)
         return _append(workspace, events, "FINISH", payload)
 
 

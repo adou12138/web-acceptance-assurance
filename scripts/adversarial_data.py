@@ -14,8 +14,10 @@ API：
 - ORC：id 前缀 ORC-、source ∈ REQ/AC/contract/invariant/req_issue、observation_entry 与
   applicable_condition 非空（判据缺来源即报错，自猜规则不得入账）；
 - ADV：id 前缀 ADV-、surface_ref/oracle_ref 必须指向已存在的 SURF/ORC（未知引用报错）、
-  probe_type ∈ challenge/fault_injection/timing/permission、budget 非空、
+  probe_type ∈ PROBE_TYPES（含 visual_walkthrough/copy_audit/heuristic_review/consistency/
+  regression 等界面与一致性维度，不是只有功能类攻击）、budget 非空、
   status ∈ planned/executed/cancelled（cancelled 必须附 cancel_reason）；
+- ADV 的 method 若提供必须落在方法库稳定 ID 内（见 references/probe-playbook.md B 节）；
 - 全部条目 ID 全局唯一，重复 ID 报错；
 - 指纹缺失/形态非法报错；传入实际文件且 sha256 与登记值不一致报"指纹失配"。
 
@@ -34,11 +36,18 @@ SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 IDENT_RE = r"[A-Za-z0-9][A-Za-z0-9_.:-]*"
 RISKS = {"high", "medium", "low"}
 ORACLE_SOURCES = {"REQ", "AC", "contract", "invariant", "req_issue"}
-PROBE_TYPES = {"challenge", "fault_injection", "timing", "permission"}
+# 探针类型是「打什么维度的失效」，不是只有功能类：界面走查、文案核对、启发式任务评审、
+# 数据一致性对账、影响面回归都是合法探针类型。此前只认功能四类，导致如实登记的 UI 类
+# 发现无处安放，被制度性地挤出记录。
+PROBE_TYPES = {"challenge", "fault_injection", "timing", "permission",
+               "visual_walkthrough", "copy_audit", "heuristic_review",
+               "consistency", "regression"}
 # 方法库与坑点模板的稳定 ID（与 references/probe-playbook.md 同步）
-PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 16)}
+PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 21)}
 METHOD_IDS = {"equivalence", "boundary", "decision_table", "state_transition", "combinatorial",
-              "differential", "metamorphic", "fault_injection", "concurrency", "rollback"}
+              "differential", "metamorphic", "fault_injection", "concurrency", "rollback",
+              "visual_walkthrough", "copy_audit", "heuristic_review", "consistency_check",
+              "regression_impact"}
 # 方法多样性下限：高风险 SURF 达阈后必须至少用 N 种方法，否则"全面"无从谈起
 METHOD_DIVERSITY_MIN_SURFACES = 3
 METHOD_DIVERSITY_MIN_METHODS = 2
@@ -156,7 +165,7 @@ def validate(plan, material_path=None, cases_json_path=None):
         if item["oracle_ref"] not in oracle_ids:
             raise ValueError(f"{name}.oracle_ref: 未知引用 {item['oracle_ref']}")
         if item["probe_type"] not in PROBE_TYPES:
-            raise ValueError(f"{name}.probe_type: 必须为 challenge/fault_injection/timing/permission")
+            raise ValueError(f"{name}.probe_type: 必须为 {sorted(PROBE_TYPES)} 之一")
         _text(item["budget"], name + ".budget")
         if item["status"] not in OBLIGATION_STATUSES:
             raise ValueError(f"{name}.status: 必须为 planned/executed/cancelled")
@@ -169,7 +178,7 @@ def validate(plan, material_path=None, cases_json_path=None):
                 raise ValueError(f"{name}.method: 必须为方法库稳定 ID {sorted(METHOD_IDS)} 之一")
         if "playbook_ref" in item:
             if item["playbook_ref"] not in PLAYBOOK_TEMPLATES:
-                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P15 之一")
+                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P20 之一")
         methods_used.add(item.get("method"))
         templates_used.add(item.get("playbook_ref"))
 

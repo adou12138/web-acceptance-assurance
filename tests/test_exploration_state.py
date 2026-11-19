@@ -40,6 +40,13 @@ class ExplorationStateTests(unittest.TestCase):
         row.update(changes)
         return row
 
+    def cells(self, ident, attrs, status="PASS"):
+        """同一视角的两个页面×状态单元：单条记录不能清空整个视角。"""
+        return [self.item(f"{ident}-{i}", attributes=attrs, status=status,
+                          page_url=f"https://example.invalid/app/p{i}", state=f"状态{i}",
+                          observation="实测观察", evidence_paths=[str(self.evidence)])
+                for i in (1, 2)]
+
     def report(self):
         return self.tool.summarize(self.data)
 
@@ -183,8 +190,8 @@ class ExplorationStateTests(unittest.TestCase):
     def test_gate_allows_pass_only_after_candidates_consumed_and_views_recorded(self):
         attributes = {"visual": ["visual"], "usability": ["usability"], "accessibility": ["accessibility"],
                       "functional": ["functional"], "performance": ["performance"]}
-        items = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=attrs)
-                 for name, attrs in attributes.items()]
+        items = [cell for name, attrs in attributes.items()
+                 for cell in self.cells("EXP-" + name, attrs)]
         items.append(self.item("EXP-TRAV-1", status="PASS", observation="已清点页面控件", evidence_paths=[str(self.evidence)],
                                attributes=["functional", "visual", "usability"]))
         self.data["attribute_rulings"] = {
@@ -205,14 +212,15 @@ class ExplorationStateTests(unittest.TestCase):
         self.data["items"] = [
             self.item("EXP-ALL-FAIL", status="FAIL", observation="观察到异常", evidence_paths=[str(self.evidence)], attributes=all_views),
             self.item("EXP-TRAV-1", status="FAIL", observation="控件遍历即异常", evidence_paths=[str(self.evidence)], attributes=["functional"]),
+            self.item("EXP-PASS-2", status="PASS", observation="另一页面实测", evidence_paths=[str(self.evidence)],
+                      page_url="https://example.invalid/app/list", state="列表默认", attributes=all_views),
         ]
         gate = self.report()["gate"]
         self.assertEqual(gate["missing_views"], [])
         self.assertEqual(gate["failed_items"], ["EXP-ALL-FAIL", "EXP-TRAV-1"])
         self.assertNotEqual(gate["verdict_ceiling"], "通过")
         self.assertIn("FAIL", gate["message"])
-        mixed = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=[name])
-                 for name in all_views]
+        mixed = [cell for name in all_views for cell in self.cells("EXP-" + name, [name])]
         mixed.append(self.item("EXP-TRAV-1", status="PASS", observation="已清点控件", evidence_paths=[str(self.evidence)], attributes=["functional"]))
         mixed.append(self.item("EXP-BAD-1", status="FAIL", observation="返回404", evidence_paths=[str(self.evidence)], attributes=["functional"]))
         self.data["items"] = mixed
@@ -238,8 +246,8 @@ class ExplorationStateTests(unittest.TestCase):
         """E3：清单无控件遍历条目（EXP-TRAV-）时结论上限为待核实。"""
         attributes = {"visual": ["visual"], "usability": ["usability"], "accessibility": ["accessibility"],
                       "functional": ["functional"], "performance": ["performance"]}
-        self.data["items"] = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=attrs)
-                              for name, attrs in attributes.items()]
+        self.data["items"] = [cell for name, attrs in attributes.items()
+                              for cell in self.cells("EXP-" + name, attrs)]
         gate = self.report()["gate"]
         self.assertFalse(gate["traversal_recorded"])
         self.assertEqual(gate["traversal_pending"], 0)
@@ -256,8 +264,8 @@ class ExplorationStateTests(unittest.TestCase):
         """E3：遍历条目仍为 NOT_RUN 时计入 traversal_pending 并压低结论上限。"""
         attributes = {"visual": ["visual"], "usability": ["usability"], "accessibility": ["accessibility"],
                       "functional": ["functional"], "performance": ["performance"]}
-        items = [self.item("EXP-" + name, status="PASS", observation="实测观察", evidence_paths=[str(self.evidence)], attributes=attrs)
-                 for name, attrs in attributes.items()]
+        items = [cell for name, attrs in attributes.items()
+                 for cell in self.cells("EXP-" + name, attrs)]
         items.append(self.item("EXP-TRAV-1", attributes=["functional", "visual", "usability"]))
         items.append(self.item("EXP-TRAV-2", status="PASS", observation="已清点控件",
                                evidence_paths=[str(self.evidence)], attributes=["functional", "visual", "usability"]))
@@ -351,8 +359,7 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertEqual(report["views"]["性能"], ["EXP-P"], "兼容字段仍保留全部记录")
 
     def test_executed_view_restores_ceiling_with_skipped_sibling(self):
-        passed = lambda ident, attr: self.item(ident, attributes=[attr], status="PASS",
-                                                observation="已实测", evidence_paths=[str(self.evidence)])
+        passed = lambda ident, attr: self.cells(ident, [attr])
         self.data["attribute_rulings"] = {
             "security": {"state": "not_applicable", "reason": "本次仅校验视图门禁，未涉及权限与会话"},
             "compatibility": {"state": "not_applicable", "reason": "未声明内核/设备范围"},
@@ -361,14 +368,19 @@ class ExplorationStateTests(unittest.TestCase):
         self.data["items"] = [
             self.item("EXP-TRAV-1", attributes=["functional"], status="PASS",
                       observation="已实测", evidence_paths=[str(self.evidence)]),
-            passed("EXP-V", "visual"), passed("EXP-U", "usability"),
-            passed("EXP-A", "accessibility"), passed("EXP-P", "performance"),
-            self.item("EXP-V2", attributes=["visual"], status="SKIPPED", blocked_reason="附带未执行项"),
+            self.item("EXP-TRAV-2", attributes=["functional"], status="PASS",
+                      page_url="https://example.invalid/app/list", state="列表",
+                      observation="已实测", evidence_paths=[str(self.evidence)]),
+          ] + passed("EXP-V", "visual") + passed("EXP-U", "usability") \
+            + passed("EXP-A", "accessibility") + passed("EXP-P", "performance") + [
+            # 用非必选属性承载"未执行兄弟项"：界面样式现已纳入必选属性，
+            # 在必选维度上留 SKIPPED 会直接压上限（那是另一条规则，见 v126 用例）
+            self.item("EXP-V2", attributes=["performance"], status="SKIPPED", blocked_reason="附带未执行项"),
         ]
         gate = self.report()["gate"]
         self.assertEqual(gate["missing_views"], [])
         self.assertEqual(gate["verdict_ceiling"], "通过")
-        self.assertEqual(gate["skipped_views"]["界面样式"], ["EXP-V2"])
+        self.assertEqual(gate["skipped_views"]["性能"], ["EXP-V2"])
 
 
 if __name__ == "__main__":

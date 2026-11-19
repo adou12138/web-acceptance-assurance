@@ -75,10 +75,15 @@ python scripts/phase_gate.py start  <state> --phase adjudicate --session SESS-3
 python scripts/phase_gate.py complete <state> --phase adjudicate --session SESS-3
 python scripts/phase_gate.py checkpoint <state> --phase adjudicate --session SESS-3
 
-# 随时查看与终检
+# 随时查看与终检（风险假设与回归影响面缺一即压上限）
 python scripts/phase_gate.py status <state>
-python scripts/phase_gate.py check-verdict <state>   # 未通过时 rc=1，结论上限"待核实"
+python scripts/phase_gate.py check-verdict <state> \
+    --assumptions <assumptions.json> --regression <regression.json>
 ```
+
+`assumptions.json`：`{"reviewed": true, "items": [{"id": "ASM-01", "assumption": "…", "basis": "…", "falsify_action": "…", "result": "confirmed|refuted|open"}]}`。空假设允许，但必须显式 `reviewed=true`——"没写"与"没有"不能混为一谈；`result=open` 即压上限。
+
+`regression.json`：`{"changed_areas": ["…"], "candidates": [{"id": "RG-01", "basis": "依赖/旅程来源"}]}`，或 `{"changed_areas": [], "candidates": [], "no_impact_reason": "…"}`。有变更面却零候选、候选无依据，均压上限。
 
 ### 2.2 硬规则（全部机械校验，违反即 rc=2）
 
@@ -90,6 +95,7 @@ python scripts/phase_gate.py check-verdict <state>   # 未通过时 rc=1，结�
 - 放行人、放行时间、放行依据三者缺一，`approve` / `resume` 拒绝。
 - 被驳回（`reject`）后须修订再 `submit`，驳回理由进 history，不得覆盖。
 - 存在未批准的修订申请时，`check-verdict` 返回"待核实"。
+- **交接产物必须真实存在**：`submit` 逐条校验 `--artifact` 为已存在的绝对路径；规划阶段交给执行阶段时还必须凑齐**需求评审结论 / 用例集 / 对抗 plan** 三件（文件名分别含 `review`、`cases`、`adversarial`）。状态流转不能代替这三件产物——曾经零产物加三个不存在的路径也能推进到执行阶段。
 
 ### 2.3 防自授、防篡改与防蒙混（自攻发现，均已修）
 
@@ -159,7 +165,19 @@ execution_ledger.verdict_ceiling
   = strictest(台账事实上限, adversarial_ceiling, phase_ceiling)
 ```
 
-`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在未批准修订、存在未确认的路由误配、存在**同会话放行**（`approval.mode = same_session`）、或交接未消费（`awaiting_session_for` 非空）。`execution_ledger init --phase-state <state>` 会把这几项写入 `baseline.gate_precondition`，不传该参数时保持旧行为（结构不变，便于存量批次复跑）。
+`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在未批准修订、存在未确认的路由误配、存在**同会话放行**（`approval.mode = same_session`）、交接未消费（`awaiting_session_for` 非空）、执行阶段收尾未交攻击覆盖结论、风险假设未清算或有开放项、回归影响面未评估。
+
+### 5.1 两套状态枚举的映射（口径不同，不得混用）
+
+| 采集记录 `collection_state` | 执行台账 `status` | 语义 |
+|---|---|---|
+| `collected` | `PASS` / `FAIL`（**裁决阶段**才能定） | 已观察到结果，采集阶段不写判定 |
+| `partial` | 不直接对应，按实际观察记 `PASS`/`FAIL`/`BLOCKED` | 部分完成，缺的部分须补或登记缺口 |
+| `blocked` | `BLOCKED` | 被前置条件阻塞 |
+| `skipped` | `SKIPPED` | 主动跳过并写明理由，不计覆盖 |
+| `not_run` | `NOT_RUN` | 未执行 |
+
+规则：采集阶段只允许左列；右列只能由裁决阶段依据证据落定。两套枚举**不互相推导**——`collected` 不是 `PASS`。`execution_ledger init --phase-state <state>` 会把这几项写入 `baseline.gate_precondition`，不传该参数时保持旧行为（结构不变，便于存量批次复跑）。
 
 ## 6. 常见错误与处置
 
@@ -172,3 +190,6 @@ execution_ledger.verdict_ceiling
 | 路由不符但不说 | 假设（规划强模型）不成立，结论可信度虚高 | `ack-routing` 记录误配理由，并在报告“范围限制”中披露 |
 | 用“页面应该有”填缺失证据 | 盲测里“帮页面把测试做完”的同型错误 | 记 `blocked` / `not_run`，在报告中列缺口 |
 | 阶段完成但台账不传 `--phase-state` | 阶段闸门形同虚设 | 建台账时显式传状态文件，报告引用 `phase_state` 字段 |
+| 交接产物写占位路径（`D:/不存在/review-result.json`） | 规划阶段等于没做，却显示"已放行" | `submit` 会逐条校验文件存在且为绝对路径，缺三件直接拒 |
+| 风险假设只在报告里写"应该没问题" | 假设既不验证也不登记缺口 | 写进 `assumptions.json`，`result=open` 的项会压上限并要求复测或转为风险条目 |
+| 有变更但不列回归候选 | 破坏旧功能无机械要求 | 交 `regression.json`：候选带 `basis`，或写 `no_impact_reason` |
