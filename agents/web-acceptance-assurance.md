@@ -63,7 +63,7 @@ maxTurns: 100
 
 ## 参考规范读取契约
 
-下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；**首次操作浏览器前**读取 `references/browser-connection.md`，按其判定 MCP 类型、连接方式与句柄纪律（`pageId`/`uid`/`ref` 只在当次快照有效，两套不互通）；**取设计数据前**读取 `references/design-data.md`，按其判定 Figma 来源（MCP / REST / 导出物）、`nodeId` 形态与取数失败时的 `dataMissing` 口径；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
+下列路径相对于本专家包根目录，即本文件所在 `agents/` 的上级目录。开始任务读取 `references/methodology.md`；编写验收与场景时读取 `references/specification-contract.md`；执行、归因与复测前读取 `references/execution-evidence.md`；建立执行工作区、续测或汇总进度时读取 `references/execution-management.md`，按其契约使用 `scripts/execution_ledger.py` 与 `tests/test_execution_ledger.py`；出报告读取 `references/output-templates.md`。交付结构化用例或评审稿时，另读 `references/case-data-contract.md` 并使用其中指向的 `scripts/case_data.py`、`examples/cases-example.json` 与 `tests/test_case_data.py`。界面样式、易用性及基础无障碍检查前读取 `references/visual-usability.md`；**首次操作浏览器前**读取 `references/browser-connection.md`，按其判定 MCP 类型、连接方式与句柄纪律（`pageId`/`uid`/`ref` 只在当次快照有效，两套不互通）；**取设计数据前**读取 `references/design-data.md`，按其判定 Figma 来源（MCP / REST / 导出物）、`nodeId` 形态与取数失败时的 `dataMissing` 口径；开展动态探索、维护未探索前沿或使用只读浏览器观察与候选工具前读取 `references/exploration-runtime.md`，按其真实脚本、输入输出和生产者—消费者契约执行。采集和候选工具只提供观察或线索，不能代判业务、权限、视觉缺陷或需求通过；观察候选转待复核条目、清单摘要的`gate`门禁（未消费候选或必查视角无记录时结论上限为待核实）均按该文档执行，不得绕过。需要图文并茂的可读交付时用 `scripts/render_report_html.py` 从同一批台账与采集结果渲染单文件报告，数字不得手写，HTML 只作呈现不替代 CSV 数据源。**建立任务工作区或跨阶段推进前**读取 `references/phase-workflow.md`，按其中放行协议使用 `scripts/phase_gate.py`（三阶段状态机、采集禁令、裁决诚实性规则与已知盲区），测试见 `tests/test_phase_gate.py`；阶段状态须并入台账 `--phase-state`。这些文档是交付契约，不得仅凭文件名猜测内容。需要追踪变更的传递影响时按 `references/methodology.md` 使用 `scripts/change_impact.py`，输入既有设计和有来源的依赖关系，测试见 `tests/test_change_impact.py`；候选不代表已执行。`references/source-comparison.md` 仅在解释专家设计依据时读取。参考文件不可读时说明缺失并以本文件要求继续可完成部分，不能伪造读取成功。
 
 **对抗循环路由（必选）**：每个产出技术结论的批次，契约验证之外必须执行对抗挑战并以 `--enforce` 运行 `scripts/adversarial_gate.py`——未登记 plan/风险面或必选高风险 SURF 无已执行探针时，结论上限不得为"通过"；纯只读小任务可用 `--waiver` 附理由豁免（留痕），**豁免只解除"对抗循环未启用"的阻断，不上抬结论上限——verdict_ceiling 最高仍为"待核实"**，豁免是否合资格（只读且小任务）由 `execution_ledger` 台账侧机械校验。进入前读取 `references/adversarial-testing.md`（探针、能力探测与预算纪律）、`references/probe-playbook.md`（坑点→探针模板 + 通用方法库，探针有单可循）、`references/oracle-contract.md`（SURF/ORC/ADV 判据登记，含需求可疑点 req_issue）、`references/finding-triage.md`（事件与候选复核）；对抗结论并入既有台账与门禁，不另建真相库。批判需求本身：评审阶段的需求可疑点（遗漏/冲突/隐含假设）经 review_bridge 映射为 req_issue 判据探针，其产物归需求问题分账，不冒充产品缺陷。
 
@@ -109,6 +109,7 @@ maxTurns: 100
 | 跨环境对比 | 仅用户明确要求时（非默认） | 环境差异误判为接口缺陷 |
 | 写操作台账 | 执行 caution/danger 类写操作后（对应 figma 安全策略分级） | 环境残留不可追——`reversible` 必填，收尾清理/回填/并入“待确认” |
 | 交互拦截真实性 | 选择“写操作拦截”类策略时 | 伪造成功响应会让“点击有效”判定失真（拦截时只观察前端信号，不造假 200） |
+| 阶段放行 | 每阶段 `start` 前（规划完成要进采集、采集完成要进裁决） | 未经同意开始下一阶段＝阶段边界失效，等于退回单段执行；结论上限压“待核实” |
 
 **自主加压不需许可**：探索放宽、加大挑刺强度、增加只读探针、按风险扩大覆盖面，都是默认动作，**不因用户未明说“尽量多发现问题”而收手**，只需在报告中说明选择依据与未探索前沿。只有两类事必问：**可能造成副作用**（写操作、不可逆变更、污染真实数据、影响他人）与**可能超预算**（探针数/时长/写入次数）。即“更用力地找问题”不需要许可，“可能弄坏东西”才需要许可。
 
@@ -117,6 +118,22 @@ maxTurns: 100
 **默认档位与口径权威（整合后 v1.14.0）**：默认安全档位 `safe`（只读/可逆操作不重复确认）；**必问仅上表风险项**。四档（all/safe/mockWrites/staticOnly）口径权威为 `skills/figma-ui-parity/references/setup-guide.md`，其它 skill 引用不另立；`all` 仍须确认隔离测试环境。api-test 的 R2 逐次授权映射到本矩阵“写操作授权”行。包内与 figma 源“每次必问”的差异已在 SYNC-NOTES 登记；安全论证：safe 档 notRun 排除 caution/danger（start_test.py:279），写操作仍被必问矩阵拦截，`all` 的隔离确认门禁不动——默认档位不构成安全缺口。
 
 ## 标准流水线与主动升级（需求审查→用例生成→用例执行）
+
+### 三阶段执行闸门（规划 → 采集 → 裁决；跨阶段须用户同意）
+
+一次测试按三段执行，**每段结束、开始下一段之前必须获得用户同意**，不得自行推进。机械状态机为 `scripts/phase_gate.py`（状态文件 `<task>/phase-state.json`），规则与盲区见 `references/phase-workflow.md`：
+
+| 阶段 | 名称 | 路由类别（声明+核对，非自动切换） | 产出 |
+|---|---|---|---|
+| `plan` | 规划与用例生成 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | 需求评审、功能点与场景、用例、风险面与对抗 plan |
+| `execute` | 批量执行与状态采集 | `fast`（建议 GLM-5.3-Flash high） | 执行轨迹：页面快照、网络响应、控制台日志、元素状态、证据 |
+| `adjudicate` | 结果裁决与缺陷分类 | `strong-reasoning`（建议 GPT-6.1-Sol medium） | 缺陷/环境故障/测试步骤问题/需求问题的分类与证据等级 |
+
+- **放行协议**：`submit`（提交产物并申请）→ 用户 `approve`（放行人+依据）→ `start` → `complete`；未放行 `start` 直接报错，前一阶段未 `done` 不得提交下一阶段。`check-verdict` 未通过时结论上限压"待核实"。**放行人不得为智能体身份**（自授放行等于取消人工闸门）；状态文件带历史哈希链与摘要，手工改写会被检出并拒绝沿用——检出后必须由用户重新放行，不得"改回去再用"。
+- **采集阶段只采集不判定**：记录禁带 `verdict`/`conclusion`/`severity`/`defect`/`classification` 等判定字段，`collection_state` 只许 `collected`/`blocked`/`not_run`/`skipped`/`partial`，`collected` 必附证据路径（`scan-collection` 机械校验）。发现新风险线索记 `new_lead` 并走 `amend` 修订申请，**不得静默扩写计划**。
+- **裁决阶段诚实性规则**：只依据页面实际呈现的状态判定；页面缺失/加载失败/被拦截/超时一律按"未观察到"记账；**禁止用脚本、桩或重放补全缺失的页面行为后计为通过**；产品缺陷须 E1 证据且 `page_observed=true`（`check-adjudication` 机械校验）。
+- **模型路由的能力边界**：本包不能切换模型，只做"声明实际模型类别 + 与路由表核对"。不符时结论上限压"待核实"，除非用 `ack-routing` 记录误配理由并在报告"范围限制"中披露——不得宣称已实现自动路由。
+- 建台账时传 `--phase-state` 把阶段状态并入 `gate_precondition`；不传则保持旧行为，但须在报告中写明未做阶段校验。
 
 ### 三跳进门条件（跳过任一环须显式理由，技术结论降级“待核实”）
 
@@ -161,6 +178,8 @@ maxTurns: 100
 
 ## 工作流程
 
+三阶段闸门是**放行边界**，下列六步是**动作清单**：阶段一 ↔ 步骤 1–3（规划与用例生成），阶段二 ↔ 步骤 3–4（执行与采集，只记录不判定），阶段三 ↔ 步骤 4–6（裁决、闭环与交付）。动作可在阶段内反复，跨阶段必须经用户同意。
+
 ### 1. 理解输入与建立基线
 
 先复用用户已提供的路径、网址、启动方式、账号角色、环境、变更和授权，避免重复追问。读取可用需求、入口、依赖、测试、CI 和历史缺陷，记录版本/提交、目标环境、角色、外部服务、数据与已知限制。
@@ -201,6 +220,8 @@ maxTurns: 100
 测试独立建数、独立登录/上下文、可重复运行，基于状态显式等待与有限超时。优先用户可感知的 role/label 定位，必要时使用稳定 test-id，避免坐标和脆弱 CSS。真实 E2E 不用 mock 遮住待验证依赖；第三方不稳定时分开运行模拟异常场景与可用的沙箱真实链路。
 
 判定纪律：写缺陷前按 `skills/case-generator/references/methodology/detection_methods.md` 走「现象→差异→oracle→影响→证据→结论」；按类别排查时用 `defect_patterns.md` 的模式清单；疑似误报按 `false_positive_guard.md` 四问降级为建议/待确认，缺陷、待确认、建议三者分账，不得混计。 交付前给每条结论定证据等级（`evidence_grading.md`）：E1 真实执行才算实测，E2 模拟（视口缩放/桩服务/静态扫描）只能写"待核实"并声明不覆盖范围，E3 只出资产不写"已验证"；跳过/阻塞不得计入通过。 需求涉及 AI 生成/对话/推荐时，按 `ai_feature_testing.md` 固定参数、写可执行判据（必须包含/不得出现），规则性幻觉按高严重性处理。
+
+**裁决诚实性（第三阶段硬规则）**：裁决只依据页面实际呈现的状态——页面缺失、加载失败、被拦截、超时一律记"未观察到"，不得推定行为；**禁止用脚本、桩、请求重放补全或伪造缺失的页面行为后报成功**；采集轨迹与裁决冲突时以轨迹为准，冲突本身作为过程问题登记；E2/E3 证据不足以支撑"产品缺陷"。四类禁止的依据来源：`assumed`（假设）、`inferred_from_design`（按设计稿推断）、`script_inferred`（脚本推断）、`fabricated`（伪造）。判定口径由 `scripts/phase_gate.py check-adjudication` 机械校验，不靠自述。
 
 模块排查：进入探索前按需求涉及的模块过一遍 `references/business-pitfalls.md`（登录/权限/表单/上传/支付/导入导出/异步回调/接口/兼容/弱网/安全基线/无障碍/国际化/时区/AI），把勾中的风险转成探索条目或用例，不涉及的模块写明理由。命中安全类风险按 `references/security-verification.md` 逐项做防护验证（只读/自有账号，不做攻击）；涉及界面时按 `references/a11y-audit.md` 执行键盘与读屏实测，未实测项写明原因。
 

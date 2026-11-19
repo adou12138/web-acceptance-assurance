@@ -278,8 +278,37 @@ def _ensure_gitignore(workspace):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _phase_precondition(phase_state):
+    """三阶段闸门进门条件：未走完放行流程时压结论上限。
+
+    phase_state 为 phase_gate.py 状态文件内容；不传时返回空字典，
+    baseline 结构保持旧样（向后兼容，不留空字段）。
+    只认机械事实：三阶段均 done、无未批准修订、无未确认路由误配。
+    """
+    if phase_state is None:
+        return {}
+    phases = phase_state.get("phases") or {}
+    reasons = []
+    for phase in ("plan", "execute", "adjudicate"):
+        status = (phases.get(phase) or {}).get("status")
+        if status != "done":
+            reasons.append(f"阶段 {phase} 状态为 {status}，未走完提交-放行-开始-完成流程")
+    for amendment in phase_state.get("amendments") or []:
+        if amendment.get("status") == "awaiting_approval":
+            reasons.append(f"阶段修订 {amendment.get('id')} 未获批准：{amendment.get('note')}")
+    for phase, entry in phases.items():
+        routing = (entry or {}).get("routing") or {}
+        declared = routing.get("declared_class")
+        expected = routing.get("expected_class")
+        if declared and expected and declared != expected and not routing.get("ack"):
+            reasons.append(f"阶段 {phase} 模型路由误配未确认（声明 {declared} / 要求 {expected}）")
+    return {"phase_state": "incomplete" if reasons else "complete",
+            "phase_ceiling": "待核实" if reasons else None,
+            "phase_reasons": reasons}
+
+
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
-               adversarial_gate=None, adversarial_waiver=None):
+               adversarial_gate=None, adversarial_waiver=None, phase_state=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
@@ -289,6 +318,7 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
     read_only = context.get("dependency_mode") in {"replay", "mock"}
     gate_precondition.update(_adversarial_precondition(
         adversarial_gate, adversarial_waiver, read_only=read_only, case_count=len(cases)))
+    gate_precondition.update(_phase_precondition(phase_state))
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
@@ -456,11 +486,15 @@ def _verdict_ceiling(baseline, counts, executed):
     """
     gate = (baseline.get("gate_precondition") or {})
     adversarial = gate.get("adversarial_ceiling", "待核实")
+    phase_ceiling = gate.get("phase_ceiling")
     if counts.get("FAIL"):
         return "不通过"
     fact = "待核实" if (counts.get("BLOCKED") or counts.get("NOT_RUN")
                           or counts.get("SKIPPED") or executed == 0) else "通过"
-    return _strictest(fact, adversarial)
+    ceiling = _strictest(fact, adversarial)
+    if phase_ceiling:
+        ceiling = _strictest(ceiling, phase_ceiling)
+    return ceiling
 
 
 def summarize(workspace, design, context, bugs=None):
@@ -548,6 +582,8 @@ def main():
             part.add_argument("--gate-report", help="设计门禁报告；fail 时拒绝建台账")
             part.add_argument("--adversarial-gate", help="adversarial_gate.py 结论输出；未提供且未豁免时拒绝建台账")
             part.add_argument("--adversarial-waiver", help="对抗循环豁免理由（纯只读小任务可用，留痕）")
+            part.add_argument("--phase-state",
+                              help="phase_gate.py 状态文件；阶段未走完放行流程时结论上限压待核实")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -565,7 +601,8 @@ def main():
                                 _load(args.batches) if args.batches else None,
                                 _load(args.gate_report) if args.gate_report else None,
                                 _load(args.adversarial_gate) if args.adversarial_gate else None,
-                                args.adversarial_waiver)
+                                args.adversarial_waiver,
+                                _load(args.phase_state) if getattr(args, "phase_state", None) else None)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

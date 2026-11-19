@@ -558,3 +558,23 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 版本 1.37.0（v1.36.0→1.37.0）；备份 backup/web-acceptance-assurance-1.36.0（本轮改动先行后建，备份由拷贝当前树逆向应用全部编辑重建，重建后 328 passed + 1 skipped[环境路径跳过] 验证与 1.36.0 行为一致：备份 gate waiver 仍返回"通过"）；339/339 测试绿。
 
 **仍未实现（如实登记）**：源码变异执行器与浏览器拦截适配器（接口约定，能力待探测）；A/B 真实对照数据（工具与协议已就绪，待真实测试批次执行）。
+
+## 三阶段执行闸门（v1.38.0，2026-11-19）
+
+按用户要求把执行分为三阶段并加入人工放行闸门（规划与用例生成 → 批量执行与状态采集 → 结果裁决与缺陷分类）：
+
+| 落地项 | 内容 |
+|---|---|
+| 阶段状态机 | 新增 `scripts/phase_gate.py`：`init/submit/approve/reject/start/complete/amend/approve-amendment/ack-routing/status/check-verdict/scan-collection/check-adjudication`。状态 `pending→awaiting_approval→approved→in_progress→done`（+`rejected`）；未放行 `start` 报错 rc=2；前一阶段未 done 不得提交下一阶段 |
+| 采集只采集 | `scan-collection`：禁 `verdict`/`judgement`/`conclusion`/`severity`/`defect`/`classification`/`root_cause`/`pass_fail` 等判定字段；`collection_state` 只许 collected/blocked/not_run/skipped/partial；collected 必附证据路径。**已知盲区**：自然语言观察文本里的判定拦不住，已在文档如实标注 |
+| 裁决诚实性 | `check-adjudication`：必须有 evidence_refs；basis 须含 observed_*（ui/dom/network/console/screenshot/api_response）；禁 assumed/inferred_from_design/script_inferred/fabricated/script_completed/expected_only；`page_behavior_completed_by_script` 直接拒绝；产品缺陷须 E1 且 page_observed=true；E2/E3 只能记待核实 |
+| 台账接线 | `execution_ledger.initialize(..., phase_state=None)` + CLI `--phase-state`：三阶段未全 done / 存在未批准修订 / 存在未确认路由误配 → `gate_precondition.phase_ceiling="待核实"`，由 `_verdict_ceiling` 按最严合并；不传该参数时 baseline 结构不变（存量批次可复跑） |
+| 模型路由（能力边界） | 本包不能切换模型，只做「声明实际模型类别 + 与路由表核对」：不符时结论上限压待核实，须 `ack-routing` 记录误配理由并在报告披露。**不宣称已实现自动路由** |
+| 交付文档 | 新增 `references/phase-workflow.md`（三阶段定义/放行协议/采集禁令/裁决纪律/结论合并顺序/常见错误），角色定义新增「三阶段执行闸门」章节 + 必问矩阵「阶段放行」行 + 判定纪律「裁决诚实性」段 |
+
+**自攻发现并修复的两条绕过路径**（实现后黑盒验证，修复前均成立）：
+
+1. `approve --by agent` 自授放行 → 智能体身份集合（agent/assistant/bot/system/ai/expert/砺衡/助手/智能体）一律拒绝；
+2. 手改 `phase-state.json` 把三阶段置 done → history 哈希链 + 状态摘要校验，`load` 检出报「阶段状态不可信」，拒绝沿用。诚实边界：检不出「按格式重算整条链」的有意伪造（无签名密钥），已写入文档，不宣称防篡改完备。
+
+版本 1.38.0（v1.37.0→1.38.0）；备份 `backup/web-acceptance-assurance-1.37.0`（git worktree 导出 HEAD 并复验 338 passed + 1 skipped）；377 tests + 198 subtests 全绿（新增 `tests/test_phase_gate.py` 38 例）。
