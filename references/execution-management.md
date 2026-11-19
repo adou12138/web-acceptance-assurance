@@ -39,6 +39,10 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 
 执行 caution/danger 类写操作（创建、修改、删除、状态变更、同步、支付、解绑、下线等）时逐条登记台账，每条必含：动作、目标对象、**可逆性 `reversible`（必填）**、前置证据与后置证据。收尾时三选一：① 按台账执行回滚/清理；② 回填已清理结果；③ 并入报告「待确认」并点名未清理项与不可恢复条数。**不登记等于环境残留不可追**；台账固定落工作区独立文件，不与执行台账混写。
 
+## 对抗探针与扰动台账
+
+对抗批次的扰动、注入与探针结果统一回到本台账体系登记：能力探测、预算停机与扰动启停纪律见 `adversarial-testing.md`；扰动残留按本文件「写操作台账」收尾，探针事件与候选复核另见 `finding-triage.md`。对抗不建立第二台账，不绕过单写者锁。
+
 ## 结果与证据
 
 同一轮每TC保留所有attempt。已证实product失败优先保持FAIL，即使随后成功；未归因FAIL/PASS混合为BLOCKED并标flaky，保留首败。前置BLOCKED后条件恢复再PASS，不自动当flaky。新版本修复复测使用新轮次，旧失败仍留历史，缺陷关闭仍需要原场景和必需回归证据。
@@ -75,7 +79,8 @@ summary输出的是整轮当前记录，不具备as_of过滤；正式验收或�
 
 ```bash
 python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --bugs <bugs.json>
-python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --batches <batches.json> --gate-report <gate-<unit>.json>
+python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --batches <batches.json> --gate-report <gate-<unit>.json> --adversarial-gate <adv-gate.json>
+python scripts/execution_ledger.py init <新round目录> <cases.json> <context.json> ROUND-001 --adversarial-waiver "纯只读小任务，无写操作"
 python scripts/execution_ledger.py begin <round目录> <cases.json> <context.json> ATT-001 TC-NAME-001 "打开本次隔离项目并保存名称"
 python scripts/execution_ledger.py finish <round目录> <cases.json> <context.json> <result.json>
 python scripts/execution_ledger.py summary <round目录> <cases.json> <context.json> --bugs <bugs.json>
@@ -89,4 +94,8 @@ python -m unittest discover -s tests -v
 
 即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`；不传这两个参数时保持旧行为，但报告须写明未做跳间校验。
 
+**对抗门禁进门条件（必选）**：台账同时记录对抗结论并**机械压制结论上限**——`init` 未提供 `--adversarial-gate` 且未豁免时，`baseline.gate_precondition.adversarial_state="missing"` 并把 `adversarial_ceiling` 置“待核实”；提供 `--adversarial-waiver <理由>` 则记 `waived` 并留痕（仅限纯只读小任务）。传入 `--adversarial-gate`（`scripts/adversarial_gate.py --enforce` 的输出）时校验其 `verdict_ceiling`/`adversarial_enabled`/`reasons` 字段；若显示对抗未启用且无豁免，同样压“待核实”。`summary` 输出的 `verdict_ceiling` 由此机械派生（存在 FAIL → 不通过；存在 BLOCKED/NOT_RUN/SKIPPED 或未执行 → 待核实；再与对抗上限取更严者），不由人工宣称。
+
 result.json必填字段：attempt_id、status、actual、evidence_paths（绝对本地路径数组）、assertions（check/actual/matched数组，与规格check一一对应）、cause、bug_ids、cleanup。PASS要求所有matched为true且cause=none；FAIL至少一个false；BLOCKED/SKIPPED可无断言与证据，但原因不得缺失。退出码0仅表示记录/摘要命令完成，输入/状态错误为2，**不是质量门禁退出码**。
+
+可选字段 `evidence_grade`（E1/E2/E3）登记该条结果的证据等级：未提供时按旧格式兼容处理（不校验）；status=PASS 且 evidence_grade 为 E2/E3 时台账拒收该条（ValueError："PASS 须 E1 证据，E2/E3 请记 BLOCKED 或降级"），须改记 BLOCKED 或补齐 E1 证据后重写；E2/E3 配合非 PASS 状态正常入账，等级随 FINISH 事件留痕。

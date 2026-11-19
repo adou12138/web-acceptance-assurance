@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "challenge-results",
+  "description": "断言挑战单条结果（JSONL 每行一条，对应 references/assertion-challenges.md）。kind=source_mutation 时 injected 恒为 true（变异即人工注入），restore_verified 表示隔离副本校验和还原完成；kind=black_box_injection 时 injected 区分注入故障与自然故障，restore_verified 表示撤销注入后复测恢复健康对照。outcome=killed 仅指目标断言捕获语义变化；tool_error 为未裁定（U），不计完成也不计存活。执行器与拦截适配器为接口约定，能力待探测，未实测。汇总口径见 scripts/challenge_summary.py。",
+  "type": "object",
+  "required": ["challenge_id", "kind", "target_assertion", "baseline_green", "outcome", "evidence_paths", "restore_verified", "injected"],
+  "additionalProperties": false,
+  "properties": {
+    "challenge_id": { "type": "string", "pattern": "^CHL-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+    "kind": { "enum": ["source_mutation", "black_box_injection"] },
+    "target_assertion": { "type": "string", "minLength": 1 },
+    "baseline_green": { "type": "boolean" },
+    "outcome": { "enum": ["killed", "survived", "invalid_build", "equivalent", "tool_error"] },
+    "evidence_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "restore_verified": { "type": "boolean" },
+    "injected": { "type": "boolean" },
+    "timestamp": { "type": "string" }
+  }
+}

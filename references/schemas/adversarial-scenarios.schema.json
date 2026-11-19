@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "对抗场景（SCN-ADV）伴随文件",
+  "description": "纵向对抗场景：跨模块组合、操作序列反常、状态机规避链。与横切的探针模板（probe-playbook A 节）和方法库（B 节）互补——场景回答“怎么串起来打”，模板回答“单点打什么”。文件形态 references/schemas/adversarial-scenarios.schema.json，纪律见 references/probe-playbook.md C 节。",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "name", "kind", "sequence", "surfaces"],
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^SCN-ADV-\\d{2,}$",
+        "description": "对抗场景稳定 ID"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "kind": {
+        "enum": ["cross_module", "operation_sequence", "state_bypass"],
+        "description": "cross_module=跨模块组合；operation_sequence=操作序列反常；state_bypass=状态机规避链"
+      },
+      "surfaces": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string", "pattern": "^SURF-" },
+        "description": "关联的风险面条目；cross_module 至少两条"
+      },
+      "sequence": {
+        "type": "array",
+        "minItems": 2,
+        "items": { "type": "string", "minLength": 1 },
+        "description": "动作序列（逐步操作），不得只写单点输入"
+      },
+      "failure_hypothesis": {
+        "type": "string",
+        "description": "怀疑这条序列会在哪里组合失效"
+      },
+      "expected_basis": {
+        "type": "string",
+        "description": "预期依据来源（REQ/AC/contract/invariant/req_issue 或明确不变量）；空则只能出观察"
+      },
+      "obligation_refs": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^ADV-" },
+        "description": "承载该场景的探针义务"
+      },
+      "not_applicable_reason": {
+        "type": "string",
+        "description": "不适用时写明理由（整类不适用须有依据，不能静默缺省）"
+      }
+    }
+  }
+}

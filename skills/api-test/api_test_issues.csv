@@ -1,0 +1,31 @@
+﻿编号,类型,严重程度,状态,维度,问题描述,请求Body,预期结果,实际结果,置信度,HTTP状态码,请求ID,TraceID,证据路径,归因,复测状态
+C01,缺陷,中,待修复,,[C01]主账号创建 响应不是合法JSON,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986664"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""示例主页"", ""page_type"": 0, ""publish"": false, ""html_content"": ""<html><head><title>示例主页</title></head><body>""}",合法JSON响应,"
+<!DOCTYPE html >
+<html >
+<head><title>
+	问卷星_不止问卷调查/在线考试
+</title><meta name=""keywords"" content=""问卷星,问卷调查,调查问卷,在线考试,",0.8,200,,,api_test_out\evidence\run_20261118_152424\C01.json,DEFECT,待复测
+C06,缺陷,中,待修复,,[C06]缺必填html_content 响应不是合法JSON,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986664"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""缺内容主页"", ""page_type"": 0, ""publish"": false}",合法JSON响应,"
+<!DOCTYPE html >
+<html >
+<head><title>
+	问卷星_不止问卷调查/在线考试
+</title><meta name=""keywords"" content=""问卷星,问卷调查,调查问卷,在线考试,",0.8,200,,,api_test_out\evidence\run_20261118_152424\C06.json,DEFECT,待复测
+C08,缺陷,中,待修复,,[C08]title超长(120>100) 响应不是合法JSON,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986665"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活"", ""page_type"": 0, ""publish"": false, ""html_content"": ""<html><head><title>活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活活</title></head><body>""}",合法JSON响应,"
+<!DOCTYPE html >
+<html >
+<head><title>
+	问卷星_不止问卷调查/在线考试
+</title><meta name=""keywords"" content=""问卷星,问卷调查,调查问卷,在线考试,",0.8,200,,,api_test_out\evidence\run_20261118_152424\C08.json,DEFECT,待复测
+B01,缺陷,中,待修复,,[B01]枚举越界(page_type=99) 返回未知result值: None,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986665"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""枚举越界"", ""page_type"": 99, ""publish"": false, ""html_content"": ""<html><head><title>枚举越界</title></head><body>""}",result 为 true/false,result=None,0.8,200,,,api_test_out\evidence\run_20261118_152424\B01.json,DEFECT,待复测
+B02,缺陷,中,待修复,,[B02]类型错误(page_type='abc') 返回未知result值: None,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986665"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""类型错误"", ""page_type"": ""abc"", ""publish"": false, ""html_content"": ""<html><head><title>类型错误</title></head><body>""}",result 为 true/false,result=None,0.8,200,,,api_test_out\evidence\run_20261118_152424\B02.json,DEFECT,待复测
+B03,缺陷,中,待修复,,[B03]必填缺失(无 title) 返回未知result值: None,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986665"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""page_type"": 0, ""publish"": false, ""html_content"": ""<html><head><title>缺title</title></head><body>""}",result 为 true/false,result=None,0.8,200,,,api_test_out\evidence\run_20261118_152424\B03.json,DEFECT,待复测
+B04,缺陷,中,待修复,,[B04]空值/空白(title='') 返回未知result值: None,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986665"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": """", ""page_type"": 0, ""publish"": false, ""html_content"": ""<html><head><title></title></head><body>""}",result 为 true/false,result=None,0.8,200,,,api_test_out\evidence\run_20261118_152424\B04.json,DEFECT,待复测
+S01,缺陷,中,待修复,,[S01]html_content注入script(应被安全过滤拦截) 响应不是合法JSON,"{""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""1794986666"", ""sign"": ""***"", ""action"": ""1000107"", ""creater"": ""chenwei"", ""title"": ""注入测试"", ""page_type"": 0, ""publish"": false, ""html_content"": ""<html><head><title>注入测试</title></head><body><script>alert(1)</script>""}",合法JSON响应,"
+<!DOCTYPE html >
+<html >
+<head><title>
+	问卷星_不止问卷调查/在线考试
+</title><meta name=""keywords"" content=""问卷星,问卷调查,调查问卷,在线考试,",0.8,200,,,api_test_out\evidence\run_20261118_152424\S01.json,DEFECT,待复测
+S01,符合预期,信息,符合预期,G2,S01：内容里写网页脚本被安全过滤正确拦截，返回'...不安全脚本或DOM注入代码...'。经业务确认是预期安全行为，非缺陷。,"{""action"": ""1000107"", ""html_content"": ""<html><head><title>注入测试</title></head><body><script>alert(1)</script>..."", ""encode"": ""sha256"", ""appid"": ""3585"", ""sign"": ""***"", ""ts"": ""<请求时unix时间戳>""}",被安全过滤拒绝,result=false（符合预期）,0.8,,,,,,待复测
+A1,符合预期,信息,符合预期,A1,A1：错误 sign 发送创建请求，服务端正确拒绝（签名校验生效）。,"{""action"": ""1000107"", ""sign"": ""***"", ""encode"": ""sha256"", ""appid"": ""3585"", ""ts"": ""<请求时unix时间戳>""}",错误 sign 应被拒绝,result=False,0.8,,,,,,待复测

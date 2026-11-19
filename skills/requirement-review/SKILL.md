@@ -47,6 +47,14 @@ description: 砺衡专家包内 skill：需求评审。收到需求文档/正文
 
 会话没有脚本执行或文件写入能力时，按砺衡既有口径**报告阻塞、保留待执行项**，不以手工编造数据代替脚本输出。
 
+## 对抗交接候选清单
+
+评审完成（review_check 通过）时，除 review-result.json 外可产出**对抗交接候选清单**：把 `coverage_gaps[]` 与已确认的负面断言（禁止/拒绝类规则）整理成候选，由 case-generator 侧 `review_bridge.py --adversarial-out` 映射为 ADV 草稿。两条纪律：负面断言逐条写明**触发后需核对的副作用**与**所需授权边界**，缺一不交接；本清单只是候选草稿，判据（ORC）与风险面（SURF）由下游按专家包 references 树的 `oracle-contract.md` 定稿，评审阶段不冒充已冻结判据。
+
+## 需求可疑点清单（批判需求本身）
+
+批判者立场同样适用于需求文档：评审时**默认假设需求可能错、漏、自相矛盾**，显式产出伴随文件 `requirement-issues.json`（评审根对象 additionalProperties:false，可疑点不入根对象，与负面断言同走外部数组）：每条含 `type`（missing=需求遗漏 / conflict=需求冲突 / hidden_assumption=隐含假设 / business_sanity=业务合理性存疑）、`area`（涉及的功能点/规则位置）、`description`（可疑点内容与怀疑依据），可附 `id`（RI- 前缀）。经 `review_bridge.py --requirements-input` 映射为 `origin=requirement_issues` 的探针草稿，判据来源为 `req_issue`——其探针产物**只能归需求问题分账或待业务确认**，不得直接判产品缺陷（纪律见专家包 references 树的 `oracle-contract.md`）。评审阶段只登记可疑点与怀疑依据，不冒充已验证的需求缺陷。
+
 ## 命令
 
 ```bash

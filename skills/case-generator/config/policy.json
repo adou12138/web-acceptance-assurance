@@ -20,6 +20,7 @@
     }
   },
   "thresholds": {
+    "tiers_note": "比例门禁三档：guidance（target_ratio/recommended_ratio，仅生成引导，不进判定）→ warn_only（batch_warn_ratio 批内浓度提示；小样本下比率越界也降为本档）→ gate（交付占比越界与小样本绝对规则，BLOCK）。两种失效方向都不得以删减必选覆盖义务来满足比例：下限方向（低于下限）须补充真实冒烟/高风险覆盖，不得灌水凑数；上限方向（高于上限）宁可 BLOCK 并披露，不得删减高风险用例或稀释优先级。",
     "smoke": {
       "target_ratio": {
         "min": 0.1,
@@ -36,13 +37,14 @@
         "min": 0.05,
         "max": 0.2,
         "role": "gate",
-        "note": "导出与全量汇总的判定线，越界即门禁不通过；用例数低于 small_sample.case_count_below 时降为告警。"
+        "note": "导出与全量汇总的判定线，越界即门禁不通过；用例数低于 small_sample.case_count_below 时降为告警。方向处置：低于 min 须补真实冒烟覆盖，高于 max 时 BLOCK 并披露、复核冒烟标注，两方向均不得删减必选覆盖义务。"
       }
     },
     "p0": {
       "delivery_max_ratio": {
         "max": 0.2,
-        "role": "gate"
+        "role": "gate",
+        "note": "上限方向：高风险义务不足时宁可 BLOCK 并披露，不得删减高风险用例或稀释优先级来满足比例。"
       },
       "recommended_ratio": {
         "min": 0.1,

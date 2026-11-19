@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "adversarial-events",
+  "description": "对抗事件台账的单条事件对象（JSONL 每行一个事件）。type=probe/fault_injection/timing/permission；probe_ref 指向 ADV- 义务；injected 必填，区分自然故障与人工注入。机器校验随 scripts/adversarial_gate.py 的输入检查执行。",
+  "type": "object",
+  "required": ["event_id", "type", "probe_ref", "observation", "evidence_paths", "injected"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "pattern": "^EVT-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+    "type": { "enum": ["probe", "fault_injection", "timing", "permission"] },
+    "probe_ref": { "type": "string", "pattern": "^ADV-" },
+    "observation": { "type": "string", "minLength": 1 },
+    "evidence_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "injected": { "type": "boolean" },
+    "timestamp": { "type": "string" },
+    "finding_id": { "type": "string", "pattern": "^FIND-" }
+  }
+}

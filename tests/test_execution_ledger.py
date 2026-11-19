@@ -236,7 +236,11 @@ class ExecutionLedgerTests(unittest.TestCase):
                          {"batches_closed": True, "batches_case_count": len(ids),
                           "gate_report_status": "warning", "gate_report_case_count": len(ids),
                           "binding_verdict": "待核实", "binding_missing": ["binding（缺内容绑定声明，旧报告兼容模式）"],
-                          "binding_compat": True})
+                          "binding_compat": True,
+                          # 未提供对抗门禁且未豁免 → 记 missing 并把上限压到待核实
+                          "adversarial_state": "missing", "adversarial_ceiling": "待核实",
+                          "adversarial_reasons": ["未提供对抗门禁结论：对抗循环为产出技术结论批次的必选项；"
+                                                  "请以 --enforce 运行 scripts/adversarial_gate.py 并传入 --adversarial-gate"]})
 
     def test_cli_init_enforces_gate_precondition(self):
         design_file = self.folder / "cases-gate.json"

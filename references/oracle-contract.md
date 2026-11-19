@@ -1,0 +1,42 @@
+# 风险面与判据登记（adversarial-plan 契约）
+
+定位：对抗循环启动前，把"风险面—判据—对抗义务"登记为一份伴随契约文件 `adversarial-plan.json`（下称 plan）。plan 是对抗执行的唯一判据事实源：探针只能从 ADV 义务出发，事件（EVT）只引用 ADV，复核只引用事件产生的候选。字段形态见 `schemas/adversarial-plan.schema.json`，机器校验用 `scripts/adversarial_data.py`（`load` / `validate` / `fingerprint` 三个入口，标准库实现）。
+
+## 三类条目
+
+### SURF（风险面条目）
+
+每个高风险交互或未证实假设登记一条风险面，字段：入口（entry）、角色（role）、状态（state）、数据（data）、依赖（dependencies）与**失效假设**（failure_hypothesis，写清"怀疑哪里会怎么坏"），并给风险等级（high/medium/low）。失效假设没有依据时不编造根因，写"假设待核验"并说明怀疑点。surfaces 不允许为空——没有风险面就不启用对抗循环，而不是空跑。
+
+### ORC（判据条目）
+
+每条判定依据登记一条：来源 `source` 只允许 REQ / AC / contract / invariant / req_issue 五类枚举（需求原文、验收标准、接口契约、明确业务不变量、需求可疑点），观测入口（observation_entry，写明从哪里观测到什么）与适用条件（applicable_condition）。模型自猜的规则不得登记为 ORC——先按 `adversarial-testing.md` 记"待核验"，确认后再入账。
+
+### req_issue（需求可疑点判据）与需求批判
+
+批判者不只批判实现，也批判需求本身。评审阶段产出的**需求可疑点**（遗漏 / 冲突 / 隐含假设 / 业务合理性存疑，见 `skills/requirement-review/SKILL.md` 的伴随文件约定）登记为 `source=req_issue` 的 ORC，驱动"挑战需求"类探针：验证产品在需求未定义、自相矛盾或违背业务常识之处的行为是否可辩护。纪律：
+
+- req_issue 探针的产物**只能是"需求问题候选"或"待业务确认"事项**，不得直接判产品缺陷——实现按一条错误需求正确执行时，错的是需求不是实现；
+- req_issue 候选 accepted 后归入**需求问题清单**（关联 REQ-，走需求问题分账），不建产品 BUG-；若实现同时违背了其它已确认规则（REQ/AC/contract/invariant 判据），另行走正常产品候选流程，两账不混；
+- 需求可疑点未澄清前，相关功能点的"通过"结论保持"待业务确认"标注，不以需求原文单方判定。
+
+### ADV（对抗义务条目）
+
+每个待执行探针登记一条义务：必须关联至少一条 SURF（surface_ref）与一条 ORC（oracle_ref）、探针类型（probe_type：challenge / fault_injection / timing / permission）、预算（budget，探针数/时间盒/副作用配额任一口径）与状态（status：planned / executed / cancelled）。状态只能由主会话按事实更新；executed 必须有对应 EVT 事件佐证（见 `finding-triage.md`）。
+
+## 冻结来源指纹
+
+plan 头部 `source_fingerprints` 必须登记两枚 sha256：
+
+- `material`：本次需求材料（需求文档/正文文件）的内容指纹；
+- `cases_json`：cases JSON 的内容指纹。
+
+指纹在 plan 定稿时计算并冻结；需求或用例资产变更后指纹失配，须重建或显式重新登记 plan，不得沿用旧 plan 挑战新版本。`scripts/adversarial_data.py` 的 `validate` 支持传入实际文件路径复核指纹一致性，失配报错。
+
+## 风险面不可用单条 PASS 抵消
+
+一条 SURF 覆盖缺口不能被另一条 SURF 的通过掩盖：SURF-001 的探针未执行或被阻塞时，不得以"SURF-002 已挑战通过"为由把结论上限恢复为通过。对抗补充门禁（`scripts/adversarial_gate.py`）按条目逐条核算：必选高风险 SURF 无对应已执行探针即压低上限；同理，风险面登记后不得通过删除 SURF 条目来"清零"未覆盖项，取消探针只能把 ADV 置 cancelled 并写明理由，SURF 本身保留在账上。
+
+## 与既有资产的关系
+
+plan 只登记对抗专用的风险面与判据，不复制 cases JSON 的用例内容；判据与既有 REQ/AC/R-xx 用引用关联（ORC.source + source_ref），不另立编号体系。plan 是只读输入：门禁脚本只读不改；更新由主会话按单写者纪律改写 plan 文件本身。

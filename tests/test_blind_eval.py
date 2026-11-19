@@ -164,6 +164,87 @@ class Scoring(unittest.TestCase):
             be.score_run(self.out, self.fixture_path, self.write(self.payload()))
 
 
+class AdversarialExtensions(unittest.TestCase):
+    """对抗增量字段（可选、向后兼容）：reproduction/cost/unresolved_candidates 聚合。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "run"
+        self.fixture_path = FIXTURES / "01-boundary-form.json"
+        be.prepare(self.fixture_path, self.out)
+        for name in ("evidence/21.png", "evidence/dup.png", "evidence/keep.png"):
+            path = self.out / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fake-bytes")
+
+    def payload(self):
+        branches = [{"name": b, "status": "EXECUTED"} for b in fixture()["required_branches"]]
+        return {
+            "executor": {"name": "agent-a", "tooling": "browser", "saw_answers": False},
+            "budget": {"minutes": 30},
+            "branches": branches,
+            "findings": [
+                {"id": "F-1", "title": "长度 21 未拒绝", "observed": "输入 21 字符保存成功，判据未拦截",
+                 "severity": "major", "evidence": ["evidence/21.png"],
+                 "reproduction": {"attempts": 3, "successes": 2}, "cost": {"probes": 4, "minutes": 6}},
+                {"id": "F-2", "title": "重复提交生成两条记录", "observed": "连续点击两次得到两条记录，幂等缺失",
+                 "severity": "blocker", "evidence": ["evidence/dup.png"],
+                 "reproduction": {"attempts": 1, "successes": 1}, "cost": {"probes": 2, "minutes": 4}},
+                {"id": "F-3", "title": "校验失败后输入未保留", "observed": "提示后输入框被清空，需重新输入",
+                 "severity": "normal", "evidence": ["evidence/keep.png"]},
+            ],
+            "obligations_untested": [],
+            "unresolved_candidates": 2,
+            "invalid_actions": 0,
+        }
+
+    def write(self, payload):
+        path = self.out / "findings.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_extensions_aggregated(self):
+        result = be.score_run(self.out, self.fixture_path, self.write(self.payload()))
+        self.assertEqual(result["verdict"], "pass", result["reasons"])
+        self.assertEqual(result["reproduction"], {"attempts": 4, "successes": 3, "rate": 0.75})
+        self.assertEqual(result["cost"], {"probes": 6, "minutes": 10.0})
+        self.assertEqual(result["unresolved_candidates"], 2)
+
+    def test_unresolved_candidates_as_list_counts_entries(self):
+        payload = self.payload()
+        payload["unresolved_candidates"] = ["现象甲待裁定", "现象乙待裁定", "现象丙待裁定"]
+        result = be.score_run(self.out, self.fixture_path, self.write(payload))
+        self.assertEqual(result["unresolved_candidates"], 3)
+        self.assertEqual(result["verdict"], "pass", result["reasons"])
+
+    def test_backward_compatible_missing_fields_are_null(self):
+        result = be.score_run(self.out, self.fixture_path, self.write(self.payload()))
+        payload = self.payload()
+        for f in payload["findings"]:
+            f.pop("reproduction", None)
+            f.pop("cost", None)
+        payload.pop("unresolved_candidates", None)
+        result = be.score_run(self.out, self.fixture_path, self.write(payload))
+        # 缺省输出 null，缺失不当 0，也不影响 verdict
+        self.assertIsNone(result["reproduction"])
+        self.assertIsNone(result["cost"])
+        self.assertIsNone(result["unresolved_candidates"])
+        self.assertEqual(result["verdict"], "pass", result["reasons"])
+
+    def test_malformed_reproduction_rejected(self):
+        payload = self.payload()
+        payload["findings"][0]["reproduction"] = {"attempts": 1, "successes": 3}
+        with self.assertRaises(ValueError):
+            be.score_run(self.out, self.fixture_path, self.write(payload))
+
+    def test_negative_unresolved_candidates_rejected(self):
+        payload = self.payload()
+        payload["unresolved_candidates"] = -1
+        with self.assertRaises(ValueError):
+            be.score_run(self.out, self.fixture_path, self.write(payload))
+
+
 class Compare(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -191,6 +272,107 @@ class Compare(unittest.TestCase):
         self.b.write_text(json.dumps(changed), encoding="utf-8")
         result = be.compare_scores(self.a, self.b)
         self.assertFalse(result["comparable"])
+
+
+class ABCompare(unittest.TestCase):
+    """审核四 A2 回归：A/B 两臂聚合对照——聚合、可比性、派生指标与 NA 纪律。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.arm_a = Path(self.tmp.name) / "armA"
+        self.arm_b = Path(self.tmp.name) / "armB"
+
+    def score(self, arm, run_id, detected=1, detected_map=None, executor="agent-a",
+              protocol="p", fixture="f", answer_total=3, near_misses=(),
+              reproduction=None, cost=None, fp_categories=None):
+        d = {"run_id": run_id,
+             "detection": detected_map or {sev: {"detected": detected if sev == "blocker" else 0,
+                                                 "total": 1, "missed": []}
+                                           for sev in be.SEVERITIES},
+             "detected_total": detected, "answer_total": answer_total,
+             "near_miss_hits": list(near_misses),
+             "false_positive_categories": fp_categories or {},
+             "unmatched_findings": [], "obligations_untested": [], "invalid_actions": 0,
+             "reproduction": reproduction, "cost": cost, "unresolved_candidates": 0,
+             "verdict": "fail", "executor": {"name": executor},
+             "fixture_sha256": fixture, "protocol_sha256": protocol}
+        run_dir = arm / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "score.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        return run_dir / "score.json"
+
+    def test_aggregates_multiple_runs_per_arm(self):
+        self.score(self.arm_a, "run01", detected=1)
+        self.score(self.arm_a, "run02", detected=2, executor="agent-a")
+        self.score(self.arm_b, "run01", detected=2, executor="agent-b")
+        self.score(self.arm_b, "run02", detected=1, executor="agent-b")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertEqual(result["arm_a"]["runs"], 2)
+        self.assertEqual(result["arm_a"]["detected_total"], 3)
+        self.assertEqual(result["delta"]["detected_total"], 0)
+        self.assertTrue(result["comparable"])
+
+    def test_unequal_run_counts_flag_answer_denominator(self):
+        # 两臂 run 数不等 → 答案分母不同 → 检出计数不可直接相减，必须留痕
+        self.score(self.arm_a, "run01", detected=1)
+        self.score(self.arm_b, "run01", detected=1, executor="agent-b")
+        self.score(self.arm_b, "run02", detected=1, executor="agent-b")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertTrue(any("答案分母不同" in w for w in result["warnings"]))
+        self.assertFalse(result["comparable"])
+
+    def test_false_positive_aggregation_and_precision_proxy(self):
+        self.score(self.arm_a, "run01", detected=2, near_misses=["NM-1"])
+        self.score(self.arm_b, "run01", detected=3, executor="agent-b")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertEqual(result["arm_a"]["false_positives"], 1)
+        self.assertEqual(result["delta"]["false_positives"], -1)
+        self.assertEqual(result["derived"]["A"]["precision_proxy"], round(2 / 3, 4))
+        self.assertEqual(result["derived"]["B"]["precision_proxy"], 1.0)
+
+    def test_reproduction_and_cost_derived(self):
+        self.score(self.arm_a, "run01", reproduction={"attempts": 4, "successes": 2},
+                   cost={"probes": 20, "minutes": 30}, executor="agent-a")
+        self.score(self.arm_b, "run01", executor="agent-b",
+                   reproduction={"attempts": 6, "successes": 5},
+                   cost={"probes": 40, "minutes": 45})
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertEqual(result["derived"]["A"]["reproduction_rate"], 0.5)
+        self.assertEqual(result["derived"]["B"]["effective_findings_per_100_probes"],
+                         round(1 / 40 * 100, 2))
+
+    def test_missing_cost_yields_na_not_zero(self):
+        self.score(self.arm_a, "run01")
+        self.score(self.arm_b, "run01", executor="agent-b")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertEqual(result["derived"]["A"]["effective_findings_per_100_probes"], "NA")
+        self.assertEqual(result["derived"]["A"]["reproduction_rate"], "NA")
+
+    def test_same_executor_across_arms_flagged(self):
+        self.score(self.arm_a, "run01", executor="agent-x")
+        self.score(self.arm_b, "run01", executor="agent-x")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertTrue(any("同一执行方" in w for w in result["warnings"]))
+
+    def test_protocol_change_across_arms_incomparable(self):
+        self.score(self.arm_a, "run01", protocol="p1")
+        self.score(self.arm_b, "run01", protocol="p2", executor="agent-b")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertFalse(result["comparable"])
+
+    def test_inconsistent_protocol_within_arm_flagged(self):
+        self.score(self.arm_a, "run01", protocol="p1")
+        self.score(self.arm_a, "run02", protocol="p2")
+        self.score(self.arm_b, "run01", executor="agent-b", protocol="p1")
+        result = be.compare_ab(self.arm_a, self.arm_b)
+        self.assertTrue(any("臂 A 内协议哈希不一致" in w for w in result["warnings"]))
+
+    def test_empty_arm_dir_rejected(self):
+        self.arm_a.mkdir(parents=True)
+        self.arm_b.mkdir(parents=True)
+        with self.assertRaises(ValueError):
+            be.compare_ab(self.arm_a, self.arm_b)
 
 
 if __name__ == "__main__":

@@ -451,3 +451,110 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 同时验证成立（未改）：G02 义务契约校验（畸形义务 5 条 error）、G03 无义务未登记 → COV-LAYERS failed / 登记 legacy → warning、G06 登记缺口 → 压 L2 且 missing_layers 命中、G09 binding 64 位哈希、eval_cases 指标方向（LOWER/HIGHER 分组正确）、pairwise 生成验真闭环（12/12 verified）、kb_freshness 漂移判据与 fail-open、从任意 cwd 运行不依赖 cwd。
 
 回归：新增 `test_v126_hardening.py` 3 例（fail-closed 依赖、normal 披露、全检出无 warnings）；**四套完整口径 770 passed / 305 subtests**（此前"全量 400"漏了 figma 367 例，本轮纳入）。
+
+## 实测经验整合（v1.31.0，2026-11-18）
+
+来源：问卷星 Agent 助手（星仔）全量验收实测（154 项台账，含路径穿越串 405 静默丢失 P0 四轮复现、抽样冒充全量两次纠正、专有类型载体纠正、带外生效核对）。把踩坑经验沉淀进四个落点，均为判据级新增、不动既有判定链：
+
+| 落点 | 新增内容 |
+|---|---|
+| `skills/case-generator/references/methodology/ai_feature_testing.md` | 新增 §8「对话式 Agent 被测对象的实测要点」：静默消息丢失两层判定（网络钩子+DOM 双核实、列每轮回归）、流式完成判定两坑（思考阶段长度不变、用户气泡不渲染）、**写入结论三层独立验证**（网络层→新会话冷读→产物页直读；agent 自写自读属同源互证不得判 PASS）、审批/澄清卡片驱动纪律（上限、限流死锁、超时≠零副作用先核副作用）、专属能力在专属载体上测；原 §8 顺延为 §9 |
+| `references/execution-evidence.md` | 「页面与接口/副作用」补同源互证边界（同通道读写不构成独立验证）；「缺陷与复测」补长期未闭环阻断缺陷设为每轮回归首项 |
+| `references/methodology.md` | 「逐类适用性裁定」补"不适用"前置核实载体（错误载体被拒≠不适用）；「覆盖复核与交付」补覆盖口径开工前锁定（用户明示全量不得自行降级为代表性覆盖）、结论粒度与明细逐字对齐、交付前独立复核覆盖声明、覆盖矩阵作硬门禁 |
+| `references/business-pitfalls.md` | AI 模块表新增 3 行排查入口：特殊字符串静默丢失（高）、写入同源互证（高）、专属能力误判不适用（中） |
+
+**与冻结源的关系**：`ai_feature_testing.md` §8 为本包实测新增，冻结源（ai-product-testing-expert 01–04）无对应内容，属有意增量漂移，后续对照时以本表为准。本次仅改 markdown 判据与文档，无脚本/schema 改动，四套测试口径不受影响。
+
+备份：`web-acceptance-assurance-backup-20261118/`（同级目录，包内 4 个 SKILL.md 已改 `.disabled` 防误触发）。
+
+## 证伪立场整合（v1.32.0，2026-11-18）
+
+用户明确要求：专家以挑刺角度测试、尽可能发现问题、不顺从产品设计。落为判定标准（非口号），三个落点：
+
+| 落点 | 新增内容 |
+|---|---|
+| `agents/web-acceptance-assurance.md` | 服务目标新增「证伪立场」段：产品自述（含被测 Agent 的"设计如此/仅XX支持"解释）一律按待验证声明处理，有来源才结案、无来源记缺口、可疑说法用替代通道核实；挑刺不等于乱报，判定链与误报四问兜底 |
+| `references/methodology.md` | 需求预审后新增「证伪立场」段：三分账（规格来源边界/无来源能力缺口/疑似缺陷）+ 替代通道核实；与执行前必问矩阵的发现档衔接——挑刺改变判定与结案标准，不是无预算扩量 |
+| `skills/case-generator/references/methodology/ai_feature_testing.md` | §8 新增「不顺从产品自述」：Agent 边界声称三分账，声称"仅网页可做"须实际打开网页验证、声称"接口无字段"可对照网页端实际请求载荷核实；不符时按疑似缺陷立案 |
+
+动机实例：星仔验收中 agent 多次声称"仅网页可做/接口不支持"，验收方均按 PASS(不适用) 结案且未去网页核实——属顺从产品自述。本次判据落地后，此类声称须核实后才能定性。备份：`backup/pre-1.32/`（三文件改动前快照）。
+
+## 受控对抗测试改造（v1.33.0，2026-11-18）
+
+按用户参考方案与独立审核修订后的清单（IMP-01~16）实施，将风险探索升级为受控对抗发现。原则：契约验证为底线、独立挑战为主线、证据链与误报治理为约束；不新建第二套评测，扩展既有 blind_eval。
+
+| 层 | 落点 |
+|---|---|
+| 判据统一（IMP-01） | false_positive_guard：历史不一致/稳定复现不再一票否决，复现率 k/n 只表稳定性；detection_methods/specification-contract 增判据来源与观测入口要求 |
+| 证据强制力对齐（IMP-02） | execution_ledger result.json 增可选 evidence_grade；PASS+E2/E3 拒收，与 blind_eval 既有行为一致；旧格式兼容（tests/test_evidence_grade_gate.py） |
+| 比例三层澄清（IMP-03） | SKILL.md/policy.json/gate_checks 注释按 guidance/WARN/BLOCK 三层与两种失效方向重写，必选覆盖义务不得因配比删减 |
+| 安全许可分级（IMP-04） | security-verification 按动作副作用标注许可分级，注入/越权仅限授权+隔离环境（既有 12 条硬约束测试全绿） |
+| 最小对抗闭环（IMP-05~10） | 新增 references/adversarial-testing.md（双循环+能力探测+预算）、oracle-contract.md、finding-triage.md、output-templates 对抗门禁呈现；references/schemas/{adversarial-plan,adversarial-events,finding-reviews}.schema.json；scripts/{adversarial_data,adversarial_gate}.py；review_bridge 扩展评审→生成对抗交接；agents/methodology 增路由（≤40 行，路由基线不动） |
+| 断言挑战（IMP-11/12） | references/assertion-challenges.md + challenge-results.schema.json；源码变异只在隔离副本、仅目标断言捕获计 killed、U 单列；黑盒注入/自然故障分账（injected 必填）；执行器与拦截通道为接口约定，能力待探测未实测 |
+| 辅助治理与指标（IMP-13/14） | scripts/finding_summary.py（归簇/k/n/最小化/预算+UTF-8-sig CSV）、scripts/challenge_summary.py（源码与黑盒两账、零分母 NA、unresolved 分列）及 13 个单测 |
+| 盲测扩展（IMP-15） | blind_eval findings 增可选 reproduction k/n、cost、unresolved_candidates（向后兼容）；新夹具 06-injection-vs-natural（注入 vs 自然 500 判别格）；detection-protocol 增对抗增量约定；prepare→verify→score 真链自验通过 |
+| 注册发布（IMP-16） | 版本 1.32.0→1.33.0 小步递增；缓存旧版 SKILL.md 全部禁用；备份：D:/wjx_agent_test/outputs/adversarial-upgrade-20261118/backup/web-acceptance-assurance-1.32.0 |
+
+效果声明边界：本轮为结构与规则改造 + 301 项单测全绿；对抗检出能力提升未经盲测 A/B 证实，不得宣称。IMP-11/12 运行时执行器与浏览器拦截适配器未实现，标注能力待探测。
+
+## 批判者缺口整改（v1.34.0，2026-11-19）
+
+按《专家批判者目标审核意见》（outputs/adversarial-upgrade-20261118/）F 节 1~4 项执行，解决 A1/A2/B1 缺口与反例 G1~G4：
+
+| 缺口 | 整改 |
+|---|---|
+| B1 对抗可选（G4） | adversarial_gate 增 enforce/waiver：`--enforce` 下空 plan 无豁免理由上限压"待核实"，`--waiver` 附理由豁免留痕；agents 路由段升"必选"，methodology/output-templates/adversarial-testing 同步；新增 EnforceModeTests 5 例 |
+| A1 不批判需求（G1/G2） | ORC source 枚举增 `req_issue`（schema+adversarial_data+oracle-contract）；requirement-review 新增需求可疑点清单（requirement-issues.json 伴随文件，type=missing/conflict/hidden_assumption/business_sanity）；review_bridge 增 --requirements-input 映射为 req_issue 探针草稿；finding-triage 增 req_issue 候选分账（归需求问题清单，不建产品 BUG-）；新增 RequirementIssueHandoffTests 5 例 |
+| A2 探针无单可循（G3） | 新增 references/probe-playbook.md：A 节坑点→探针模板（P1~P15 与 business-pitfalls 15 模块联动），B 节通用方法库（等价类/边界值/判定表/状态迁移/组合/差分/metamorphic/故障注入/并发/回滚补偿，何时用/怎么用/典型失效）；探针构造前先查清单（agents/methodology/adversarial-testing 三处接线） |
+| G5 执行器 | 保持待办：源码变异执行器与浏览器拦截适配器仍为接口约定，能力待探测未实测 |
+| 盲测 A/B | 保持待办：效果证据须以既有夹具 01~06 跑改造前后对照后才能宣称 |
+
+版本 1.33.0→1.34.0；备份 backup/web-acceptance-assurance-1.33.0；全量 311/311 测试绿。
+
+## 强制力接线（v1.35.0，2026-11-19）
+
+按《复审意见_v1.34.0》D 节 1~4 项执行，解决 A1~A4 缺口（上轮"开关有了没插电"）：
+
+| 缺口 | 整改 |
+|---|---|
+| A1 对抗可选（H1） | `execution_ledger.initialize` 增 `--adversarial-gate`/`--adversarial-waiver`：未提供且未豁免记 `adversarial_state=missing` 且 `adversarial_ceiling=待核实`；`summarize` 新增机械派生的 `verdict_ceiling`（FAIL→不通过、BLOCKED/NOT_RUN→待核实、再与对抗上限取严者），不再由人工宣称 |
+| A2 方法无覆盖面（H2/H4） | plan obligation 增 `method`（方法库 10 个稳定 ID）与 `playbook_ref`（P1~P15）；`adversarial_data` 增 `summarize_coverage`/`coverage_gaps`（高风险 SURF 无探针、探针未注明方法均列缺口）；`adversarial_gate` 把方法缺口并入上限压制；schema 同步 |
+| A3 需求可疑点无校验（H3） | `review_check` 增 `--requirement-issues` 与 `check_requirement_issues`：未提供即判失败（不得默认"需求无问题"），空数组合法（已审阅无疑点），四类 type 校验；新增 `tests/test_requirement_issues_declared.py` 7 例 |
+| A4 缺纵向场景（H5/场景） | 新增 `references/schemas/adversarial-scenarios.schema.json`（SCN-ADV：cross_module/operation_sequence/state_bypass）；`probe-playbook` 增 C 节场景设计纪律（A/B 管单点，C 管组合序列） |
+
+端到端实测（非仅单测）：空 plan `--enforce`→待核实；台账三路径（missing/waived/verified）符合预期；探针缺 method→待核实，补齐后→通过；需求可疑点未声明→fail、空数组→pass。
+
+版本 1.34.0→1.35.0；备份 backup/web-acceptance-assurance-1.34.0；320/320 测试绿。
+
+## 身份重写与对抗性堵漏（v1.36.0，2026-11-19）
+
+按《审核结论_角色定义与对抗性_v1.35.0》C1~C7 执行。本轮与前两轮的根本差别：**改的是身份，不只是工具**。
+
+| 缺口 | 整改 |
+|---|---|
+| A1 无对抗身份（C1） | 核心能力新增**第 0 条「对抗发现（首要身份）」**；新增第 1 条「需求批判」、第 9 条「断言有效性验证」；「证伪立场」从服务目标下的补充段落**升为一级标题**，扩展为质疑需求/质疑实现/质疑自身结论三方向；主线改为"这套实现和这份需求会在哪里坏" |
+| A2 自主被授权卡死（C2） | 必问矩阵删除「发现档需用户要求才放宽」，改为「成本超预算」；新增明文：**"更用力地找问题不需要许可，可能造成副作用才需要许可"**；明确 safe 档约束副作用等级而非挑刺强度 |
+| A5 全是否定式约束 | 职责范围增「与边界配平的正向义务」四条（必做对抗、必声明需求可疑点、不适用须给理由、无缺陷须写尝试过哪些攻击面） |
+| B1 waiver 自授即通过（C3） | `_adversarial_precondition` 加机械约束：豁免**永远不能把上限抬到"通过"**（最高"待核实"）；须同时满足 `read_only`（dependency_mode ∈ replay/mock）与 `case_count ≤ WAIVER_MAX_CASES=5`，条件从 context 机械判定而非信理由文本；新增 `tests/test_waiver_backdoor.py` 6 例 |
+| B2 覆盖只报不判（C4） | `coverage_gaps` 增多样性检查：高风险 SURF ≥3 时方法种类须 ≥2（否则"方法过于单一"）；已用模板数须 ≥ 高风险 SURF 数一半（否则"模板覆盖过窄"）；门禁把两类缺口压入上限 |
+| B3 SCN-ADV 无脚本消费（C5） | `adversarial_data` 增 `validate_scenarios`（sequence≥2 步、cross_module≥2 SURF、ID 前缀）与 `scenario_gaps`（零场景/缺跨模块/高风险面未被覆盖）；CLI `--scenarios`；`adversarial_gate` 增 `scenarios` 参数并压上限 |
+| B4 破坏性变更（C7） | `review_check` 增 `--requirement-issues-migration`：迁移期未声明降为 warning，默认仍 fail；新批次不得用迁移口径 |
+
+版本 1.35.0→1.36.0；备份 backup/web-acceptance-assurance-1.35.0；329/329 测试绿。
+
+**仍未实现（如实登记）**：源码变异执行器与浏览器拦截适配器（接口约定，能力待探测）；盲测 A/B 效果实证。
+
+## 第四轮审核整改（v1.37.0，2026-11-19）
+
+按《第四轮审核意见_v1.36.0》逐条处理（A1/A2/A3 + 可选排版项）：
+
+| 审核项 | 整改 |
+|---|---|
+| A1 gate 层 waiver 语义与台账相反 | `adversarial_gate.py`：enforce+waiver 路径**豁免不上抬上限**——verdict_ceiling 最高仍为"待核实"（与台账"豁免不得自授即通过"对齐），新增结构化 `waiver_granted` 标志；enforce=False 空 plan 保持既有放行行为（向后兼容）；测试按语义同步修正（原 `test_enforce_empty_plan_with_waiver_passes_and_records` 改为 `..._records_but_never_passes`，另增"基础上限更严时豁免不得放松"与"非空 plan waiver_granted=false"两例）；角色定义与 adversarial-testing.md 措辞同步对齐（顺带修复原文缺失的反引号） |
+| A2 盲测 A/B 四轮零实证 | 工具与协议就绪：`blind_eval.py` 新增 `ab` 子命令（`compare_ab`：两臂各为目录、聚合多 run 的 score.json，按臂聚合检出/误报/复现/成本，输出 precision_proxy 与每百探针有效发现派生指标，分母不足输出 NA 不编造比例；可比性检查——协议/夹具哈希同臂跨臂一致、执行方跨臂须不同、答案分母不等即留痕 comparable=false）；新增 `docs/evals-baseline/ab-protocol.md`（两臂定义/执行步骤/指标解读纪律/禁止的解读/诚实披露边界）。**真实对照数据仍待首个真实测试批次执行，不伪造**；角色定义能力 9 增 ab-protocol 指针 |
+| A3 G5 执行器未实测 | 维持登记，不做改动（文档已如实声明"能力待探测，未实测"） |
+| 可选排版项 | 核心能力第 9/10/11 条间距统一（删除多余空行） |
+
+版本 1.37.0（v1.36.0→1.37.0）；备份 backup/web-acceptance-assurance-1.36.0（本轮改动先行后建，备份由拷贝当前树逆向应用全部编辑重建，重建后 328 passed + 1 skipped[环境路径跳过] 验证与 1.36.0 行为一致：备份 gate waiver 仍返回"通过"）；339/339 测试绿。
+
+**仍未实现（如实登记）**：源码变异执行器与浏览器拦截适配器（接口约定，能力待探测）；A/B 真实对照数据（工具与协议已就绪，待真实测试批次执行）。

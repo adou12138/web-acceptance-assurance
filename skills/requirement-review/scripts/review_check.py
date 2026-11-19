@@ -46,6 +46,9 @@ P_MOD = re.compile(r"^M\d{2}$")
 P_RULE = re.compile(r"^R-\d{2,}$")
 P_ISSUE_B = re.compile(r"^B-\d{2,}$")
 P_ISSUE_P = re.compile(r"^P-\d{2,}$")
+# 需求可疑点（批判需求本身）：声明值 none 表示经审阅确认需求无疑点
+REQ_ISSUE_TYPES = {"missing", "conflict", "hidden_assumption", "business_sanity"}
+REQ_ISSUE_NONE = "none"
 P_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 P_TZ = re.compile(r"(Z|[+-]\d{2}:\d{2})$")
 SCORE_KEYS = re.compile(r"score|grade|weight|percent|rating", re.IGNORECASE)
@@ -61,6 +64,42 @@ def _err(errors, msg):
 
 def _warn(warnings, msg):
     warnings.append(msg)
+
+
+def check_requirement_issues(issues, migration_warn=False):
+    """校验需求可疑点清单（requirement-issues.json 的数组）。
+
+    列表可为空但必须显式声明：空列表 = 已审阅且无疑点。每条须含 type/area/description，
+    type 限于四类。返回 (errors, warnings)。
+
+    migration_warn=True 时，"未声明"降级为 warning（迁移期口径）：避免既有评审资产
+    集体 fail 引发绕过检查的逆向选择；该模式不应用于新批次。
+    """
+    errors, warnings = [], []
+    if issues is None:
+        msg = ("requirement-issues: 未声明需求可疑点。批判者立场须显式声明——"
+               "请提供 requirement-issues.json（空数组表示已审阅且无疑点），"
+               "不得默认视为“需求无问题”")
+        if migration_warn:
+            _warn(warnings, msg + "（迁移期按 warning 处理，新批次须补齐）")
+        else:
+            _err(errors, msg)
+        return errors, warnings
+    if not isinstance(issues, list):
+        _err(errors, "requirement-issues: 必须为数组（空数组表示已审阅且无疑点）")
+        return errors, warnings
+    for i, item in enumerate(issues):
+        name = f"requirement-issues[{i}]"
+        if not isinstance(item, dict):
+            _err(errors, f"{name}: object required")
+            continue
+        itype = str(item.get("type") or "")
+        if itype not in REQ_ISSUE_TYPES:
+            _err(errors, f"{name}.type: 必须为 {sorted(REQ_ISSUE_TYPES)} 之一（实为 {itype or '缺失'}）")
+        for key in ("area", "description"):
+            if not _is_str(item.get(key)):
+                _err(errors, f"{name}.{key}: nonempty string required")
+    return errors, warnings
 
 
 def check(data):
@@ -459,6 +498,10 @@ def main():
     ap.add_argument("--input", required=True, help="review-result.json 绝对路径")
     ap.add_argument("--json", action="store_true", help="输出结构化 JSON 结果")
     ap.add_argument("--strict", action="store_true", help="warning 也判失败")
+    ap.add_argument("--requirement-issues", help="需求可疑点数组 JSON（requirement-issues.json）；"
+                                                "缺省时判失败：必须显式声明，空数组表示已审阅且无疑点")
+    ap.add_argument("--requirement-issues-migration", action="store_true",
+                    help="迁移期口径：未声明需求可疑点仅记 warning 不判失败（仅用于既有资产过渡，新批次不得用）")
     args = ap.parse_args()
 
     path = Path(args.input)
@@ -473,6 +516,22 @@ def main():
         sys.exit(2)
 
     errors, warnings, counts = check(data)
+    issues = None
+    if args.requirement_issues:
+        issues_path = Path(args.requirement_issues)
+        if not issues_path.is_file():
+            print(f"需求可疑点文件不存在：{issues_path}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            issues = json.loads(issues_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"需求可疑点解析失败：{exc}", file=sys.stderr)
+            sys.exit(2)
+    issue_errors, issue_warnings = check_requirement_issues(
+        issues, migration_warn=args.requirement_issues_migration)
+    errors.extend(issue_errors)
+    warnings.extend(issue_warnings)
+    counts["requirement_issues"] = len(issues) if isinstance(issues, list) else 0
     status = "pass" if not errors and not (args.strict and warnings) else "fail"
     payload = {
         "schema_version": SCHEMA_VERSION,

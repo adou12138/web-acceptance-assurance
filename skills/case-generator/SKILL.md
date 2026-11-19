@@ -70,12 +70,17 @@ python scripts/batch.py finish --workdir <工作区> --unit M01 --cases <cases J
 - 中断恢复：`batch.py resume` 检测 doing/done 但 `case_ids` 为空的批次并重置；从下一个 pending 批继续。
 - 单批实际超 30 条：该批结束后按一级功能点续拆（`batch.py resplit`），不重跑已完成部分。
 
+### 2.5 对抗交接消费（可选，进入对抗循环前执行）
+
+评审侧可能随交付提供**对抗交接候选清单**（覆盖缺口与负面断言候选）。用 `review_bridge.py --adversarial-out <handoff 路径> [--negative-input <负面断言数组 JSON>] [--requirements-input <需求可疑点数组 JSON>]` 把候选映射为 ADV 草稿：coverage_gaps 逐条成草稿；负面断言缺副作用或授权说明会被拒绝（退出码 1）；需求可疑点（type/area/description）映射为 req_issue 判据草稿，产物归需求问题分账不冒充产品缺陷。草稿不是 plan：须按专家包 references 树的 `oracle-contract.md` 补 SURF/ORC、冻结来源指纹生成 `adversarial-plan.json` 后才可执行探针，生成阶段不冒充判据已冻结。
+
 ### 3. 门禁（只报不改）
 
 `gate_checks.py` 依次执行：**S0 结构校验先跑**（`case_data.validate` 无 errors，含每个 requirement 至少一个 required 用例、`case_ids` 双向登记、四要素齐全、`coverage_gaps` 形态合法）→ S0 不过直接判**待修订**，不计算后续文本门禁 → G1/G1.5/G2/G3/G4/G5/G6/G7 + V05/V07/V08/V09/V11/V12/V13 + COV（L1/L3 方法见证，含 pairwise 证据要求）+ COV-LAYERS（L2/L4 覆盖矩阵，见 `scripts/coverage_matrix.py`）+ COV-PATH（异常与权限路径配比）+ COV-UI（界面样式/无障碍零用例须逐类裁定；未声明 applicability 的存量用例集降为告警并在报告中列缺口）+ RATIO-SMOKE / RATIO-P0。
 
 - 门禁不通过 → 用例状态标**待修订**（与执行状态 `NOT_RUN` 区分），报告定位到 `case_id` 或批次号；修订后**重跑该批**。不自动改用例、不做超标自动降级。
-- 小样本例外：用例数 < 20 时比率门禁降为告警，改用绝对数（每模块 ≥1 条冒烟、每需求 ≥1 条；P0 同理）。
+- 比例门禁三档：① guidance 档——冒烟 `target_ratio` / P0 `recommended_ratio` 仅作生成期引导，不进任何判定；② WARN 档——批内浓度 `batch_warn_ratio` 超线只提示不降级，交人工判断；③ BLOCK 档——交付占比越界（冒烟 5%–20%、P0 ≤20%）与小样本绝对规则即门禁不通过。小样本（<20 条）比率无判别力，降为绝对数规则（每模块 ≥1 条冒烟、每需求 ≥1 条；P0 每模块 ≥1 条），比率越界仅提示。
+- 两种失效方向都不得以删减必选覆盖义务来满足比例：**下限方向**（占比低于下限）须补充真实冒烟/高风险覆盖弥合缺口，不灌水凑数、不删减必选覆盖义务来"调平"；**上限方向**（占比高于上限）宁可 BLOCK 并披露，不删减高风险用例、不稀释优先级。
 - P0 生成预算：`min(预估×15%, 20)`；超出写 `deferred` 并保留未覆盖义务，不静默丢弃。
 
 ### 4. 全量汇总

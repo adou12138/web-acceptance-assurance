@@ -497,7 +497,15 @@ class GateRunner:
         self.record("COV-LAYERS", "L2 业务分层 / L4 探索性", level, issues,
                     "L2 按功能点覆盖、L4 已统计（不计入已覆盖）")
 
-    # RATIO-SMOKE / RATIO-P0（三层 + 小样本例外）
+    # RATIO-SMOKE / RATIO-P0（三档判定 + 两种失效方向）
+    # 三档：guidance（target/recommended_ratio，仅生成引导，不进判定）→
+    #       WARN（批内浓度 batch_warn_ratio；小样本下比率越界降为提示）→
+    #       BLOCK（交付占比越界 + 小样本绝对规则）。
+    # 两种失效方向（v3 比例门禁重写）：
+    #   (a) 下限方向：占比低于下限，迫使补充低价值用例凑数——处置是补充真实冒烟/高风险覆盖，
+    #       不得灌水凑数，也不得删减必选覆盖义务来"调平"比例；
+    #   (b) 上限方向：占比高于上限，迫使删减高风险用例——宁可 BLOCK 并披露，不得删减高风险
+    #       用例或稀释优先级来满足比例。
     def _ratios(self, cases, tcs, th):
         smoke_th = th.get("smoke", {})
         p0_th = th.get("p0", {})
@@ -507,18 +515,23 @@ class GateRunner:
         p0_n = sum(1 for tc in tcs if tc.get("priority") == "P0")
         below = n < small.get("case_count_below", 20)
 
-        # 冒烟三层
+        # 冒烟三档
         t = smoke_th.get("target_ratio", {})
+        if n and t:
+            pass  # guidance 档：只作生成期冒烟标注意向引导，不参与任何门禁判定
         issues = []
-        if n and t and not (t.get("min", 0) <= smoke_n / n <= t.get("max", 1)):
-            pass  # guidance 不计入门禁，仅备注
         bw = smoke_th.get("batch_warn_ratio", {})
         if n and bw and smoke_n / n > bw.get("max", 1):
-            issues.append({"case_id": "_ratio_", "why": f"批内冒烟浓度 {smoke_n}/{n} 超提示线 {bw.get('max')}（多为该模块 P0 过密，交人工判断，不自动降级）"})
+            issues.append({"case_id": "_ratio_", "level": "WARN", "why": f"批内冒烟浓度 {smoke_n}/{n} 超提示线 {bw.get('max')}（多为该模块 P0 过密，交人工判断，不自动降级）"})
         if not below:
             dr = smoke_th.get("delivery_ratio", {})
             if dr and n and not (dr.get("min", 0) <= smoke_n / n <= dr.get("max", 1)):
-                issues.append({"case_id": "_ratio_", "why": f"交付冒烟占比 {smoke_n}/{n}={smoke_n/n:.0%} 不在 {dr.get('min')}~{dr.get('max')}（gate）"})
+                if smoke_n / n < dr.get("min", 0):
+                    issues.append({"case_id": "_ratio_", "level": "BLOCK",
+                                   "why": f"交付冒烟占比 {smoke_n}/{n}={smoke_n/n:.0%} 低于下限 {dr.get('min')}（下限方向：缺口须通过补充真实冒烟覆盖弥合，不得灌水凑数，也不得删减必选覆盖义务来调整比例）"})
+                else:
+                    issues.append({"case_id": "_ratio_", "level": "BLOCK",
+                                   "why": f"交付冒烟占比 {smoke_n}/{n}={smoke_n/n:.0%} 高于上限 {dr.get('max')}（上限方向：不得删减高风险或必选用例来压比例；本条 BLOCK 并披露，人工复核冒烟标注是否过宽）"})
         else:
             # 方案语义：每「模块」≥1 条冒烟、每「需求」≥1 条（模块= features 顶层 id，
             # 需求= 叶子功能点的 requirement_ids），不按功能点粒度。
@@ -542,19 +555,24 @@ class GateRunner:
             per_mod = small.get("absolute_rules", {}).get("smoke_per_module_min", 1)
             short_mods = sorted(all_mods - smoke_mods)
             if short_mods:
-                issues.append({"case_id": "_ratio_", "why": f"小样本例外：模块 {short_mods} 冒烟少于每模块 {per_mod} 条"})
+                issues.append({"case_id": "_ratio_", "level": "BLOCK",
+                               "why": f"小样本例外：模块 {short_mods} 冒烟少于每模块 {per_mod} 条（下限方向：补充真实冒烟覆盖，不灌水凑数）"})
             if smoke_n == 0:
-                issues.append({"case_id": "_ratio_", "why": "小样本例外：至少 1 条冒烟（每需求）"})
-        self.record("RATIO-SMOKE", "冒烟占比（三层+小样本）", "BLOCK", [i for i in issues if "不在" in i["why"] or "少于" in i["why"] or "至少" in i["why"]],
-                    "冒烟占比符合交付门禁")
-        self.record("RATIO-SMOKE-W", "冒烟批内告警", "WARN", [i for i in issues if "提示线" in i["why"]], "批内浓度正常")
+                issues.append({"case_id": "_ratio_", "level": "BLOCK",
+                               "why": "小样本例外：至少 1 条冒烟（每需求；下限方向：补充真实冒烟覆盖，不灌水凑数）"})
+        self.record("RATIO-SMOKE", "冒烟占比（三档+两种失效方向）", "BLOCK",
+                    [i for i in issues if i.get("level") == "BLOCK"],
+                    "冒烟交付占比符合门禁（下限/上限两方向均不以删减必选覆盖义务来满足）")
+        self.record("RATIO-SMOKE-W", "冒烟批内告警", "WARN",
+                    [i for i in issues if i.get("level") == "WARN"], "批内浓度正常")
 
         # P0
         issues_p = []
         if n:
             ratio = p0_n / n
             if not below and ratio > p0_th.get("delivery_max_ratio", {}).get("max", 1):
-                issues_p.append({"case_id": "_ratio_", "why": f"P0 交付占比 {p0_n}/{n}={ratio:.0%} 超上限 {p0_th.get('delivery_max_ratio', {}).get('max')}（gate）"})
+                issues_p.append({"case_id": "_ratio_", "level": "BLOCK",
+                                 "why": f"P0 交付占比 {p0_n}/{n}={ratio:.0%} 超上限 {p0_th.get('delivery_max_ratio', {}).get('max')}（上限方向：高风险义务不足时宁可 BLOCK 并披露，不得删减高风险用例或稀释优先级来满足比例）"})
             elif below:
                 leaf_module = {}
                 for top in cases.get("features", []):
@@ -565,13 +583,16 @@ class GateRunner:
                 all_mods_p = {leaf_module.get(fid) for tc in tcs for fid in tc.get("feature_ids", [])} - {None}
                 short_mods_p = sorted(all_mods_p - p0_mods)
                 if short_mods_p:
-                    issues_p.append({"case_id": "_ratio_", "why": f"小样本例外：模块 {short_mods_p} 无 P0 用例（每模块 ≥1 条）"})
+                    issues_p.append({"case_id": "_ratio_", "level": "BLOCK",
+                                     "why": f"小样本例外：模块 {short_mods_p} 无 P0 用例（每模块 ≥1 条；下限方向：补充真实高风险覆盖，不稀释既有用例优先级）"})
             bwp = p0_th.get("batch_warn_ratio", {})
             if bwp and ratio > bwp.get("max", 1):
-                issues_p.append({"case_id": "_ratio_", "why": f"批内 P0 浓度 {ratio:.0%} 超告警线 {bwp.get('max')}（不自动降级）"})
-        self.record("RATIO-P0", "P0 占比（gate+小样本）", "BLOCK", [i for i in issues_p if "超上限" in i["why"] or "至少" in i["why"]],
-                    "P0 占比符合交付门禁")
-        self.record("RATIO-P0-W", "P0 批内告警", "WARN", [i for i in issues_p if "告警线" in i["why"]], "批内 P0 浓度正常")
+                issues_p.append({"case_id": "_ratio_", "level": "WARN", "why": f"批内 P0 浓度 {ratio:.0%} 超告警线 {bwp.get('max')}（不自动降级）"})
+        self.record("RATIO-P0", "P0 占比（gate+小样本）", "BLOCK",
+                    [i for i in issues_p if i.get("level") == "BLOCK"],
+                    "P0 占比符合交付门禁（上限方向不以删减高风险用例来满足）")
+        self.record("RATIO-P0-W", "P0 批内告警", "WARN",
+                    [i for i in issues_p if i.get("level") == "WARN"], "批内 P0 浓度正常")
 
     # COV-PATH：异常/权限路径配比与豁免举证（方案 E7；豁免对象形态契约见 scripts/case_data.py 的 E5 校验）
     def _cov_path(self, cases):

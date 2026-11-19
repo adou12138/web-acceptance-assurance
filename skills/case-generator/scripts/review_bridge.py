@@ -11,6 +11,19 @@
 - testcases 由生成阶段（主会话）逐条写入，本脚本只写骨架与范围清单。
 
 退出码：0=成功；1=映射失败（范围/契约问题）；2=用法/输入错误。
+
+对抗交接（IMP-07）：build_adversarial_handoff(review, negative_assertions=None) 把评审产物
+映射为 adversarial-plan 的 ADV 草稿候选清单（不落 plan，由生成/执行阶段消费并冻结判据）：
+- coverage_gaps[]（{area,reason}）→ 每条缺口一个 challenge 类 ADV 草稿；
+- 评审未声明 coverage_gaps 时不报错，产出空 ADV 草稿清单并附提示（评审契约允许缺省）；
+- 负面断言（--negative-input 提供的外部数组，评审 schema 根对象 additionalProperties:false
+  不允许内嵌）每条必须写明副作用（side_effect）与授权要求（authorization），缺一即拒绝映射；
+- 需求可疑点（--requirements-input 提供的外部数组，同因不入评审根对象）每条必须写明
+  type（missing/conflict/hidden_assumption/business_sanity）、area 与 description，
+  映射为 origin=requirement_issues 的 challenge 草稿；其产物只能归需求问题分账，
+  不得直接判产品缺陷（见 references/oracle-contract.md 的 req_issue 纪律）；
+- 产物只是候选草稿，判据（ORC）与风险面（SURF）须在 adversarial-plan 定稿时按
+  专家包 references/oracle-contract.md 补齐并冻结来源指纹。
 """
 
 import argparse
@@ -225,16 +238,140 @@ def build_skeleton(review, flow_kind):
     return skeleton, scope
 
 
+def build_adversarial_handoff(review, negative_assertions=None, requirement_issues=None):
+    """评审产物 → adversarial-plan 的 ADV 草稿候选清单（IMP-07 + 需求批判）。
+
+    覆盖缺口逐条映射为 challenge 草稿；负面断言必须写明副作用与授权要求，否则抛
+    ValueError（CLI 转退出码 1）；需求可疑点必须含 type/area/description，type 限于
+    missing/conflict/hidden_assumption/business_sanity。产物只是候选草稿：无 SURF/ORC
+    关联，须在 plan 定稿时补判据并冻结指纹。
+    """
+    notes, drafts = [], []
+    gaps = review.get("coverage_gaps")
+    if gaps is None:
+        notes.append("评审未声明 coverage_gaps：产出空 ADV 草稿清单；请补评审覆盖缺口或手工登记风险面后再定稿 plan")
+        gaps = []
+    if not isinstance(gaps, list):
+        raise ValueError("coverage_gaps 必须为数组，请先运行 requirement-review 的 review_check.py")
+    for i, gap in enumerate(gaps, 1):
+        if not isinstance(gap, dict):
+            raise ValueError(f"coverage_gaps[{i - 1}] 必须为对象（area/reason）")
+        drafts.append({
+            "adv_id": f"ADV-DRAFT-{i:02d}",
+            "origin": "coverage_gaps",
+            "target": str(gap.get("area") or ""),
+            "hypothesis": str(gap.get("reason") or ""),
+            "probe_type": "challenge",
+            "expectation_basis": "",
+            "side_effect": "",
+            "authorization": "",
+            "note": "预期依据待评审判据确认；自猜规则先记待核验，不得直接当 ORC 入账",
+        })
+    if drafts and any(not d["target"] or not d["hypothesis"] for d in drafts):
+        notes.append("存在 area/reason 缺失的缺口草稿：预期依据须在 plan 定稿前补齐来源")
+
+    for i, neg in enumerate(negative_assertions or [], 1):
+        name = f"negative_assertions[{i - 1}]"
+        if not isinstance(neg, dict):
+            raise ValueError(f"{name} 必须为对象")
+        text = str(neg.get("text") or "").strip()
+        side_effect = str(neg.get("side_effect") or "").strip()
+        authorization = str(neg.get("authorization") or "").strip()
+        if not text:
+            raise ValueError(f"{name}.text 缺失：负面断言必须写明禁止/拒绝的具体行为")
+        if not side_effect:
+            raise ValueError(f"{name}（{text}）缺副作用说明：负面断言必须写明触发后需核对的副作用，拒绝生成 ADV 草稿")
+        if not authorization:
+            raise ValueError(f"{name}（{text}）缺授权要求：负面断言必须写明所需授权边界，拒绝生成 ADV 草稿")
+        drafts.append({
+            "adv_id": f"ADV-DRAFT-{len(drafts) + 1:02d}",
+            "origin": "negative_assertions",
+            "target": text,
+            "hypothesis": f"拒绝路径可能未生效或产生副作用：{side_effect}",
+            "probe_type": "challenge",
+            "expectation_basis": "负面断言（已确认规则）",
+            "side_effect": side_effect,
+            "authorization": authorization,
+            "note": "",
+        })
+
+    drafts.extend(map_requirement_issues(requirement_issues, start_index=len(drafts) + 1))
+    return {"adv_candidates": drafts, "notes": notes,
+            "reminder": "候选草稿须按 references/oracle-contract.md 补 SURF/ORC 并冻结来源指纹后方可执行"}
+
+
+REQ_ISSUE_TYPES = {"missing", "conflict", "hidden_assumption", "business_sanity"}
+REQ_ISSUE_TYPE_NAMES = {
+    "missing": "需求遗漏",
+    "conflict": "需求冲突",
+    "hidden_assumption": "隐含假设",
+    "business_sanity": "业务合理性存疑",
+}
+
+
+def map_requirement_issues(requirement_issues, start_index=1):
+    """需求可疑点数组 → origin=requirement_issues 的 ADV 草稿（批判需求本身）。
+
+    判据来源记 req_issue：探针产物只能是需求问题候选或待业务确认事项，
+    不得直接判产品缺陷（oracle-contract.md req_issue 纪律）。
+    """
+    drafts = []
+    for i, issue in enumerate(requirement_issues or [], 1):
+        name = f"requirement_issues[{i - 1}]"
+        if not isinstance(issue, dict):
+            raise ValueError(f"{name} 必须为对象")
+        itype = str(issue.get("type") or "").strip()
+        area = str(issue.get("area") or "").strip()
+        description = str(issue.get("description") or "").strip()
+        if itype not in REQ_ISSUE_TYPES:
+            raise ValueError(f"{name}.type 必须为 {sorted(REQ_ISSUE_TYPES)} 之一，实为 {itype or '缺失'}")
+        if not area:
+            raise ValueError(f"{name}（{itype}）缺 area：需求可疑点必须写明涉及的功能点/规则位置")
+        if not description:
+            raise ValueError(f"{name}（{itype}）缺 description：必须写明可疑点内容与怀疑依据")
+        drafts.append({
+            "adv_id": f"ADV-DRAFT-{start_index + i - 1:02d}",
+            "origin": "requirement_issues",
+            "target": area,
+            "hypothesis": f"[{REQ_ISSUE_TYPE_NAMES[itype]}] {description}",
+            "probe_type": "challenge",
+            "expectation_basis": "req_issue（需求可疑点）：探针产物归需求问题分账或待业务确认，不直接判产品缺陷",
+            "side_effect": "只读挑战为主；涉及状态变更须先按负面断言口径补副作用与授权",
+            "authorization": "",
+            "note": f"需求可疑点编号 {str(issue.get('id') or f'RI-{i:02d}')}；澄清后须转业务确认，不得以需求原文单方判定",
+        })
+    return drafts
+
+
 def main():
-    ap = argparse.ArgumentParser(description="评审结果 → cases JSON 骨架映射")
+    ap = argparse.ArgumentParser(description="评审结果 → cases JSON 骨架映射；可选产出对抗交接候选清单")
     ap.add_argument("--review", required=True, help="review-result.json 绝对路径")
     ap.add_argument("--out", required=True, help="骨架 cases JSON 输出路径")
     ap.add_argument("--scope-out", help="范围清单 JSON 输出路径（缺省打印 stdout）")
     ap.add_argument("--flow-kind", choices=["simple", "workflow", "stateful"], default="simple")
+    ap.add_argument("--adversarial-out", help="对抗交接候选清单 JSON 输出路径（缺省不产出）")
+    ap.add_argument("--negative-input", help="负面断言数组 JSON 文件路径（每条须含 text/side_effect/authorization）")
+    ap.add_argument("--requirements-input", help="需求可疑点数组 JSON 文件路径（每条须含 type/area/description）")
     args = ap.parse_args()
 
     review = _load(args.review)
     skeleton, scope = build_skeleton(review, args.flow_kind)
+
+    if args.adversarial_out:
+        negative = _load(args.negative_input) if args.negative_input else None
+        if negative is not None and not isinstance(negative, list):
+            _fail("--negative-input 必须为负面断言数组 JSON 文件")
+        req_issues = _load(args.requirements_input) if args.requirements_input else None
+        if req_issues is not None and not isinstance(req_issues, list):
+            _fail("--requirements-input 必须为需求可疑点数组 JSON 文件")
+        try:
+            handoff = build_adversarial_handoff(review, negative, req_issues)
+        except ValueError as exc:
+            _fail(str(exc))
+        adv_out = Path(args.adversarial_out)
+        adv_out.parent.mkdir(parents=True, exist_ok=True)
+        adv_out.write_text(json.dumps(handoff, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"adversarial handoff -> {adv_out}（ADV 草稿：{len(handoff['adv_candidates'])}）")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

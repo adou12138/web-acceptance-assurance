@@ -89,3 +89,10 @@ python scripts/blind_eval.py compare --a runs/01-A/score.json --b runs/02-B/scor
 ## 八、边界
 
 受控预埋缺陷只计评测检出，不计真实项目 bug；一次夹具结果不外推到所有网站。真实"减少 bug"仍需项目级逃逸记录与版本对照。
+
+## 九、对抗增量约定
+
+- `findings[]` 新增**可选**字段：`reproduction`（`{"attempts": n, "successes": k}`，k/n 复现率，分母含失败尝试）、`cost`（`{"probes": p, "minutes": m}`）；payload 新增**可选** `unresolved_candidates`（数量或条目数组）。全部向后兼容：旧 findings.json 不带新字段照常计分。
+- score 输出对应聚合字段：`reproduction`（attempts/successes/rate）、`cost`（probes/minutes）、`unresolved_candidates`；字段缺省输出 null，**缺失不得当 0 参与判定**，也不进入 verdict 规则。
+- 注入判别格口径：注入故障与自然故障必须分开记录（`injected` 标志）；注入制造的故障不得记为产品缺陷，把注入故障误报成产品缺陷的走 `legit_near_misses` 记误报；`injected=false` 且断言报警才计自然缺陷候选；撤销注入后必须复测恢复健康对照。判定纪律见 `references/assertion-challenges.md`（执行器与拦截适配器为接口约定，能力待探测，未实测）。
+- 协议哈希变更后旧结果不可混算：`protocol_sha256` 变化即判据已变，`compare` 标记不可比，历史分数不得与新分数合并统计。

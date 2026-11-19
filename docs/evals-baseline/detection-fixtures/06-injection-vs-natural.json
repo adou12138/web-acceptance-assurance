@@ -1,0 +1,60 @@
+{
+  "scenario": "订单查询页故障响应判别：代理注入试验与线上自然故障的断言归因（成对采集健康对照）",
+  "inputs": "本地受控页面与本地代理通道；只读操作授权；注入前必须先探测浏览器通道是否支持请求拦截；注入故障与自然故障须分开记录，撤销注入后复测恢复对照",
+  "hidden_answers": [
+    {
+      "id": "INJ-1",
+      "severity": "normal",
+      "description": "注入制造 500 被正确记为注入/客户端候选，未冒充产品缺陷",
+      "oracle": "注入故障按注入候选与客户端表现记录，撤销注入后复测恢复健康对照",
+      "match_all": [
+        "注入500",
+        "injected=true"
+      ],
+      "match_any": [
+        "客户端",
+        "代理注入",
+        "注入候选",
+        "不计产品缺陷"
+      ]
+    },
+    {
+      "id": "NAT-1",
+      "severity": "blocker",
+      "description": "自然 500 被识别为服务端真实故障候选",
+      "oracle": "自然故障（injected=false）且断言报警才计自然缺陷候选，应如实上报",
+      "match_all": [
+        "自然500",
+        "injected=false"
+      ],
+      "match_any": [
+        "服务端",
+        "自然故障",
+        "后端故障"
+      ]
+    }
+  ],
+  "legit_near_misses": [
+    {
+      "id": "NM-1",
+      "description": "把注入制造的故障误报成产品缺陷",
+      "expect": "不记检出，按误报单列",
+      "match_all": [
+        "注入500"
+      ],
+      "match_any": [
+        "产品缺陷",
+        "产品问题",
+        "产品bug"
+      ],
+      "category": "injection_misattribution"
+    }
+  ],
+  "required_branches": [
+    "健康对照基线",
+    "代理注入复测",
+    "自然故障复现",
+    "撤销注入恢复对照"
+  ],
+  "holdout": false
+}

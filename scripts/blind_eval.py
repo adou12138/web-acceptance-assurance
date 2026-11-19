@@ -6,6 +6,9 @@
     verify   检查运行目录是否混入答案（文件名/内容/答案 ID），并核对执行方声明
     score    用答案键给执行结果打分，写 score.json（检出/误报/分支/证据/未测义务）
     compare  两份 score.json 对照，标注单次复跑、同一执行方等不可比风险
+    ab       A/B 两臂聚合对照（改造前/后各一目录，每目录含多个 run 的 score.json）
+             ——按臂聚合检出/误报/复现/成本，输出裁定精确率与每百探针有效发现等
+             派生指标（近似口径，须按 ab-protocol.md 解读，不得夸大样本）
 
 设计约束：
 - 答案键只在评测者手里；prepare 产物必须不含 hidden_answers / legit_near_misses / match 规则。
@@ -84,8 +87,11 @@ def spec_from_fixture(fixture):
                 "branches": [{"name": "必须来自题面 required_branches", "status": "EXECUTED|BLOCKED", "reason": "BLOCKED 必填"}],
                 "findings": [{"id": "F-1", "title": "现象", "observed": "实际观察与预期差",
                               "severity": "blocker|major|normal", "evidence": ["相对本目录的证据路径"],
-                              "evidence_grade": "E1（默认）；E2 模拟/E3 未执行不计检出"}],
+                              "evidence_grade": "E1（默认）；E2 模拟/E3 未执行不计检出",
+                              "reproduction": "可选 {attempts, successes}（k/n，含失败尝试）",
+                              "cost": "可选 {probes, minutes}"}],
                 "obligations_untested": ["没测到的义务，如实列出"],
+                "unresolved_candidates": "可选，未裁定候选数量或条目数组",
                 "invalid_actions": 0,
             },
         },
@@ -173,6 +179,56 @@ def _finding_text(finding):
     return " ".join(_normalize(finding.get(key)) for key in ("title", "observed", "branch"))
 
 
+def _parse_reproduction(finding):
+    """可选扩展字段 reproduction {attempts, successes}；缺省返回 None，非法抛 ValueError。
+
+    仅做形态校验与聚合，不参与 verdict 判定；缺失不得当 0。
+    """
+    rep = finding.get("reproduction")
+    if rep is None:
+        return None
+    finding_id = finding.get("id")
+    if not isinstance(rep, dict):
+        raise ValueError(f"findings[{finding_id}].reproduction 必须为对象 {{attempts, successes}}")
+    attempts, successes = rep.get("attempts"), rep.get("successes")
+    for name, value in (("attempts", attempts), ("successes", successes)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"findings[{finding_id}].reproduction.{name} 必须为非负整数")
+    if successes > attempts:
+        raise ValueError(f"findings[{finding_id}].reproduction: successes 不得大于 attempts")
+    return {"attempts": attempts, "successes": successes}
+
+
+def _parse_cost(finding):
+    """可选扩展字段 cost {probes, minutes}；缺省返回 None，非法抛 ValueError。"""
+    cost = finding.get("cost")
+    if cost is None:
+        return None
+    finding_id = finding.get("id")
+    if not isinstance(cost, dict):
+        raise ValueError(f"findings[{finding_id}].cost 必须为对象 {{probes, minutes}}")
+    probes, minutes = cost.get("probes"), cost.get("minutes")
+    if not isinstance(probes, int) or isinstance(probes, bool) or probes < 0:
+        raise ValueError(f"findings[{finding_id}].cost.probes 必须为非负整数")
+    if not isinstance(minutes, (int, float)) or isinstance(minutes, bool) or minutes < 0:
+        raise ValueError(f"findings[{finding_id}].cost.minutes 必须为非负数值")
+    return {"probes": probes, "minutes": minutes}
+
+
+def _parse_unresolved_candidates(payload):
+    """可选扩展字段 unresolved_candidates（数量或条目数组）；缺省返回 None。"""
+    value = payload.get("unresolved_candidates")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, list)):
+        raise ValueError("unresolved_candidates 必须为非负整数或条目数组")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError("unresolved_candidates 数量不得为负")
+        return value
+    return len(value)
+
+
 def _evidence_ok(run_dir, finding):
     evidence = finding.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -205,6 +261,7 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
     required = [str(b) for b in key.get("required_branches") or []]
 
     matched_answers, near_hits, near_pairs, unmatched, evidence_issues = {}, [], [], [], []
+    reproduction_parts, cost_parts = [], []
     for finding in findings:
         if not isinstance(finding, dict):
             raise ValueError("findings 每项必须为对象")
@@ -213,6 +270,12 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
                 raise ValueError(f"findings 缺字段 {field}：{finding.get('id')}")
         if finding["severity"] not in SEVERITIES:
             raise ValueError(f"findings.severity 非法：{finding['severity']}")
+        reproduction = _parse_reproduction(finding)
+        cost = _parse_cost(finding)
+        if reproduction:
+            reproduction_parts.append(reproduction)
+        if cost:
+            cost_parts.append(cost)
         text = _finding_text(finding)
         hit = next((a for a in answers
                     if a["id"] not in matched_answers and _match(a, text)), None)
@@ -267,6 +330,19 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
     invalid_actions = payload.get("invalid_actions", 0)
     if not isinstance(invalid_actions, int) or invalid_actions < 0:
         raise ValueError("invalid_actions 必须为非负整数")
+
+    # 对抗增量聚合（全部可选）：缺省输出 null，缺失不当 0，不参与 verdict 判定
+    reproduction = None
+    if reproduction_parts:
+        attempts = sum(r["attempts"] for r in reproduction_parts)
+        successes = sum(r["successes"] for r in reproduction_parts)
+        reproduction = {"attempts": attempts, "successes": successes,
+                        "rate": round(successes / attempts, 4) if attempts else "NA"}
+    cost = None
+    if cost_parts:
+        cost = {"probes": sum(c["probes"] for c in cost_parts),
+                "minutes": sum(c["minutes"] for c in cost_parts)}
+    unresolved_candidates = _parse_unresolved_candidates(payload)
 
     reasons = []
     if by_severity["blocker"]["detected"] != by_severity["blocker"]["total"]:
@@ -323,6 +399,9 @@ def score_run(run_dir, fixture_path, findings_path, allow_blocked=False):
         "evidence_issues": evidence_issues,
         "obligations_untested": untested,
         "invalid_actions": invalid_actions,
+        "reproduction": reproduction,
+        "cost": cost,
+        "unresolved_candidates": unresolved_candidates,
         "verdict": verdict,
         "reasons": reasons,
         "warnings": warnings,
@@ -359,6 +438,133 @@ def compare_scores(path_a, path_b):
     }
 
 
+def _aggregate_arm(scores):
+    """聚合一臂（同臂多个 run 的 score 列表）为可对比的计数字段。
+
+    只做计数汇总，不产生"质量达标"类结论；复现/成本缺省时输出 None（缺失不当 0）。
+    """
+    detected = {}
+    for severity in SEVERITIES:
+        detected[severity] = sum((s.get("detection") or {}).get(severity, {}).get("detected", 0)
+                                 for s in scores)
+    answer_total = sum(s.get("answer_total") or 0 for s in scores)
+    false_positives = sum(len(s.get("near_miss_hits") or []) for s in scores)
+    fp_categories = {}
+    for s in scores:
+        for category, findings in (s.get("false_positive_categories") or {}).items():
+            fp_categories[category] = fp_categories.get(category, 0) + len(findings or [])
+    repro_parts = [s.get("reproduction") for s in scores if s.get("reproduction")]
+    reproduction = None
+    if repro_parts:
+        attempts = sum(r.get("attempts", 0) for r in repro_parts)
+        successes = sum(r.get("successes", 0) for r in repro_parts)
+        reproduction = {"attempts": attempts, "successes": successes,
+                        "rate": round(successes / attempts, 4) if attempts else "NA"}
+    cost_parts = [s.get("cost") for s in scores if s.get("cost")]
+    cost = None
+    if cost_parts:
+        cost = {"probes": sum(c.get("probes", 0) or 0 for c in cost_parts),
+                "minutes": sum(c.get("minutes", 0) or 0 for c in cost_parts)}
+    return {
+        "runs": len(scores),
+        "run_ids": [s.get("run_id") for s in scores],
+        "verdicts": sorted(str(s.get("verdict") or "") for s in scores),
+        "detected": detected,
+        "detected_total": sum(detected.values()),
+        "answer_total": answer_total,
+        "false_positives": false_positives,
+        "false_positive_categories": fp_categories,
+        "unmatched_findings": sum(len(s.get("unmatched_findings") or []) for s in scores),
+        "obligations_untested": sum(len(s.get("obligations_untested") or []) for s in scores),
+        "invalid_actions": sum(s.get("invalid_actions") or 0 for s in scores),
+        "reproduction": reproduction,
+        "cost": cost,
+        "unresolved_candidates": sum(s.get("unresolved_candidates") or 0
+                                     for s in scores if isinstance(s.get("unresolved_candidates"), int)),
+        "fixture_sha256": sorted({s.get("fixture_sha256") or "" for s in scores}),
+        "protocol_sha256": sorted({s.get("protocol_sha256") or "" for s in scores}),
+        "executors": sorted({(s.get("executor") or {}).get("name") or ""
+                             for s in scores}),
+    }
+
+
+def _derived_metrics(arm):
+    """派生指标（近似口径）：裁定精确率、每百探针有效发现、复现率。
+
+    分母不足（探针/样本过少）时输出 NA，不编造比例；解读纪律见
+    docs/evals-baseline/ab-protocol.md。
+    """
+    precision = "NA"
+    denominator = arm["detected_total"] + arm["false_positives"]
+    if denominator:
+        precision = round(arm["detected_total"] / denominator, 4)
+    per_100_probes = "NA"
+    if arm.get("cost") and (arm["cost"].get("probes") or 0) > 0:
+        per_100_probes = round(arm["detected_total"] / arm["cost"]["probes"] * 100, 2)
+    repro_rate = (arm.get("reproduction") or {}).get("rate") if arm.get("reproduction") else "NA"
+    return {"precision_proxy": precision, "effective_findings_per_100_probes": per_100_probes,
+            "reproduction_rate": repro_rate}
+
+
+def compare_ab(arm_a_dir, arm_b_dir):
+    """审核四 A2：对抗改造前后 A/B 两臂聚合对照。
+
+    两臂各为一个目录，递归收集其中全部 score.json（同臂多 run）。可比性检查：
+    协议/夹具哈希须同臂一致且跨臂一致；执行方跨臂须不同（同执行方存在学习效应）。
+    本函数只产事实与派生指标，不产"改造有效/无效"结论。
+    """
+    def _collect(arm_dir):
+        arm_dir = Path(arm_dir)
+        if not arm_dir.is_dir():
+            raise ValueError(f"臂目录不存在：{arm_dir}")
+        found = sorted(arm_dir.glob("**/score.json"))
+        if not found:
+            raise ValueError(f"臂目录内未找到任何 score.json（须先对各 run 执行 score 子命令）：{arm_dir}")
+        return [_read_json(p) for p in found]
+
+    scores_a = _collect(arm_a_dir)
+    scores_b = _collect(arm_b_dir)
+    arm_a, arm_b = _aggregate_arm(scores_a), _aggregate_arm(scores_b)
+    warnings = []
+    for label, arm in (("A", arm_a), ("B", arm_b)):
+        if len(arm["protocol_sha256"]) > 1:
+            warnings.append(f"臂 {label} 内协议哈希不一致：判据在臂内发生变更，混算无效")
+        if len(arm["fixture_sha256"]) > 1:
+            warnings.append(f"臂 {label} 内夹具哈希不一致：同臂内使用了不同夹具，聚合失真")
+    if arm_a["protocol_sha256"] != arm_b["protocol_sha256"]:
+        warnings.append("两臂协议哈希不同：判据已变，A/B 不可直接对比")
+    if arm_a["fixture_sha256"] != arm_b["fixture_sha256"]:
+        warnings.append("两臂夹具不同：A/B 不可直接对比")
+    if arm_a["answer_total"] != arm_b["answer_total"]:
+        warnings.append(f"两臂答案分母不同（A={arm_a['answer_total']}, B={arm_b['answer_total']}）："
+                        "检出计数不可直接相减")
+    overlap = set(arm_a["executors"]) & set(arm_b["executors"]) - {""}
+    if overlap:
+        warnings.append(f"两臂存在同一执行方：{sorted(overlap)}——存在学习效应，须独立执行方或交错顺序")
+
+    delta = {
+        "detected_total": arm_b["detected_total"] - arm_a["detected_total"],
+        "false_positives": arm_b["false_positives"] - arm_a["false_positives"],
+        "unresolved_candidates": arm_b["unresolved_candidates"] - arm_a["unresolved_candidates"],
+        "obligations_untested": arm_b["obligations_untested"] - arm_a["obligations_untested"],
+        "by_severity": {sev: arm_b["detected"][sev] - arm_a["detected"][sev]
+                        for sev in SEVERITIES},
+    }
+    derived = {"A": _derived_metrics(arm_a), "B": _derived_metrics(arm_b)}
+    return {
+        "arm_a": arm_a,
+        "arm_b": arm_b,
+        "delta": delta,
+        "derived": derived,
+        "warnings": warnings,
+        "comparable": not any("不可直接" in w or "混算无效" in w or "聚合失真" in w
+                              for w in warnings),
+        "scope": ("A/B 聚合对照只产事实与派生指标；判定改造是否有效须结合 "
+                  "docs/evals-baseline/ab-protocol.md 的样本与解读纪律，"
+                  "不得由本输出自动推断"),
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="独立盲测：准备/隔离检查/计分/对照")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -383,6 +589,10 @@ def main(argv=None):
     p_cmp.add_argument("--a", required=True)
     p_cmp.add_argument("--b", required=True)
 
+    p_ab = sub.add_parser("ab", help="A/B 两臂聚合对照（各为一目录，含多 run 的 score.json）")
+    p_ab.add_argument("--arm-a", required=True, help="改造前（基线）臂目录")
+    p_ab.add_argument("--arm-b", required=True, help="改造后（对抗）臂目录")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
@@ -395,6 +605,8 @@ def main(argv=None):
         elif args.command == "score":
             print(json.dumps(score_run(args.run, args.fixture, args.findings, args.allow_blocked),
                              ensure_ascii=False, indent=2))
+        elif args.command == "ab":
+            print(json.dumps(compare_ab(args.arm_a, args.arm_b), ensure_ascii=False, indent=2))
         else:
             print(json.dumps(compare_scores(args.a, args.b), ensure_ascii=False, indent=2))
     except (ValueError, OSError, json.JSONDecodeError) as exc:

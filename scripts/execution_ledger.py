@@ -21,6 +21,10 @@ STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED"}
 SEVERITIES = {"blocker", "major", "normal", "minor"}
 BUG_STATES = {"open", "in_progress", "fixed_pending_deploy", "fixed_pending_retest", "reopened", "closed"}
 CAUSES = {"none", "product", "environment", "data", "automation", "unknown"}
+# 证据等级门禁（对齐 blind_eval 的 grade != "E1" 不计检出）：
+# result.json 可选字段 evidence_grade（E1/E2/E3）。未提供时完全兼容旧格式（不校验）；
+# 提供时 PASS 必须携带 E1 证据，E2/E3 不得记 PASS。
+EVIDENCE_GRADES = {"E1", "E2", "E3"}
 
 
 try:
@@ -104,6 +108,71 @@ CHECK_STATUSES = {"passed", "warning", "failed"}
 # design_hash / policy_version / scope / required_checks，否则保持“待核实”，
 # 不得凭“status=pass + 用例数相同”推定是同一份设计。旧报告按兼容模式显式标注。
 BINDING_FIELDS = ("design_hash", "policy_version", "scope", "required_checks")
+
+
+def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, case_count=None):
+    """对抗门禁进门条件：记录对抗结论并压结论上限（不拒绝建账，保持旧行为兼容）。
+
+    豁免不得自授即通过：waiver 只能把上限从"待核实"降到"待核实（已豁免）"，
+    且必须同时满足可机械核验的条件（read_only=True 且 case_count 不超阈），
+    否则即使给了 waiver 也保持"待核实"——避免任意理由字符串跳过全部对抗。
+
+    返回值写入 baseline.gate_precondition，由 summarize 机械压制 verdict_ceiling：
+    - 提供 adversarial_gate 且 adversarial_enabled=true → 采用其 verdict_ceiling；
+    - 提供但 adversarial_enabled=false（空 plan）→ 无豁免待核实；有合资格豁免则标 waived；
+    - 未提供 → 无豁免待核实；有合资格豁免标 waived。
+    """
+    def _valid_waiver(reason):
+        """豁免必须挂可机械核对的依据：只读且规模小。返回 (ok, 说明)。"""
+        if not (reason and str(reason).strip()):
+            return False, "未提供豁免理由"
+        if not read_only:
+            return False, "本轮含写操作（read_only=False）：不允许通过豁免跳过对抗"
+        if case_count is None or case_count > WAIVER_MAX_CASES:
+            return False, (f"本轮用例数 {case_count} 超豁免阈 {WAIVER_MAX_CASES}："
+                           f"豁免仅限纯只读小任务，大任务必须执行对抗")
+        return True, ""
+
+    reason = str(waiver).strip() if waiver else ""
+    ok, why = _valid_waiver(reason)
+    if adversarial_gate is None:
+        if ok:
+            return {"adversarial_state": "waived", "adversarial_ceiling": "待核实",
+                    "adversarial_waiver": reason,
+                    "adversarial_reasons": [f"豁免成立（只读且 {case_count} 条 ≤ {WAIVER_MAX_CASES}）：{reason}；"
+                                            "但未执行对抗，结论上限仍为待核实，不得写通过"]}
+        return {"adversarial_state": "missing", "adversarial_ceiling": "待核实",
+                "adversarial_reasons": ["未提供对抗门禁结论：对抗循环为产出技术结论批次的必选项；"
+                                        "请以 --enforce 运行 scripts/adversarial_gate.py 并传入 --adversarial-gate"
+                                        + (f"（豁免不成立：{why}）" if reason else "")]}
+    if not isinstance(adversarial_gate, dict):
+        raise ValueError("adversarial gate must be a JSON object（adversarial_gate.py 的结论输出）")
+    ceiling = adversarial_gate.get("verdict_ceiling")
+    if ceiling not in {"通过", "待核实", "不通过"}:
+        raise ValueError("adversarial gate 缺 verdict_ceiling（需为 通过/待核实/不通过）")
+    enabled = adversarial_gate.get("adversarial_enabled")
+    if enabled is None:
+        raise ValueError("adversarial gate 缺 adversarial_enabled 标记")
+    reasons = adversarial_gate.get("reasons")
+    if not isinstance(reasons, list):
+        raise ValueError("adversarial gate 缺 reasons 数组（须原样呈现，不得隐矞原因）")
+    info = {"adversarial_state": "verified" if enabled else "not_enabled",
+            "adversarial_ceiling": ceiling, "adversarial_enabled": bool(enabled),
+            "adversarial_reasons": list(reasons)}
+    if not enabled:
+        # 空 plan 送到门禁（未 --enforce 直放行）不得当作已完成对抗
+        if ok:
+            info["adversarial_state"] = "waived"
+            info["adversarial_ceiling"] = "待核实"  # 豁免不得抬高到通过
+            info["adversarial_waiver"] = reason
+            info["adversarial_reasons"] = list(reasons) + [
+                f"豁免成立（只读且 {case_count} 条）：{reason}；但对抗未执行，上限仍待核实"]
+        else:
+            info["adversarial_ceiling"] = "待核实"
+            info["adversarial_reasons"] = list(reasons) + [
+                "对抗未启用（adversarial_enabled=false）且豁免不成立：结论上限待核实"
+                + (f"（{why}）" if reason else "")]
+    return info
 
 
 def _gate_precondition(batches, gate_report, design_ids=None, design=None):
@@ -209,12 +278,17 @@ def _ensure_gitignore(workspace):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None):
+def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
+               adversarial_gate=None, adversarial_waiver=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
     _bugs(known_issues)
     gate_precondition = _gate_precondition(batches, gate_report, list(cases), design)
+    # 只读豁免条件从 context.dependency_mode 与用例数机械判定，不信理由文本
+    read_only = context.get("dependency_mode") in {"replay", "mock"}
+    gate_precondition.update(_adversarial_precondition(
+        adversarial_gate, adversarial_waiver, read_only=read_only, case_count=len(cases)))
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
@@ -315,12 +389,17 @@ def begin(workspace, design, context, attempt_id, case_id, intended_action):
         return _append(workspace, events, "BEGIN", {"attempt_id": attempt_id, "case_id": case_id, "round_id": baseline["round_id"], "intended_action": intended_action})
 
 
-def finish(workspace, design, context, attempt_id, status, actual, evidence_paths, assertions, cause, bug_ids, cleanup):
+def finish(workspace, design, context, attempt_id, status, actual, evidence_paths, assertions, cause, bug_ids, cleanup, evidence_grade=None):
     _text(attempt_id, "attempt_id")
     _text(actual, "actual")
     _text(cleanup, "cleanup")
     if status not in STATUSES or status == "NOT_RUN" or cause not in CAUSES:
         raise ValueError("invalid finished status/cause")
+    if evidence_grade is not None:
+        if evidence_grade not in EVIDENCE_GRADES:
+            raise ValueError(f"invalid evidence_grade {evidence_grade!r}: must be one of E1/E2/E3")
+        if status == "PASS" and evidence_grade in {"E2", "E3"}:
+            raise ValueError(f"evidence_grade={evidence_grade} 与 status=PASS 冲突：PASS 须 E1 证据，E2/E3 请记 BLOCKED 或降级")
     if not isinstance(bug_ids, list) or any(not isinstance(x, str) or not x.strip() for x in bug_ids):
         raise ValueError("bug_ids must be string array")
     if not isinstance(assertions, list) or any(not isinstance(x, dict) or not isinstance(x.get("check"), str) or not x["check"].strip() or "actual" not in x or type(x.get("matched")) is not bool for x in assertions):
@@ -354,7 +433,34 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
             actual_checks = {item["check"] for item in assertions}
             if expected_checks != actual_checks or len(actual_checks) != len(assertions):
                 raise ValueError("result assertions must cover all designed checks exactly once")
-        return _append(workspace, events, "FINISH", {"attempt_id": attempt_id, "case_id": started["case_id"], "round_id": baseline["round_id"], "status": status, "actual": actual, "evidence": evidence, "assertions": assertions, "cause": cause, "bug_ids": bug_ids, "cleanup": cleanup})
+        payload = {"attempt_id": attempt_id, "case_id": started["case_id"], "round_id": baseline["round_id"], "status": status, "actual": actual, "evidence": evidence, "assertions": assertions, "cause": cause, "bug_ids": bug_ids, "cleanup": cleanup}
+        if evidence_grade is not None:
+            payload["evidence_grade"] = evidence_grade
+        return _append(workspace, events, "FINISH", payload)
+
+
+RANK = {"通过": 0, "待核实": 1, "不通过": 2}
+# 豁免上限：超过该用例数的批次必须执行对抗，不得凭理由跳过
+WAIVER_MAX_CASES = 5
+
+
+def _strictest(a, b):
+    return max((a, b), key=lambda x: RANK.get(x, 1))
+
+
+def _verdict_ceiling(baseline, counts, executed):
+    """机械结论上限：由台账事实与对抗门禁共同限定，不由人工宣称。
+
+    对齐 agent 口径：存在未闭环 blocker（FAIL）→ 不通过；对抗缺失/未启用或
+    存在 BLOCKED/未执行 → 待核实；全部必选项已实测且对抗已验证 → 通过。
+    """
+    gate = (baseline.get("gate_precondition") or {})
+    adversarial = gate.get("adversarial_ceiling", "待核实")
+    if counts.get("FAIL"):
+        return "不通过"
+    fact = "待核实" if (counts.get("BLOCKED") or counts.get("NOT_RUN")
+                          or counts.get("SKIPPED") or executed == 0) else "通过"
+    return _strictest(fact, adversarial)
 
 
 def summarize(workspace, design, context, bugs=None):
@@ -420,7 +526,7 @@ def summarize(workspace, design, context, bugs=None):
         bug_delta = {"new_ids": sorted(current_open - all_old), "still_open_ids": sorted(current_open & old_open), "closed_ids": sorted(b["id"] for b in bugs if b["id"] in old_open and b["status"] == "closed"), "missing_from_current": sorted(old_open - {b["id"] for b in bugs})}
     linked = {bug_id for event in events if event["kind"] == "FINISH" for bug_id in event["bug_ids"]}
     missing_bugs = None if bugs is None else sorted(linked - {b["id"] for b in bugs})
-    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
+    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "verdict_ceiling": _verdict_ceiling(baseline, counts, executed), "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
 
 
 def _load(path):
@@ -440,6 +546,8 @@ def main():
             part.add_argument("--bugs")
             part.add_argument("--batches", help="case-generator 的 batches.json；未闭环时拒绝建台账")
             part.add_argument("--gate-report", help="设计门禁报告；fail 时拒绝建台账")
+            part.add_argument("--adversarial-gate", help="adversarial_gate.py 结论输出；未提供且未豁免时拒绝建台账")
+            part.add_argument("--adversarial-waiver", help="对抗循环豁免理由（纯只读小任务可用，留痕）")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -455,7 +563,9 @@ def main():
             result = initialize(args.workspace, design, context, args.round_id,
                                 _load(args.bugs) if args.bugs else None,
                                 _load(args.batches) if args.batches else None,
-                                _load(args.gate_report) if args.gate_report else None)
+                                _load(args.gate_report) if args.gate_report else None,
+                                _load(args.adversarial_gate) if args.adversarial_gate else None,
+                                args.adversarial_waiver)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

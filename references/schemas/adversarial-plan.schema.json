@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "adversarial-plan",
+  "description": "对抗循环伴随契约：风险面（SURF）、判据（ORC）、对抗义务（ADV）与来源指纹冻结。机器校验以 scripts/adversarial_data.py 为准（标准库实现，本文件为形态说明）。",
+  "type": "object",
+  "required": ["schema_version", "plan_id", "source_fingerprints", "surfaces", "oracles", "obligations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "plan_id": { "type": "string", "pattern": "^ADVPLAN-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+    "source_fingerprints": {
+      "type": "object",
+      "required": ["material", "cases_json"],
+      "additionalProperties": false,
+      "properties": {
+        "material": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "cases_json": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "surfaces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "entry", "role", "state", "data", "dependencies", "failure_hypothesis", "risk"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^SURF-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+          "entry": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "minLength": 1 },
+          "data": { "type": "string", "minLength": 1 },
+          "dependencies": { "type": "string", "minLength": 1 },
+          "failure_hypothesis": { "type": "string", "minLength": 1 },
+          "risk": { "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "oracles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "observation_entry", "applicable_condition"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^ORC-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+          "source": { "enum": ["REQ", "AC", "contract", "invariant", "req_issue"] },
+          "source_ref": { "type": "string" },
+          "observation_entry": { "type": "string", "minLength": 1 },
+          "applicable_condition": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "surface_ref", "oracle_ref", "probe_type", "budget", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^ADV-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+          "surface_ref": { "type": "string", "pattern": "^SURF-" },
+          "oracle_ref": { "type": "string", "pattern": "^ORC-" },
+          "probe_type": { "enum": ["challenge", "fault_injection", "timing", "permission"] },
+          "budget": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["planned", "executed", "cancelled"] },
+          "cancel_reason": { "type": "string" },
+          "method": {
+            "enum": ["equivalence", "boundary", "decision_table", "state_transition", "combinatorial",
+                     "differential", "metamorphic", "fault_injection", "concurrency", "rollback"],
+            "description": "所用测试方法（方法库稳定 ID，见 references/probe-playbook.md B 节）"
+          },
+          "playbook_ref": {
+            "type": "string",
+            "pattern": "^P([1-9]|1[0-5])$",
+            "description": "所用坑点探针模板（挑刺清单 A 节 P1~P15）"
+          }
+        }
+      }
+    }
+  }
+}

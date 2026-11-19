@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "finding-reviews",
+  "description": "候选复核记录：finding_id 定位候选，verdict 为 accepted/rejected/unresolved 三态；accepted 才可建正式缺陷（tie_to_bug 关联 BUG-），unresolved 不计有效缺陷也不计误报。severity 供对抗补充门禁（scripts/adversarial_gate.py）判定 blocker/major 未闭环。",
+  "type": "object",
+  "required": ["finding_id", "verdict", "reviewer", "rationale"],
+  "additionalProperties": false,
+  "properties": {
+    "finding_id": { "type": "string", "pattern": "^FIND-[A-Za-z0-9][A-Za-z0-9_.:-]*$" },
+    "verdict": { "enum": ["accepted", "rejected", "unresolved"] },
+    "reviewer": { "type": "string", "minLength": 1 },
+    "rationale": { "type": "string", "minLength": 1 },
+    "tie_to_bug": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^(BUG|API|FIG)-[A-Za-z0-9][A-Za-z0-9_.:-]*$" }
+      ]
+    },
+    "severity": { "enum": ["blocker", "major", "normal", "minor"] },
+    "reviewed_at": { "type": "string" }
+  }
+}
