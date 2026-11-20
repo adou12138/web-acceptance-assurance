@@ -1,7 +1,7 @@
 {
   "schema": "ab-run-matrix/1",
-  "matrix_id": "M1-2026-11-21",
-  "frozen_at": "2026-11-21",
+  "matrix_id": "M1-2026-11-20",
+  "frozen_at": "2026-11-20",
   "note": "本矩阵为预注册。出分后不得改夹具、重复数、阈值或预算；如需变更，另立矩阵 ID 并同时披露。",
   "protocol": "docs/evals-baseline/detection-protocol.md",
   "scoring": "docs/evals-baseline/ab-protocol.md",
