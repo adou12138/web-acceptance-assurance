@@ -402,5 +402,56 @@ class EvidenceAndGate(unittest.TestCase):
         self.assertEqual(json.loads(out_json.read_text(encoding="utf-8"))["verdict"], "待核实")
 
 
+class CountsKeyPresenceTests(unittest.TestCase):
+    """DEV-1119-02：无证据时 fail 键曾直接消失。
+
+    实测：同一批 5 条真实失败，无 evidence 时 counts 里看不到 fail 键
+    （{pass, not_evaluable, pending_evidence, advisory}），只看 counts 会读成「零失败」。
+    键缺失比值为 0 更误导：0 表明「检查过且为 0」，缺键表明「这一维没进入视野」。
+    """
+
+    def setUp(self):
+        self.u = load()
+
+    def _one_pass_record(self):
+        return {"id": "t1", "page": "p", "kind": "text_normal",
+                "foreground": "rgb(0, 0, 0)", "background": "rgb(255, 255, 255)",
+                "background_source": "solid", "font_size_px": 14, "font_weight": 400,
+                "evidence": ["shot.png"]}
+
+    def test_fail_key_present_when_zero(self):
+        report = self.u.evaluate([self._one_pass_record()])
+        self.assertIn("fail", report["counts"])
+        self.assertEqual(report["counts"]["fail"], 0)
+
+    def test_all_status_keys_present(self):
+        report = self.u.evaluate([self._one_pass_record()])
+        for key in self.u.RESULT_STATUSES:
+            self.assertIn(key, report["counts"], f"counts 缺 {key} 键")
+
+    def test_pending_evidence_also_present_when_zero(self):
+        report = self.u.evaluate([self._one_pass_record()])
+        self.assertIn("pending_evidence", report["counts"])
+        self.assertEqual(report["counts"]["pending_evidence"], 0)
+
+    def test_false_positive_key_present_when_zero(self):
+        """ROUND-2 自查发现：恒显列表漏了 false_positive。
+
+        人工裁定误报后 status 会被改成 false_positive，于是「有误报时该键在、无误报时
+        该键消失」——正是本题要修的「键缺失代替 0」，只是换了个状态。误报率是报告首屏
+        指标，它的分子项尤其不能隐身。
+        """
+        report = self.u.evaluate([self._one_pass_record()])
+        self.assertIn("false_positive", report["counts"])
+        self.assertEqual(report["counts"]["false_positive"], 0)
+
+    def test_status_list_covers_every_written_status(self):
+        """RESULT_STATUSES 必须覆盖代码实际会写入的每个 status，否则新增状态又会隐身。"""
+        report = self.u.evaluate([self._one_pass_record()], {"t1": "false_positive"})
+        self.assertEqual(report["counts"]["false_positive"], 1)
+        # counts 的键集合应恰好等于声明集（多一个少一个都说明两边漂移了）
+        self.assertEqual(set(report["counts"]), set(self.u.RESULT_STATUSES))
+
+
 if __name__ == "__main__":
     unittest.main()

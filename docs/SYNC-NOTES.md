@@ -655,6 +655,40 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 版本 1.41.0（v1.40.0→1.41.0）；480 tests + 217 subtests 全绿（新增 61 例：attack_coverage 12、execution_ledger 9、phase_gate 9、exploration 若干、ui_metrics 30）。
 
+## v1.43.0（2026-11-20）：修 v1.42.0 真跑暴露的门禁断链
+
+来源：2026-11-19 一次完整三阶段真实验收（agent.wjx.cn）自评出 13 条装置问题。本轮修其中 6 条，其余按设计权衡保留并在装置清单中登记理由。原则是**只修「守规矩的人被罚、违规的人被放过」的结构性问题**，不动业务判定口径。
+
+| 编号 | 问题 | 修法 | 兼容性 |
+|---|---|---|---|
+| DEV-01 | `finish()` 的 `ATTACK_FIELDS` 不含 `hypothesis`，而 `attack_coverage.py` 从台账读它 → 守规矩者必被判「无假设」；实测代价是手工回写 JSONL 导致 20 行 digest 全损、整份台账作废 | 白名单补 `hypothesis`/`hypothesis_outcome` + 成对校验（给一不给一即拒） | 新字段可选，旧台账照常可读 |
+| DEV-02 | 无证据时 `counts` 里 `fail` 键直接消失，只看 `counts` 会读成「零失败」 | 状态键恒显（含 0），键集合抽成 `RESULT_STATUSES` 常量并与代码实际写入值逐一对齐 | 仅增键，不删不改既有值 |
+| DEV-07 | `complete` 无 `--artifact`，`plan.artifacts` 恒空，交接包输出「（未登记产物路径）」；产物还被记到下一阶段名下串账 | `complete` 增 `--artifact`（可重复），**追加**而非覆盖；路径校验与 `submit` 同强度（只认真实绝对路径） | 不传即保持原行为 |
+| DEV-08 | SKILL 把探索清单 gate 写成硬前置，但 `phase_gate.py` 里 grep 不到 `exploration`——规则只在文档里。实测：未生成清单，三步收尾全过零告警 | `complete`/`check-verdict` 接线 `exploration_state.summarize()['gate']`；缺失压上限且缺口原样透出 | 缺省只压上限不报错，存量状态可加载 |
+| DEV-09 | 装置分不清「产品方需求」与「测试者自造需求」：`source` 写了「无独立产品需求文档」，装置读到却让 `blocking=[]`、`go_ahead` 全放行、`review_check` 仍 pass | `requirement` 增 `source_type`；派生型强制 `blocking` 非空，全量放行告警 | 字段**可选**，缺省仅 warning；存量评审 0 error |
+| DEV-12 | `amend` 子命令一调即崩（`args.session` 未定义），而协议强制「必须走 amend」 | argparse 补 `--session` | 纯新增参数 |
+| DEV-13 | execute 在 S2 冻结快照，S3 补齐后重跑得「通过」却无法回写 → `check-verdict` 永远读过期快照 | 新增 `revise` 子命令：只对 **execute** 补正、不改状态与 `completed_at`、写 `history` 留痕；**默认拒绝把未通过结论升级为「通过」**（须 `--allow-relax` 并留痕） | 新命令，不改变既有路径 |
+
+配套：`ui_measure.js` 拆出宿主无关的 `collectInDocument()` 与 `measureInDocument()`（DEV-03），`measure(page)` 签名不变——采集逻辑逐行零漂移（规范化比对 5537 字符全等）；`visual-usability.md` 明写禁用程序化 `focus()` 测焦点（DEV-04）；`phase-workflow.md` 与主提示词补「授权模式决定的天花板」三档表（DEV-11）。
+
+**保留未修（设计权衡，非缺陷）**：DEV-05（`unknown` 背景占 56%，保守起见不向上合成，只在报告披露覆盖率）、DEV-06（`finish()` 拒绝 `NOT_RUN`，防「声称跑过」，建议单列未执行原因而非放宽）、DEV-10（结论上限未随 CSV 传递，属产物层约定）。
+
+### 复审轮（v1.43.0 代码审核后追加的修正）
+
+首轮实施完成后对同一批改动做了逐行复审，发现 5 条自身引入或同族遗留的缺陷，已修：
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| R-01 | `revise` 的 docstring 声称「只允许补正为更严或更准」，但代码无任何拦截——实测可把 `attack_coverage` 从「不通过」直接洗成「通过」，等于给门禁开后门 | 默认拒绝「升级为通过」，须 `--allow-relax` 显式放行；`history.detail.transitions` 留痕。**首版修过头**：按"好坏排序"一刀切，把合法的「不通过↔待核实」也拦了，复审时改正为只拦升级为通过 |
+| R-02 | `revise` 不校验阶段，可给 `plan`/`adjudicate` 写 `attack_coverage`；而 `check_verdict` 只读 `execute` → 写入的是门禁看不见的死数据，却会让人以为"已补正" | 限定仅 `execute`，其他阶段直接报错（实测确认过 plan 写入后无任何门禁消费） |
+| R-03 | `_exploration_check` 只接受 `通过/待核实` 两种取值，与 `_attack_check` 的三种不一致；传「不通过」时报「缺 verdict_ceiling」——字段明明在，是取值不在白名单，报错误导 | 抽出 `CEILINGS` 常量，两个检查器共用 |
+| R-04 | `ui_metrics` 的恒显键列表漏了 `false_positive`：有误报时该键在、无误报时消失，正是本项要修的「键缺失代替 0」，只是换了个状态。误报率是首屏指标，分子项尤其不能隐身 | 抽 `RESULT_STATUSES` 常量，与代码实际写入的 6 个状态逐一对齐 |
+| R-05 | 上游数据自相矛盾时（`ceiling=通过` 却带着非空 `gaps`）被直接放过——「通过」只是个词，缺口才是机械可核对的 | `_attack_check` / `_exploration_check` 均按缺口从严降为「待核实」。`_attack_check` 这条是原有缺陷，同族一并修 |
+
+另修：`complete` 在非 execute 阶段收到 `--attack-coverage`/`--exploration` 时**静默丢弃**（调用方以为交了、实际没进任何门禁），改为报错；`--artifact` 的 argparse `default=[]` 改为 `None`（append 的共享 list 陷阱）；CLI 帮助里的 `relaxed_from` 更正为实际字段名 `transitions`。
+
+**验证**：`tests/` 569 passed / 0 failed；真产物串链冒烟两轮（`exploration_state.summarize → phase_gate._exploration_check` 达「通过」且 0 缺口）；存量 `phase-state.json` 可加载、篡改仍被哈希链检出。复审新增 6 项测试覆盖 R-01~R-05（升级为通过须放行、收紧/平移不拦、非 execute 拒绝、占位产物拒绝、`false_positive` 键恒显、状态集与写入集一致）。
+
 ## v1.42.0（2026-11-19）：把考核对象从「记录形状」换成「失效构造」
 
 **触发**：v1.41.0 拿真实数据实测审核，8 项自述声明只有 3 项成立；真实登录页 16 条界面 fail 里 11 条（68.75%）是工具算错的；817 行真实台账按新口径 0 行可用。根因是上轮 14 条整改**全是给流程加锁、0 条增加检测能力**——门禁只能减少虚报，不能增加发现。

@@ -482,7 +482,11 @@ def begin(workspace, design, context, attempt_id, case_id, intended_action):
 
 
 ATTACK_FIELDS = ("path_type", "surf_id", "method", "oracle_source", "oracle_channel",
-                 "discovery_mode", "probes")
+                 "discovery_mode", "probes", "hypothesis", "hypothesis_outcome")
+# hypothesis / hypothesis_outcome 必须走 finish() 落进台账：attack_coverage.py 从台账读它们
+# 判「高风险面是否有可证伪预测」。若只由调用方手工回写 JSONL，会破坏 digest 哈希链
+# （每一步 _append 都以整条 payload 计算 digest），等于用违规换取门禁通过。
+HYPOTHESIS_OUTCOMES = ("broken", "held", "blocked")
 SURF_ID_RE = re.compile(r"^SURF-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
@@ -543,6 +547,18 @@ def _attack_fields(attack, evidence_paths):
         if type(probes) is not int or probes < 0:
             raise ValueError("attack.probes 必须为非负整数（本用例实际发出的探针数）")
         out["probes"] = probes
+    if "hypothesis" in attack:
+        _text(attack["hypothesis"], "attack.hypothesis")
+        out["hypothesis"] = attack["hypothesis"].strip()
+    if "hypothesis_outcome" in attack:
+        value = str(attack["hypothesis_outcome"]).strip().lower()
+        if value not in HYPOTHESIS_OUTCOMES:
+            raise ValueError(f"attack.hypothesis_outcome 必须为 {list(HYPOTHESIS_OUTCOMES)} 之一")
+        out["hypothesis_outcome"] = value
+    if out.get("hypothesis") and not out.get("hypothesis_outcome"):
+        raise ValueError("给了 hypothesis 就必须给 hypothesis_outcome（broken/held/blocked）")
+    if out.get("hypothesis_outcome") and not out.get("hypothesis"):
+        raise ValueError("给了 hypothesis_outcome 就必须给 hypothesis（原预测文本）")
     return out
 
 

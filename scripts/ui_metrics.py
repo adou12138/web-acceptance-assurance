@@ -79,6 +79,12 @@ LEGACY_KINDS = {"text_spacing": (
 BACKGROUND_SOURCES = ("solid", "image", "gradient", "unknown")
 RULINGS = ("confirmed", "exception", "false_positive", "pending")
 
+# 结果状态全集（counts 恒显这些键）。必须覆盖 _single() 与 _apply_rulings() 会写出的
+# 每一个 status，否则该状态在计数为 0 时从 counts 里消失——人工裁定误报后
+# status 会被改成 false_positive，它曾漏在这张表外。
+RESULT_STATUSES = ("pass", "fail", "pending_evidence", "not_evaluable", "advisory",
+                   "false_positive")
+
 RGB_RE = re.compile(r"^rgba?\(([^)]+)\)$", re.I)
 HEX_RE = re.compile(r"^#([0-9a-f]{3,8})$", re.I)
 WEIGHT_WORDS = {"normal": 400, "bold": 700, "bolder": 700, "lighter": 300}
@@ -388,6 +394,14 @@ def evaluate(records, rulings=None):
     counts = {}
     for item in results:
         counts[item["status"]] = counts.get(item["status"], 0) + 1
+    # counts 的每个状态键恒显（含 0）：曾出现「同一批 5 条真实失败，无证据时 counts 里
+    # 连 fail 键都不存在」，读者只看 counts 会读成「零失败」。键缺失比数字 0 更误导，
+    # 因为 0 至少表明"检查过且为 0"，而缺键表明"这一维没进入视野"。
+    # 键集合必须与 _single()/_apply_rulings 实际会写入的状态**逐一对齐**——漏掉一个
+    # 就等于把该状态重新变成"隐身"：false_positive 就曾漏在这里（人工裁定误报后该键
+    # 才出现，为零时消失，正是本条要修的病）。新增状态时同步改 RESULT_STATUSES。
+    for _status in RESULT_STATUSES:
+        counts.setdefault(_status, 0)
     judged = sum(1 for item in results if item["ruling"] in ("confirmed", "exception",
                                                             "false_positive"))
     false_positive = sum(1 for item in results if item["ruling"] == "false_positive")

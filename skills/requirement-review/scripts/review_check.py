@@ -51,6 +51,9 @@ REQ_ISSUE_TYPES = {"missing", "conflict", "hidden_assumption", "business_sanity"
 REQ_ISSUE_NONE = "none"
 P_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 P_TZ = re.compile(r"(Z|[+-]\d{2}:\d{2})$")
+# 需求来源性质：产品方提供 vs 测试者反推。派生型不得宣告零阻塞/全量放行。
+SOURCE_TYPES = {"product_doc", "stakeholder_interview", "inferred_from_ui", "derived_from_prior"}
+DERIVED_SOURCE_TYPES = {"inferred_from_ui", "derived_from_prior"}
 SCORE_KEYS = re.compile(r"score|grade|weight|percent|rating", re.IGNORECASE)
 
 
@@ -145,6 +148,31 @@ def check(data):
         ts = str(req.get("reviewed_at") or "")
         if ts and not P_TZ.search(ts):
             _err(errors, "requirement.reviewed_at: 需带时区（Z 或 ±HH:MM）")
+        # 需求来源性质（DEV-1119-09）：装置此前分不清「产品方需求」与「测试者自造需求」。
+        # 实测代价：评审材料里 source 如实写了「无独立产品需求文档」4 处，装置读到却不改变
+        # 任何结果——blocking=[]、go_ahead 全 15 项放行、review_check 仍 pass，于是「评审通过」
+        # 退化成「自造材料内部自洽+格式合规」，整条链的根节点不是产品需求却环环盖章。
+        # 兼容策略：字段缺省只 warning（存量数据不失效），但一旦声明为派生型就强制约束。
+        stype = req.get("source_type")
+        if stype is None:
+            _warn(warnings, "requirement.source_type 未声明：无法区分产品方需求与派生需求，"
+                            "本次评审依据性质未知（存量数据按 warning 处理，新批次须补齐）")
+        elif not isinstance(stype, str) or stype not in SOURCE_TYPES:
+            _err(errors, f"requirement.source_type: 须为 {sorted(SOURCE_TYPES)} 之一，got {stype!r}")
+        elif stype in DERIVED_SOURCE_TYPES:
+            # 派生型需求：不允许「零阻塞 + 全量放行」，否则等于拿自造假设当验收标准
+            if not (data.get("blocking") or []):
+                _err(errors, f"requirement.source_type={stype} 属派生需求，"
+                              "但 blocking 为空：派生需求必须列出缺依据的判定，不得宣告零阻塞")
+            _ga = data.get("go_ahead") or []
+            # features 的键是 feature_id（不是 id）；两种都兼容，避免同仓两套写法再打架
+            _feats = {f.get("feature_id") or f.get("id")
+                      for f in (data.get("features") or []) if isinstance(f, dict)}
+            _feats.discard(None)
+            if _feats and _ga and set(_ga) >= _feats:
+                _warn(warnings, f"requirement.source_type={stype} 属派生需求，"
+                                f"但 go_ahead 放行了全部 {len(_feats)} 个功能点："
+                                "请确认无「依据不足」项，或改为条件放行")
     else:
         _err(errors, "requirement: object required")
 

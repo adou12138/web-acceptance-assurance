@@ -28,13 +28,20 @@ const SPACING_OVERRIDE_CSS = `
 const INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role="button"],' +
   '[role="tab"],[role="link"],[role="menuitem"],[onclick],[tabindex]:not([tabindex="-1"])';
 
-async function measure(page, options = {}) {
-  const pageName = options.page || (await page.url());
-  const limit = options.limit || 400;
-  const spacingCss = options.spacingCss || 'body, body * { line-height: 1.5 !important; ' +
-    'letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }';
-  // 注意：页面上下文里拿不到外层变量，所有参数必须显式传进去（曾因漏传 options 直接抛错）
-  const data = await page.evaluate(({ pageName, limit, INTERACTIVE, spacingCss }) => {
+/**
+ * 页面内取数的纯函数：只依赖当前 document，不依赖 Playwright。
+ *
+ * 为什么要拆出来（DEV-1119-03）：measure() 强依赖 page.evaluate，而实测环境里
+ * Playwright 实例与已登录浏览器不是同一个、profile 登录态也已失效，官方取数脚本
+ * 根本跑不动——只能临时把 page.evaluate 内部逻辑抄一份改宿主，抄出的副本会与主逻辑
+ * 漂移。拆成纯函数后，Playwright 与 DevTools 等任意宿主共用同一份判定输入。
+ *
+ * 用法（DevTools / 任何能在页面上下文求值的地方）：
+ *     const fn = collectInDocument.toString();          // 连同函数体一起取出
+ *     const raw = await page.evaluate(fn, { pageName: location.href });
+ * 返回数组（未序列化）；measure() 会再 JSON.stringify。
+ */
+function collectInDocument({ pageName, limit, INTERACTIVE, spacingCss }) {
     const out = [];
 
     const style = (el) => getComputedStyle(el);
@@ -206,9 +213,40 @@ async function measure(page, options = {}) {
     });
 
     return out;
-  }, { pageName, limit, INTERACTIVE, spacingCss });
 
+}
+
+async function measure(page, options = {}) {
+  const pageName = options.page || (await page.url());
+  const limit = options.limit || 400;
+  const spacingCss = options.spacingCss || 'body, body * { line-height: 1.5 !important; ' +
+    'letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }';
+  // 注意：页面上下文里拿不到外层变量，所有参数必须显式传进去（曾因漏传 options 直接抛错）
+  const data = await page.evaluate(collectInDocument,
+    { pageName, limit, INTERACTIVE, spacingCss });
   return JSON.stringify(data, null, 1);
 }
 
-module.exports = { measure, SPACING_OVERRIDE_CSS };
+/**
+ * 宿主无关入口：调用方自己提供 evaluate 适配器（DevTools MCP / Puppeteer / 注入脚本）。
+ * 返回与 measure() 相同结构的 JSON 字符串，可直接喂给 scripts/ui_metrics.py。
+ *
+ *   const raw = await measureInDocument({
+ *     evaluate: (fn, arg) => devtoolsEvaluate(fn, arg),
+ *     page: 'https://...',
+ *   });
+ */
+async function measureInDocument(options = {}) {
+  if (typeof options.evaluate !== 'function') {
+    throw new Error('measureInDocument: 需要 options.evaluate(fn, arg) 适配器');
+  }
+  const pageName = options.page || '(unknown)';
+  const limit = options.limit || 400;
+  const spacingCss = options.spacingCss || 'body, body * { line-height: 1.5 !important; ' +
+    'letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }';
+  const data = await options.evaluate(collectInDocument,
+    { pageName, limit, INTERACTIVE, spacingCss });
+  return JSON.stringify(data, null, 1);
+}
+
+module.exports = { measure, measureInDocument, collectInDocument, SPACING_OVERRIDE_CSS };

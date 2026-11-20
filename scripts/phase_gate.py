@@ -31,6 +31,9 @@ PHASES = ("plan", "execute", "adjudicate")
 NEXT_PHASE = {"plan": "execute", "execute": "adjudicate", "adjudicate": None}
 PHASE_LABELS = {"plan": "规划与用例生成", "execute": "批量执行与状态采集",
                 "adjudicate": "结果裁决与缺陷分类"}
+# 结论上限的合法取值。三种都要认：attack_coverage 会产出「不通过」，exploration 目前
+# 只产出前两种，但把「不通过」拒之门外只会在上游改用时报一句误导性的「缺字段」。
+CEILINGS = ("通过", "待核实", "不通过")
 
 # 交接产物：submit 时逐条要求真实存在（不认占位路径），plan 交棒给 execute 时
 # 还必须凑齐三件——需求评审、用例集、对抗 plan。缺任何一件都说明规划阶段只是走
@@ -412,6 +415,82 @@ def start(state, phase, session=None):
     return state
 
 
+def _read_json_arg(path):
+    """读取 CLI 上的 JSON 文件参数；未提供时返回 None。"""
+    if not path:
+        return None
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _read_exploration_arg(path):
+    """读取探索清单参数。
+
+    兼容两种输入：exploration_state.summarize() 的**整份报告**（自动取 gate 字段），
+    以及直接传 gate 摘要本身。上游换用哪种都不必改命令。
+    """
+    raw = _read_json_arg(path)
+    if isinstance(raw, dict) and "gate" in raw:
+        return raw["gate"]
+    return raw
+
+
+def _exploration_check(gate):
+    """执行阶段收尾时的探索清单检查（scripts/exploration_state.py 的 gate 摘要）。
+
+    存在目的：SKILL 与 exploration-runtime.md 把「从未生成 exploration.json 的批次不得
+    给出已测类结论」写成硬前置，但此前 phase_gate 里 grep 不到 exploration 字样——
+    规则写在文档、强制落在脚本，两者没接上就等于只有文档。实测代价：一轮完整验收
+    从未生成清单，complete/submit/checkpoint 三步全过、零告警，missing_views /
+    mandatory_attributes / EXP-TRAV- 三项从未被核对，报告里却用了「已实测」的措辞。
+
+    兼容策略：不提供 gate 时**只告警不拒绝**（存量批次与既有调用方不受破坏），但把
+    ceiling 记为「待核实」并写明缺口，使"没做"与"做了且通过"在结论上可区分。
+    """
+    if gate is None:
+        return {"state": "missing", "ceiling": "待核实", "traversal_recorded": False,
+                "gaps": [], "reasons": ["execute 阶段收尾未提供探索清单 gate 结论："
+                                        "missing_views / mandatory_attributes / EXP-TRAV- "
+                                        "未经机械检查，已测类结论上限压待核实"]}
+    if not isinstance(gate, dict):
+        raise ValueError("exploration gate 必须为对象（exploration_state.summarize() 的 gate 字段）")
+    ceiling = gate.get("verdict_ceiling")
+    # 与 _attack_check 保持同一口径：verdict_ceiling 有三种合法取值。exploration_state
+    # 目前只产出 通过/待核实（FAIL 项也走待核实），但只收两种取值会在上游改用「不通过」
+    # 时报一句误导性的「缺 verdict_ceiling」——字段其实在，是取值不在白名单。
+    if ceiling not in CEILINGS:
+        raise ValueError(f"exploration gate 的 verdict_ceiling 非法（需为 {list(CEILINGS)}），"
+                         f"got {ceiling!r}")
+    gaps = []
+    if gate.get("ready_pending"):
+        gaps.append(f"ready_pending={gate['ready_pending']}")
+    if gate.get("missing_views"):
+        gaps.append("missing_views=" + ",".join(gate["missing_views"]))
+    if gate.get("thin_views"):
+        gaps.append("thin_views=" + ",".join(gate["thin_views"]))
+    if gate.get("failed_items"):
+        gaps.append("failed_items=" + ",".join(str(x) for x in gate["failed_items"]))
+    if not gate.get("traversal_recorded"):
+        gaps.append("未记录 EXP-TRAV- 控件遍历条目")
+    unresolved = [k for k, v in (gate.get("mandatory_attributes") or {}).items()
+                  if v not in ("covered", "not_applicable")]
+    if unresolved:
+        gaps.append("mandatory_attributes 未闭合=" + ",".join(unresolved))
+    if ceiling != "通过" and not gaps:
+        # 兜底：上游给出了待核实/不通过却没透出可核对缺口时，把原文带出来，不允许空白原因
+        gaps.append(str(gate.get("message") or "gate 判定非通过（原因见 gate.message）"))
+    # 上游自相矛盾（ceiling=通过 却带着缺口）时按缺口从严：门禁不能因为一句"通过"就把
+    # 具体缺口放过——缺口是机械可核对的，ceiling 只是一个词。
+    if ceiling == "通过" and gaps:
+        ceiling = "待核实"
+    return {"state": "provided", "ceiling": ceiling,
+            "traversal_recorded": bool(gate.get("traversal_recorded")),
+            "mandatory_attributes": gate.get("mandatory_attributes") or {},
+            "gaps": gaps,
+            "message": gate.get("message"),
+            "reasons": [] if ceiling == "通过" else
+                       [f"探索清单不达标（{ceiling}）：{'；'.join(gaps)}"]}
+
+
 def _attack_check(coverage):
     """执行阶段收尾时的攻击覆盖检查（scripts/attack_coverage.py 的结论）。
 
@@ -426,18 +505,78 @@ def _attack_check(coverage):
     if not isinstance(coverage, dict):
         raise ValueError("attack_coverage must be a JSON object（attack_coverage.py 的输出）")
     ceiling = coverage.get("verdict_ceiling")
-    if ceiling not in {"通过", "待核实", "不通过"}:
-        raise ValueError("attack_coverage 缺 verdict_ceiling（需为 通过/待核实/不通过）")
+    if ceiling not in CEILINGS:
+        raise ValueError(f"attack_coverage 缺 verdict_ceiling（需为 {list(CEILINGS)}）")
     gaps = coverage.get("gaps")
     if not isinstance(gaps, list):
         raise ValueError("attack_coverage 缺 gaps 数组（缺口须原样呈现）")
+    # 上游自相矛盾（ceiling=通过 却带着缺口）时按缺口从严：缺口机械可核对，ceiling 只是一个词。
+    if ceiling == "通过" and gaps:
+        ceiling = "待核实"
     return {"state": "provided", "ceiling": ceiling,
             "density": coverage.get("attack_density"), "gaps": list(gaps),
             "reasons": [] if ceiling == "通过" else
-                       [f"攻击覆盖不达标：{[g.get('code') for g in gaps if isinstance(g, dict)]}"]}
+                       [f"攻击覆盖不达标（{ceiling}）：{[g.get('code') if isinstance(g, dict) else g for g in gaps]}"]}
 
 
-def complete(state, phase, note=None, session=None, attack_coverage=None):
+def revise(state, phase, attack_coverage=None, exploration=None, note=None, session=None,
+           allow_relax=False):
+    """对已完成阶段的机械结论做**补正**（不改阶段状态、不改 completed_at）。
+
+    存在目的：execute 在 S2 收尾时冻结 attack_coverage / exploration 快照；交接包明写
+    「下一阶段补 SURF-xx」，S3 补齐后重跑门禁得「通过」，却因 complete 只能调一次而
+    无法回写——check-verdict 永远读过期快照，报「不达标」而实际已达标。实测代价：一轮
+    完整验收的最终门禁结论被锁在过期快照上。
+
+    约束（缺一即拒）：
+    1. 只有 execute 阶段有这两个字段——check_verdict 也只读 execute，写到别的阶段等于
+       制造门禁看不见的死数据，且可被误当作"已补正"的凭据。
+    2. 不得把未通过的结论**升级为「通过」**：那是自行解锁验收。补正的正当用途是"补齐探针
+       后重新机械判定"，重跑既可能抬升也可能压低，但抬到「通过」这一步意味着报告可以收尾，
+       必须留一个人能看到的开关。确需如此时带 allow_relax=True，并在 note 写明依据。
+       「不通过 ↔ 待核实」之间的调整不拦——那是缺陷归因变化的正常产物，拦住会把合法补正
+       一起堵死。
+    3. 必须留痕：history 记 revise 事件，其中 transitions 记下每次 ceiling 迁移。
+    """
+    session = _require_session(state, session)
+    if phase != "execute":
+        raise ValueError(f"revise 只支持 execute 阶段的机械结论（attack_coverage / exploration）；"
+                         f"当前 phase={phase}：check_verdict 只读 execute，写到其他阶段是死数据")
+    entry = _entry(state, phase)
+    if entry["status"] != "done":
+        raise ValueError(f"阶段 {phase} 尚未完成（status={entry['status']}）："
+                         "revise 只用于补正已完成阶段的机械结论")
+    if attack_coverage is None and exploration is None:
+        raise ValueError("revise 至少要提供 --attack-coverage 或 --exploration 之一")
+
+    changed, relaxed = [], {}
+    for field, given, checker in (("attack_coverage", attack_coverage, _attack_check),
+                                  ("exploration", exploration, _exploration_check)):
+        if given is None:
+            continue
+        old = (entry.get(field) or {}).get("ceiling")
+        checked = checker(given)
+        new = checked.get("ceiling")
+        # 只拦「升级为通过」这一种迁移。真正有害的是把未通过的结论改成通过（解锁验收），
+        # 而「不通过 ↔ 待核实」之间的调整是重跑门禁的正常产物（例如缺陷被归因到环境），
+        # 一律拦住会把合法补正也堵死——这正是本条修复第一版的错误。
+        if new == "通过" and old and old != "通过" and not allow_relax:
+            raise ValueError(
+                f"{field} 结论不能从「{old}」升级为「通过」：补正不得自行解锁验收结论。"
+                "若确属补齐探针后重跑门禁所得，请带 --allow-relax 并在 note 写明依据")
+        if old and old != new:
+            relaxed[field] = f"{old} -> {new}"
+        checked["revised"] = True
+        entry[field] = checked
+        changed.append(field)
+
+    _record(state, "revise", phase, {"fields": changed, "note": note,
+                                     "session": session, "transitions": relaxed})
+    return state
+
+
+def complete(state, phase, note=None, session=None, attack_coverage=None,
+             exploration=None, artifacts=None):
     session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "in_progress":
@@ -446,9 +585,34 @@ def complete(state, phase, note=None, session=None, attack_coverage=None):
         raise ValueError(f"阶段 {phase} 在会话 {entry['session']} 中开始，不得在 {session} 中结束")
     if phase == "execute":
         entry["attack_coverage"] = _attack_check(attack_coverage)
+        entry["exploration"] = _exploration_check(exploration)
+    elif attack_coverage is not None or exploration is not None:
+        # 这两个结论只对 execute 有意义，check_verdict 也只读 execute。静默丢弃会让
+        # 调用方以为"交了、被记录了"，实际没进任何门禁——收尾时最不该有的错觉。
+        extra = [n for n, v in (("--attack-coverage", attack_coverage),
+                                ("--exploration", exploration)) if v is not None]
+        raise ValueError(f"{' / '.join(extra)} 只对 execute 阶段生效（当前 phase={phase}）："
+                         "这两个结论是执行期的机械检查，check_verdict 只读 execute")
+    # 产物归属：此前 complete 不接受 --artifact，plan.artifacts 恒为 []，交接包「本阶段
+    # 产物」输出「（未登记产物路径）」——交接包让下一会话看不到上一阶段交了什么；而
+    # submit 下一阶段时登记的文件被记到下一阶段名下，产物跨阶段串账。
+    # 与 submit 同一强度校验：只认真实存在的绝对路径。收尾产物若允许占位路径，「本阶段
+    # 产物」就会列出一堆不存在的文件，交接包比空着更误导。
+    if artifacts:
+        merged = list(entry.get("artifacts") or [])
+        for item in artifacts:
+            text = _text(item, "artifact")
+            path = Path(text)
+            if not path.is_absolute() or not path.is_file():
+                raise ValueError(f"本阶段产物不存在或不是绝对路径：{text}"
+                                 "（只认真实文件，占位路径不算做过）")
+            if text not in merged:
+                merged.append(text)
+        entry["artifacts"] = merged
     entry["status"] = "done"
     entry["completed_at"] = _now()
-    _record(state, "complete", phase, {"note": note, "session": session})
+    _record(state, "complete", phase, {"note": note, "session": session,
+                                       "artifacts": len(artifacts or [])})
     return state
 
 
@@ -783,6 +947,15 @@ def check_verdict(state, assumptions=None, regression=None):
                        "无法区分“用例铺得全”与“攻击面打得深”，结论上限压待核实")
     elif attack.get("ceiling") != "通过":
         reasons.extend(attack.get("reasons") or ["攻击覆盖不达标，结论上限压待核实"])
+    # 探索清单：SKILL 写成硬前置却长期没有检查点（DEV-1119-08）。缺失只告警不拒绝，
+    # 但缺失与「做了且通过」必须在结论上可区分——否则规则仍是纸面的。
+    explor = (state["phases"].get("execute") or {}).get("exploration") or {}
+    if explor.get("state") != "provided":
+        reasons.append("execute 阶段未提供探索清单 gate 结论："
+                       "missing_views / mandatory_attributes / EXP-TRAV- 未经机械检查，"
+                       "已测类结论上限压待核实")
+    elif explor.get("ceiling") != "通过":
+        reasons.extend(explor.get("reasons") or ["探索清单不达标，结论上限压待核实"])
     reasons.extend(_assumption_reasons(assumptions))
     reasons.extend(_regression_reasons(regression))
     routing_warnings = _routing_warnings(state)
@@ -964,7 +1137,7 @@ def main(argv=None):
     p = sub.add_parser("submit", help="提交阶段申请（由上一阶段会话发起）")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
-    p.add_argument("--artifact", action="append", default=[])
+    p.add_argument("--artifact", action="append", default=None)
     p.add_argument("--model-class", help="实际执行模型类别：strong-reasoning / fast")
     p.add_argument("--model-name", help="实际模型名（留痕用）")
     p.add_argument("--note")
@@ -974,7 +1147,7 @@ def main(argv=None):
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--handoff-dir", help="交接包目录（默认状态文件同级的 handoff/）")
-    p.add_argument("--artifact", action="append", default=[])
+    p.add_argument("--artifact", action="append", default=None)
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
 
@@ -1014,12 +1187,30 @@ def main(argv=None):
     p.add_argument("--session", help="本会话标识")
     p.add_argument("--attack-coverage",
                    help="attack_coverage.py 结论输出；execute 阶段收尾必填，缺失则结论上限压待核实")
+    p.add_argument("--exploration",
+                   help="exploration_state.summarize() 输出的 gate 字段（或整份报告，自动取 gate）；"
+                        "execute 阶段收尾提供，缺失则告警并压结论上限")
+    p.add_argument("--artifact", action="append", dest="artifacts", default=None,
+                   help="本阶段产物路径，可重复；登记后交接包「本阶段产物」才列得出来")
+
+    p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）")
+    p.add_argument("state")
+    p.add_argument("--phase", required=True,
+                   help="仅支持 execute：check_verdict 只读该阶段的机械结论")
+    p.add_argument("--note")
+    p.add_argument("--session", help="本会话标识")
+    p.add_argument("--attack-coverage", help="补正用的 attack_coverage.py 结论")
+    p.add_argument("--exploration", help="补正用的 exploration gate（或整份报告，自动取 gate）")
+    p.add_argument("--allow-relax", action="store_true",
+                   help="允许把未通过结论升级为「通过」。默认禁止；仅在补齐探针后重跑门禁"
+                        "确实得「通过」时使用，note 须写明依据——history 的 transitions 字段留痕")
 
     p = sub.add_parser("amend", help="登记计划修订申请")
     p.add_argument("state")
     p.add_argument("--phase", required=True)
     p.add_argument("--by", required=True)
     p.add_argument("--note", required=True)
+    p.add_argument("--session", help="本会话标识")
 
     p = sub.add_parser("approve-amendment", help="放行计划修订申请")
     p.add_argument("state")
@@ -1090,8 +1281,15 @@ def main(argv=None):
             start(state, args.phase, args.session)
         elif args.command == "complete":
             complete(state, args.phase, args.note, args.session,
-                     json.loads(Path(args.attack_coverage).read_text(encoding="utf-8"))
-                     if args.attack_coverage else None)
+                     _read_json_arg(args.attack_coverage),
+                     exploration=_read_exploration_arg(args.exploration),
+                     artifacts=args.artifacts)
+        elif args.command == "revise":
+            revise(state, args.phase,
+                   attack_coverage=_read_json_arg(args.attack_coverage),
+                   exploration=_read_exploration_arg(args.exploration),
+                   note=args.note, session=args.session,
+                   allow_relax=args.allow_relax)
         elif args.command == "amend":
             request_amendment(state, args.phase, args.by, args.note, args.session)
         elif args.command == "approve-amendment":

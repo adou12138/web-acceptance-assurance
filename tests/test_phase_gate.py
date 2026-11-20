@@ -75,7 +75,19 @@ class PhaseGateTestBase(unittest.TestCase):
         # 执行阶段收尾必须交攻击覆盖结论，否则“铺得全”会当成“打得深”过门
         coverage = ({"verdict_ceiling": "通过", "gaps": [], "attack_density": 0.4}
                     if phase == "execute" else None)
-        self.pg.complete(self.state, phase, session=session, attack_coverage=coverage)
+        # 探索清单 gate 与攻击覆盖同级：SKILL 把它写成批次结论硬前置
+        exploration = ({
+            "verdict_ceiling": "通过",
+            "ready_pending": 0,
+            "missing_views": [],
+            "failed_items": [],
+            "traversal_recorded": True,
+            "mandatory_attributes": {"security": "covered", "compatibility": "covered",
+                                     "copy": "covered"},
+            "message": "无未消费候选、必查视角均有记录且含控件遍历条目",
+        } if phase == "execute" else None)
+        self.pg.complete(self.state, phase, session=session, attack_coverage=coverage,
+                         exploration=exploration)
         nxt = self.pg.NEXT_PHASE[phase]
         if nxt:
             self.pg.submit(self.state, nxt, session=session,
@@ -753,6 +765,236 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
             regression={"changed_areas": ["主页整页替换"],
                         "candidates": [{"id": "RG-01", "basis": "旧会话列表渲染依赖主页配置"}]})
         self.assertTrue(check["verdict_allowed"], check["reasons"])
+
+
+class ExplorationGateWiringTests(PhaseGateTestBase):
+    """DEV-1119-08：探索清单 gate 曾只写在文档里，phase_gate 里 grep 不到 exploration。
+
+    实测代价：一轮完整验收从未生成 exploration.json，complete/submit/checkpoint
+    三步全过零告警，missing_views / mandatory_attributes / EXP-TRAV- 从未被核对。
+    """
+
+    GATE_OK = {"verdict_ceiling": "通过", "ready_pending": 0, "missing_views": [],
+               "failed_items": [], "traversal_recorded": True,
+               "mandatory_attributes": {"security": "covered", "compatibility": "covered",
+                                        "copy": "covered"},
+               "message": "无未消费候选"}
+
+    def _run_to_execute_done(self, exploration):
+        self.finish_phase("plan")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                         exploration=exploration)
+
+    def test_missing_exploration_blocks_verdict(self):
+        """未交探索清单 → 结论上限压待核实（缺失与「做了且通过」必须可区分）。"""
+        self._run_to_execute_done(None)
+        entry = self.state["phases"]["execute"]["exploration"]
+        self.assertEqual(entry["state"], "missing")
+        self.assertEqual(entry["ceiling"], "待核实")
+        check = self.pg.check_verdict(self.state)
+        self.assertTrue(any("探索清单" in r for r in check["reasons"]), check["reasons"])
+
+    def test_provided_gate_clears_reason(self):
+        """交出达标的 gate → 不再因探索清单压上限。"""
+        self._run_to_execute_done(self.GATE_OK)
+        entry = self.state["phases"]["execute"]["exploration"]
+        self.assertEqual(entry["state"], "provided")
+        self.assertEqual(entry["ceiling"], "通过")
+        check = self.pg.check_verdict(self.state)
+        self.assertFalse([r for r in check["reasons"] if "探索清单" in r], check["reasons"])
+
+    def test_gate_gaps_are_surfaced(self):
+        """gate 不达标时，具体缺口要原样透出，不能只说一句「不达标」。"""
+        gate = {"verdict_ceiling": "待核实", "ready_pending": 3,
+                "missing_views": ["usability"], "thin_views": ["performance"],
+                "failed_items": ["EXP-1"], "traversal_recorded": False,
+                "mandatory_attributes": {"security": "undeclared"},
+                "message": "仍有3项可执行未执行"}
+        self._run_to_execute_done(gate)
+        entry = self.state["phases"]["execute"]["exploration"]
+        joined = "；".join(entry["gaps"])
+        # failed_items 透出条目 ID 而非条数：条数只说"有几条"，ID 才能顺着清单回查是哪条
+        for token in ("ready_pending=3", "missing_views=usability", "thin_views=performance",
+                      "failed_items=EXP-1", "EXP-TRAV-", "mandatory_attributes 未闭合=security"):
+            self.assertIn(token, joined)
+
+    def test_bad_ceiling_rejected(self):
+        with self.assertRaises(ValueError):
+            self._run_to_execute_done({"verdict_ceiling": "大概没问题"})
+
+
+class CompleteArtifactTests(PhaseGateTestBase):
+    """DEV-1119-07：complete 不接受 --artifact，plan.artifacts 恒空，交接包输出
+    「（未登记产物路径）」——交接包让下一会话看不到上一阶段交了什么。"""
+
+    def test_artifacts_recorded_and_reach_handoff(self):
+        self.finish_phase("plan")
+        # finish_phase 已 complete 过 plan；这里验证 complete 阶段能把产物写进 entry
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        extra = [self.folder / "a.json", self.folder / "b.jsonl"]
+        for path in extra:
+            path.write_text("{}", encoding="utf-8")
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                         exploration=ExplorationGateWiringTests.GATE_OK,
+                         artifacts=[str(p) for p in extra])
+        arts = self.state["phases"]["execute"]["artifacts"]
+        # complete 是**追加**：submit 阶段登记的产物不应被覆盖掉
+        for path in extra:
+            self.assertIn(str(path), arts)
+        self.assertGreaterEqual(len(arts), 2)
+
+    def test_complete_rejects_placeholder_artifact(self):
+        """收尾产物与交接产物同一强度：只认真实存在的绝对路径。
+
+        允许占位路径会让交接包「本阶段产物」列出一堆不存在的文件，比空着更误导。
+        """
+        self.finish_phase("plan")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        for bad in (str(self.folder / "ghost.json"), "relative.json"):
+            with self.subTest(artifact=bad):
+                with self.assertRaises(ValueError):
+                    self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                                     attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                                     exploration=ExplorationGateWiringTests.GATE_OK,
+                                     artifacts=[bad])
+
+    def test_no_artifact_keeps_previous(self):
+        """不传 --artifact 时不把已有登记清空（向后兼容）。"""
+        self.finish_phase("plan")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        before = list(self.state["phases"]["execute"]["artifacts"])
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                         exploration=ExplorationGateWiringTests.GATE_OK)
+        self.assertEqual(self.state["phases"]["execute"]["artifacts"], before)
+
+
+class ReviseTests(PhaseGateTestBase):
+    """DEV-1119-13：execute 在 S2 冻结快照，S3 补齐后重跑得「通过」却无法回写——
+    check-verdict 永远读过期快照，报「不达标」而实际已达标。"""
+
+    def _execute_done_with_gap(self):
+        self.finish_phase("plan")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+        self.pg.complete(
+            self.state, "execute", session=self.session_for("execute"),
+            attack_coverage={"verdict_ceiling": "待核实", "gaps": [{"code": "x"}]},
+            exploration=ExplorationGateWiringTests.GATE_OK)
+
+    def test_revise_updates_ceiling_without_changing_status(self):
+        self._execute_done_with_gap()
+        self.assertEqual(self.state["phases"]["execute"]["status"], "done")
+        self.pg.revise(self.state, "execute",
+                       attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                       note="S3 补齐后回写", session=self.session_for("execute"),
+                       allow_relax=True)   # 待核实→通过属解锁验收，须显式放行
+        entry = self.state["phases"]["execute"]
+        self.assertEqual(entry["status"], "done")                 # 状态不动
+        self.assertEqual(entry["attack_coverage"]["ceiling"], "通过")
+        self.assertTrue(entry["attack_coverage"]["revised"])       # 留痕
+        self.assertEqual(self.state["history"][-1]["action"], "revise")
+        # 迁移本身也要留痕，事后能查到"谁把待核实改成了通过"
+        self.assertEqual(
+            self.state["history"][-1]["detail"]["transitions"]["attack_coverage"],
+            "待核实 -> 通过")
+
+    def test_revise_refuses_to_unlock_pass_without_allow_relax(self):
+        """补正不得自行把未通过结论改成通过——那是给门禁开后门。"""
+        self._execute_done_with_gap()
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.revise(self.state, "execute",
+                           attack_coverage={"verdict_ceiling": "通过", "gaps": []},
+                           note="悄悄变绿", session=self.session_for("execute"))
+        self.assertIn("升级为「通过」", str(ctx.exception))
+        self.assertEqual(self.state["phases"]["execute"]["attack_coverage"]["ceiling"], "待核实")
+
+    def test_revise_allows_tightening_and_sideways(self):
+        """收紧（待核实→不通过）与平移（不通过→待核实）都是重跑门禁的正常产物，不该被拦。"""
+        self._execute_done_with_gap()
+        self.pg.revise(self.state, "execute",
+                       attack_coverage={"verdict_ceiling": "不通过", "gaps": [{"code": "y"}]},
+                       note="复测仍失败", session=self.session_for("execute"))
+        self.assertEqual(self.state["phases"]["execute"]["attack_coverage"]["ceiling"], "不通过")
+        self.pg.revise(self.state, "execute",
+                       attack_coverage={"verdict_ceiling": "待核实", "gaps": []},
+                       note="缺陷归因到环境", session=self.session_for("execute"))
+        self.assertEqual(self.state["phases"]["execute"]["attack_coverage"]["ceiling"], "待核实")
+
+    def test_revise_rejects_non_execute_phase(self):
+        """check_verdict 只读 execute：写别的阶段是门禁看不见的死数据。"""
+        self.finish_phase("plan")
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.revise(self.state, "plan",
+                           attack_coverage={"verdict_ceiling": "待核实", "gaps": []},
+                           session=self.session_for("plan"))
+        self.assertIn("只支持 execute", str(ctx.exception))
+        self.assertNotIn("attack_coverage", self.state["phases"]["plan"])
+
+    def test_revise_requires_done_phase(self):
+        self.finish_phase("plan")
+        with self.assertRaises(ValueError):
+            self.pg.revise(self.state, "execute", attack_coverage={"verdict_ceiling": "通过"},
+                           session=self.session_for("plan"))
+
+    def test_revise_requires_at_least_one_field(self):
+        self._execute_done_with_gap()
+        with self.assertRaises(ValueError):
+            self.pg.revise(self.state, "execute", session=self.session_for("execute"))
+
+
+class ContradictoryCeilingTests(PhaseGateTestBase):
+    """上游自相矛盾（ceiling=通过 却带非空 gaps）时按缺口从严。
+
+    「通过」只是一个词，gaps 才是机械可核对的东西。若信任那个词，缺口就会被一个
+    字符串抹掉——这正是本装置反复要防的「用自述代替证据」。
+    """
+
+    def test_attack_coverage_downgrades_on_contradiction(self):
+        entry = self.pg._attack_check({"verdict_ceiling": "通过",
+                                       "gaps": [{"code": "surface_without_hypothesis"}],
+                                       "attack_density": 0.1})
+        self.assertEqual(entry["ceiling"], "待核实")
+        self.assertTrue(entry["reasons"], "降级后必须给出可核对理由")
+
+    def test_exploration_downgrades_on_contradiction(self):
+        entry = self.pg._exploration_check({
+            "verdict_ceiling": "通过", "ready_pending": 0, "missing_views": [],
+            "failed_items": [], "traversal_recorded": True,
+            "mandatory_attributes": {"security": "undeclared"}})
+        self.assertEqual(entry["ceiling"], "待核实")
+        self.assertIn("security", "；".join(entry["gaps"]))
+
+    def test_consistent_pass_is_not_downgraded(self):
+        """没有缺口时不许误降——过严的门禁会让人绕过门禁。"""
+        entry = self.pg._exploration_check({
+            "verdict_ceiling": "通过", "ready_pending": 0, "missing_views": [],
+            "thin_views": [], "failed_items": [], "traversal_recorded": True,
+            "mandatory_attributes": {"security": "covered", "compatibility": "not_applicable",
+                                     "copy": "covered"}})
+        self.assertEqual(entry["ceiling"], "通过")
+        self.assertEqual(entry["gaps"], [])
+
+
+class ResultFieldScopeTests(PhaseGateTestBase):
+    """attack_coverage / exploration 只对 execute 有意义，check_verdict 也只读它。"""
+
+    def test_complete_rejects_conclusion_fields_on_plan(self):
+        """静默丢弃会让调用方以为"交了、被记录了"，实际没进任何门禁。"""
+        self.pg.start(self.state, "plan", "SESS-1")
+        for kwargs in ({"attack_coverage": {"verdict_ceiling": "待核实", "gaps": []}},
+                       {"exploration": {"verdict_ceiling": "通过"}}):
+            with self.subTest(**{k: v for k, v in kwargs.items()}):
+                with self.assertRaises(ValueError) as ctx:
+                    self.pg.complete(self.state, "plan", session="SESS-1", **kwargs)
+                self.assertIn("只对 execute 阶段生效", str(ctx.exception))
 
 
 if __name__ == "__main__":

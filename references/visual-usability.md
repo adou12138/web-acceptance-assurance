@@ -79,6 +79,7 @@ python scripts/ui_metrics.py --input ui-measurements.json --emit-csv ui-metrics.
 
 - 从页面入口用 Tab / Shift+Tab / Enter / Space / Escape 检查适用控件；不只检查存在 `tabindex`。
 - 焦点应可见且顺序合理，弹窗开启、关闭时检查焦点去向；背景是否能误操作、是否困在无出口区域需实际验证。
+- **焦点检测必须用真实键盘（Tab）**，禁用程序化 `el.focus()` 替代：脚本 `focus()` 不触发 `:focus-visible`，遍历出的「无焦点指示」既可能误报（有样式但未进伪类）也可能漏报（能进伪类但样式在伪类里）。实测代价：一轮验收用 `focus()` 判出「20/26 无焦点指示」，真实 Tab 复核后结论完全不同。正确做法是先装 `focusin` 监听器、再真实按 Tab，逐次读取 `matches(':focus-visible')` 与 `outline`/`box-shadow` 计算值。
 - 表单有可辨标签，错误能关联到对应输入；按钮/链接能说明用途。空名称候选需要结合图标、ARIA、标题及实际辅助树复核。
 - 信息不只通过颜色传递；重要图片有适当替代信息。装饰图片与隐藏重复内容不要机械判缺陷。
 - 对比度、焦点指示、目标尺寸按上节阈值实际测量（`scripts/ui_metrics.py`），不靠“看起来清楚”；工具不可用时列缺口，不得宣称合规。

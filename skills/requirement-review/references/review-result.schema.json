@@ -15,7 +15,12 @@
         "title": {"type": "string", "minLength": 1},
         "version": {"type": "string"},
         "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "reviewed_at": {"type": "string", "description": "带时区的 ISO8601 时间"}
+        "reviewed_at": {"type": "string", "description": "带时区的 ISO8601 时间"},
+        "source_type": {
+          "type": "string",
+          "enum": ["product_doc", "stakeholder_interview", "inferred_from_ui", "derived_from_prior"],
+          "description": "需求来源性质。前两者为产品方提供，后两者为测试者从界面或历史结论反推。派生型（后两者）必须在 blocking 里显式列出缺依据的判定，且 go_ahead 不得全量放行——由 review_check 机械校验。字段缺省视为未声明、按 warning 处理，不强制存量数据补齐。"
+        }
       }
     },
     "requirements": {
