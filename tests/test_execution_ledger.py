@@ -474,6 +474,24 @@ class AdversarialGateDisabledTests(unittest.TestCase):
         self.assertEqual(info["adversarial_state"], "waived")
         self.assertEqual(info["adversarial_ceiling"], "不通过")
 
+    def test_waived_reason_message_states_actual_ceiling(self):
+        # 文案必须与实际 ceiling 一致：上限已是"不通过"时 reason 不得再写
+        # "上限仍待核实"——文案与值矛盾会让交付物自相矛盾。
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "不通过", "reasons": []}
+        info = self.tool._adversarial_precondition(gate, waiver="只读小任务",
+                                                    read_only=True, case_count=1)
+        joined = "\n".join(info["adversarial_reasons"])
+        self.assertIn("本轮对抗上限为不通过", joined)
+        self.assertNotIn("上限仍待核实", joined)
+
+    def test_not_enabled_reason_message_states_actual_ceiling(self):
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "不通过",
+                "reasons": ["存在 accepted 且严重度为 blocker/major 的未闭环复核"]}
+        info = self.tool._adversarial_precondition(gate)
+        joined = "\n".join(info["adversarial_reasons"])
+        self.assertIn("本轮对抗上限为不通过", joined)
+        self.assertNotIn("结论上限待核实", joined)
+
 
 if __name__ == "__main__":
     unittest.main()

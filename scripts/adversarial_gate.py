@@ -251,11 +251,12 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
 
     if not surfaces and not obligations:
         if enforce and not waiver:
+            empty_ceiling = _strictest("待核实", base_ceiling or "通过")
             return {
                 "adversarial_enabled": False,
-                "verdict_ceiling": _strictest("待核实", base_ceiling or "通过"),
-                "reasons": ["对抗循环未启用：未登记任何风险面与对抗义务，且未提供豁免理由；"
-                            "结论上限为待核实（对抗必选）"] + sampling_reasons,
+                "verdict_ceiling": empty_ceiling,
+                "reasons": ["对抗循环未启用：未登记任何风险面与对抗义务，且未提供豁免理由"
+                            f"（对抗必选）；本轮结论上限为{empty_ceiling}"] + sampling_reasons,
                 "notes": notes,
                 "waiver_granted": False,
                 "sampling": sampling,
@@ -271,7 +272,7 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
             waiver_granted = True
             empty_ceiling = _strictest("待核实", base_ceiling or "通过")
             notes.append(f"对抗循环豁免：{waiver}（enforce 模式下凭豁免理由放行，豁免留痕；"
-                         "豁免不上抬上限，verdict_ceiling 最高仍为待核实；豁免合资格与否"
+                         f"豁免不上抬上限，本轮 verdict_ceiling 为 {empty_ceiling}；豁免合资格与否"
                          "——只读且小任务——由 execution_ledger 台账侧机械校验）")
         else:
             # enforce=False（显式关闭）：关闭状态必须可见，且不得看起来像
@@ -296,6 +297,17 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
 
     events = [e for e in events if isinstance(e, dict)]
     reviews = [r for r in reviews if isinstance(r, dict)]
+    # 复核 JSONL 为追加写入（finding-triage.md：状态机单向推进），同一 finding
+    # 可能有多条记录（先 accepted 未闭环、补建 BUG 后追加 accepted+tie，或
+    # unresolved 之后翻案）。判定只认每条 finding 的**最新**记录——逐条判会把
+    # 历史记录永久压上限，已闭环候选永远洗不白。与 attack_coverage._closed_review_ids
+    # 的 latest-wins 口径一致。
+    latest_reviews = {}
+    for item in reviews:
+        fid = str(item.get("finding_id") or "").strip()
+        if fid:
+            latest_reviews[fid] = item
+    reviews = list(latest_reviews.values())
     plan_id = (plan or {}).get("plan_id", "")
     obligation_ids = {o.get("id") for o in obligations if isinstance(o, dict)}
     executed_by_surface = {}

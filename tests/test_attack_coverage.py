@@ -458,6 +458,29 @@ class AtkTrackTests(unittest.TestCase):
                                  reviews=[{"finding_id": "ATK-001"}])
         self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
 
+    def test_later_unclosed_review_reopens_closed_hit(self):
+        # 复核 JSONL 为追加写入，判定只认每条 finding 的**最新**记录
+        # （latest-wins，与 adversarial_gate 折叠口径一致）：旧 rejected
+        # 不得盖住新 accepted 未闭环的翻案裁定。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "rejected"},
+                                          {"finding_id": "ATK-001", "verdict": "accepted",
+                                           "tie_to_bug": None}])
+        self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_later_tied_review_closes_previously_unclosed_hit(self):
+        # 反向：先 accepted 未闭环、补建 BUG 后追加 accepted+tie ——
+        # 最新记录已闭环，历史记录不得永久压上限。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "accepted",
+                                           "tie_to_bug": None},
+                                          {"finding_id": "ATK-001", "verdict": "accepted",
+                                           "tie_to_bug": "BUG-01"}])
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["atk"]["verdict_ceiling"], "通过")
+
     def test_atk_sub_conclusion_matches_top_level(self):
         # 子结论与顶层结论必须一致：已闭环时顶层"通过"，atk 子结论不得仍是"待核实"。
         result = self.ac.analyse([rec(1, "boundary")], residual_note="x",

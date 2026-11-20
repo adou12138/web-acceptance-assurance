@@ -210,11 +210,12 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
             info["adversarial_ceiling"] = _strictest(ceiling, "待核实")  # 豁免不得抬高到通过
             info["adversarial_waiver"] = reason
             info["adversarial_reasons"] = list(reasons) + [
-                f"豁免成立（只读且 {case_count} 条）：{reason}；但对抗未执行，上限仍待核实"]
+                f"豁免成立（只读且 {case_count} 条）：{reason}；但对抗未执行，"
+                f"本轮对抗上限为{info['adversarial_ceiling']}"]
         else:
             info["adversarial_ceiling"] = _strictest(ceiling, "待核实")
             info["adversarial_reasons"] = list(reasons) + [
-                "对抗未启用（adversarial_enabled=false）且豁免不成立：结论上限待核实"
+                f"对抗未启用（adversarial_enabled=false）且豁免不成立：本轮对抗上限为{info['adversarial_ceiling']}"
                 + (f"（{why}）" if reason else "")]
     return info
 

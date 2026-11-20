@@ -143,6 +143,65 @@ class AdversarialGateTests(unittest.TestCase):
         self.assertEqual(result["verdict_ceiling"], "待核实")
 
 
+class LatestReviewTests(unittest.TestCase):
+    """复核 JSONL 为追加写入，同一 finding 多条记录时判定只认最新一条。
+
+    逐条判会把历史记录永久压上限：先 accepted 未闭环、补建 BUG 后追加
+    accepted+tie 的候选会被误判为始终未闭环，已闭环候选永远洗不白。
+    """
+
+    def setUp(self):
+        self.gate = load("adv_gate_latest", "scripts/adversarial_gate.py")
+
+    def test_stale_unclosed_accepted_is_superseded_by_later_tied_review(self):
+        stale = {"finding_id": "FIND-01", "verdict": "accepted", "severity": "blocker",
+                 "tie_to_bug": None}
+        latest = {"finding_id": "FIND-01", "verdict": "accepted", "severity": "blocker",
+                  "tie_to_bug": "BUG-01"}
+        result = self.gate.evaluate(build_plan(), [executed_event()], [stale, latest],
+                                    "通过", scenarios=build_scenarios())
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_stale_unresolved_is_superseded_by_later_closed_review(self):
+        stale = {"finding_id": "FIND-02", "verdict": "unresolved"}
+        latest = {"finding_id": "FIND-02", "verdict": "accepted", "severity": "major",
+                  "tie_to_bug": "BUG-02"}
+        result = self.gate.evaluate(build_plan(), [executed_event()], [stale, latest],
+                                    "通过", scenarios=build_scenarios())
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_latest_rejected_supersedes_stale_unclosed_accepted(self):
+        stale = {"finding_id": "FIND-03", "verdict": "accepted", "severity": "major",
+                 "tie_to_bug": None}
+        latest = {"finding_id": "FIND-03", "verdict": "rejected", "rationale": "误报"}
+        result = self.gate.evaluate(build_plan(), [executed_event()], [stale, latest],
+                                    "通过", scenarios=build_scenarios())
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_latest_unclosed_review_still_rejects_when_order_reversed(self):
+        # 反向：追加顺序决定最新裁定（列表末条是最新）。最新一条仍未闭环时
+        # 必须照压——latest-wins 不是"任一闭环即闭环"。
+        stale = {"finding_id": "FIND-04", "verdict": "rejected", "rationale": "旧判"}
+        latest = {"finding_id": "FIND-04", "verdict": "accepted", "severity": "major",
+                  "tie_to_bug": None}
+        result = self.gate.evaluate(build_plan(), [executed_event()], [stale, latest],
+                                    "通过", scenarios=build_scenarios())
+        self.assertEqual(result["verdict_ceiling"], "不通过")
+
+    def test_empty_plan_message_states_actual_ceiling(self):
+        # 文案必须与实际 ceiling 一致：基础 gate 已是"不通过"时空 plan 的
+        # reason 不得再写"结论上限为待核实"。
+        result = self.gate.evaluate(empty_plan(), [], [], "不通过")
+        self.assertEqual(result["verdict_ceiling"], "不通过")
+        self.assertTrue(any("本轮结论上限为不通过" in reason for reason in result["reasons"]))
+
+    def test_waiver_note_states_actual_ceiling(self):
+        result = self.gate.evaluate(empty_plan(), [], [], "不通过",
+                                    waiver="只读小任务")
+        self.assertEqual(result["verdict_ceiling"], "不通过")
+        self.assertTrue(any("本轮 verdict_ceiling 为 不通过" in note for note in result["notes"]))
+
+
 class EnforceModeTests(unittest.TestCase):
     """G4 反例回归：对抗必选模式下，未建 plan 不得放行"通过"。"""
 

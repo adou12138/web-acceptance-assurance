@@ -303,14 +303,22 @@ def _closed_review_ids(reviews):
     - `unresolved`：证据不足或判据缺失，**尚未裁定**，仍须压低上限。
 
     verdict 缺失或非法时按未闭环处理——不得因为"有一条记录"就当作已裁定。
+
+    复核 JSONL 为追加写入（状态机单向推进），同一 finding 可能有多条记录；
+    判定只认每条 finding 的**最新**记录（latest-wins），否则历史记录会永久
+    决定结果——先 accepted 未闭环、后补 tie_to_bug 的候选会被误判闭环，
+    翻案后的旧 rejected 也会盖住新裁定。与 adversarial_gate 侧的折叠口径一致。
     """
-    closed = set()
+    latest = {}
     for item in reviews or []:
         if not isinstance(item, dict):
             continue
         finding_id = str(item.get("finding_id") or "").strip()
         if not finding_id:
             continue
+        latest[finding_id] = item
+    closed = set()
+    for finding_id, item in latest.items():
         verdict = str(item.get("verdict") or "").strip()
         if verdict == "rejected":
             closed.add(finding_id)

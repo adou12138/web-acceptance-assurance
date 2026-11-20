@@ -36,4 +36,4 @@ raw → triaged → accepted / rejected / unresolved
 
 ## 与门禁的关系
 
-事件与复核数据是对抗补充门禁（`scripts/adversarial_gate.py`）的输入：accepted 的 blocker/major 未闭环候选把结论上限压到"不通过"，存在 unresolved 候选压到"待核实"，必选高风险 SURF 无对应已执行探针同样压到"待核实"。报告呈现口径见 `output-templates.md` 的对抗门禁呈现。
+事件与复核数据是对抗补充门禁（`scripts/adversarial_gate.py`）的输入：accepted 的 blocker/major 未闭环候选把结论上限压到"不通过"，存在 unresolved 候选压到"待核实"，必选高风险 SURF 无对应已执行探针同样压到"待核实"。复核 JSONL 为追加写入，同一候选多条记录时**判定只认最新一条**（追加顺序末条为准）——历史记录既不永久压上限，也不能盖住新裁定；`adversarial_gate` 与 `attack_coverage` 的折叠口径一致。报告呈现口径见 `output-templates.md` 的对抗门禁呈现。
