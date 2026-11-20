@@ -349,5 +349,117 @@ class HypothesisLedger(unittest.TestCase):
         self.assertEqual(len(bucket["methods"]), 3)
 
 
+class AtkTrackTests(unittest.TestCase):
+    """D8 回归：ATK 走独立校验轨道——允许模糊假设与人工验证路径，未执行不压上限。"""
+
+    def setUp(self):
+        self.ac = ac
+
+    @staticmethod
+    def atk(ident="ATK-001", status="未执行", impact="功能", **extra):
+        item = {"id": ident, "hypothesis": "如果并发提交则可能重复扣款",
+                "validation_path": "两人同时点提交，比对后台流水",
+                "impact": impact, "status": status}
+        item.update(extra)
+        return item
+
+    def test_unexecuted_atk_does_not_lower_ceiling(self):
+        # 关键让步：未执行不压上限，允许假设长期悬置（保留锐度的有意取舍）。
+        records = [rec(1, "boundary")]
+        records[0]["hypothesis"] = "越界输入应被拒绝"
+        records[0]["hypothesis_outcome"] = "held"
+        result = self.ac.analyse(records, residual_note="x", atk_entries=[self.atk(status="未执行")])
+        self.assertEqual(result["atk"]["unexecuted"], 1)
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_atk_hit_with_function_impact_becomes_gap(self):
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="功能")])
+        self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["atk"]["severity_candidates"][0]["id"], "ATK-001")
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_reviewed_atk_hit_no_longer_gap(self):
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviewed_finding_ids=["ATK-001"])
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_experience_impact_hit_is_disclosure_only(self):
+        # 体验类命中不压上限：影响面不属功能/数据/权限时不算严重度候选。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="体验")])
+        self.assertEqual(result["atk"]["severity_candidates"], [])
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_atk_not_hit_is_disclosure_only(self):
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="未命中")])
+        self.assertEqual(result["atk"]["not_hit"], 1)
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_atk_requires_fuzzy_hypothesis_fields(self):
+        # 模糊假设允许不严谨，但缺字段/非法枚举必须报错，不能默认通过。
+        broken = [{"id": "ATK-001", "hypothesis": "", "validation_path": "x",
+                   "impact": "功能", "status": "未执行"}]
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=broken)
+        self.assertIn("atk_registry_invalid", [g["code"] for g in result["gaps"]])
+
+    def test_atk_id_prefix_is_enforced(self):
+        broken = [self.atk(ident="HYP-001")]
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=broken)
+        self.assertIn("atk_registry_invalid", [g["code"] for g in result["gaps"]])
+
+    def test_invalid_impact_and_status_rejected(self):
+        bad_impact = [self.atk(impact="未知")]
+        self.assertIn("atk_registry_invalid",
+                      [g["code"] for g in self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                                          atk_entries=bad_impact)["gaps"]])
+        bad_status = [self.atk(status="大概")]
+        self.assertIn("atk_registry_invalid",
+                      [g["code"] for g in self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                                          atk_entries=bad_status)["gaps"]])
+
+    def test_atk_does_not_require_plan_amend(self):
+        # ATK 存续不依赖事后 amend 纳入计划：不给 plan 也不产生缺口。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="未执行")])
+        self.assertNotIn("new_surface_amend_missing", [n["code"] for n in result["notices"]])
+        self.assertEqual(result["surfaces_beyond_plan"], 0)
+
+    def test_no_atk_input_keeps_legacy_behaviour(self):
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x")
+        self.assertEqual(result["atk"]["registered"], 0)
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+
+class AtkCliTests(unittest.TestCase):
+    """CLI 回归：--atk / --reviews 从文件读入并进入结论。"""
+
+    def setUp(self):
+        self.ac = ac
+
+    def test_atk_and_reviews_from_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            ledger.write_text(json.dumps({"id": "T-1", "path_type": "boundary",
+                                          "hypothesis": "越界应被拒", "hypothesis_outcome": "held",
+                                          "method": "boundary", "oracle_source": "self_attested"},
+                                         ensure_ascii=False) + "\n", encoding="utf-8")
+            atk_path = Path(tmp) / "atk.json"
+            atk_path.write_text(json.dumps([{"id": "ATK-001", "hypothesis": "可能重复扣款",
+                                             "validation_path": "并发提交比对流水",
+                                             "impact": "功能", "status": "命中"}],
+                                           ensure_ascii=False), encoding="utf-8")
+            reviews = Path(tmp) / "reviews.jsonl"
+            reviews.write_text(json.dumps({"finding_id": "ATK-001", "verdict": "accepted",
+                                           "severity": "major", "tie_to_bug": "BUG-01"},
+                                          ensure_ascii=False) + "\n", encoding="utf-8")
+            code = self.ac.main(["--ledger", str(ledger), "--atk", str(atk_path),
+                                  "--reviews", str(reviews), "--residual-note", "x"])
+            self.assertEqual(code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

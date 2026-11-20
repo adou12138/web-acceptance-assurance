@@ -26,6 +26,13 @@
   里"，罚它等于从制度上劝阻发现未知问题。但必须 amend 纳入后续计划，否则下一轮
   不会有假设，发现会被丢掉。
 
+**两条独立校验轨道**：需求来源的 SURF 维持"可证伪预测"校验（hypothesis +
+hypothesis_outcome）不变；攻击假设（ATK）走独立轨道——它允许模糊假设与人工验证
+路径，不要求拆成单条预测。ATK 的验证状态为"未执行"时**不触发**待核实上限（允许
+长期悬置，这是保留假设锐度的有意让步）；仅"命中"且影响面属功能/数据/权限时升级为
+blocker/major 复核候选，若尚无复核记录则压待核实（须裁定，不是不许发现）。ATK 登记
+时即为合法条目，不依赖事后 amend 纳入计划。
+
 路径类型不是只有功能逻辑：界面与文案（ui_content）、易用性（usability）、无障碍
 （accessibility）、数据一致性（data_consistency）、回归（regression）都是合法攻击
 维度，与 boundary/exception 同等计入非正向路径。曾经因为只认功能五类，如实登记的
@@ -36,6 +43,7 @@ UI 类发现反而被压上限——那是制度性逆向激励。
     python scripts/attack_coverage.py --ledger events.jsonl --plan adversarial-plan.json
     python scripts/attack_coverage.py --ledger ledger.csv --emit-json out.json --emit-csv out.csv
     python scripts/attack_coverage.py --ledger ledger.jsonl --residual-note "未破的攻击面…" --enforce
+    python scripts/attack_coverage.py --ledger ledger.jsonl --atk atk-registry.json --reviews reviews.jsonl
 """
 
 import argparse
@@ -74,6 +82,16 @@ SELF_ATTEST_HINTS = ("读回一致", "读回正确", "回显一致", "agent 回�
                      "助手自述", "agent 自述", "接口返回即", "页面显示一致")
 
 SURF_ID_RE = re.compile(r"^SURF-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+ATK_ID_RE = re.compile(r"^ATK-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+
+# —— ATK 独立校验轨道 ——
+# 攻击假设与需求来源的 SURF 是两条轨道，字段与判据都不同：ATK 允许模糊假设，
+# 验证路径可以是人工作业、场景推演或代码走读，不要求脚本探针。
+ATK_IMPACTS = ("功能", "数据", "权限", "体验", "其他")
+ATK_STATUSES = ("未执行", "执行中", "命中", "未命中", "无法验证")
+# 影响面属功能/数据/权限的命中才升级为严重度候选：体验类命中不压结论上限
+ATK_SEVERITY_IMPACTS = ("功能", "数据", "权限")
+ATK_REQUIRED = ("id", "hypothesis", "validation_path", "impact", "status")
 
 # 阈值依据：每个功能点在正向/边界/异常/权限/组合等路径中至少有一类非正向，
 # 理论下限即 1/5=20%；取 30% 作为"每 3 条至少 1 条非正向"的最低门槛（非目标值）。
@@ -192,10 +210,115 @@ def _oracle_unproven(rec):
     return None
 
 
+def _load_atk(path):
+    """ATK 登记文件：数组，或 {"assumptions"/"atk"/"entries": [...]}。
+
+    ATK 走独立文件而非台账字段——台账的 attack 字段是白名单校验，塞入 ATK 专用
+    字段会破坏既有契约；ATK 也不需要进入执行台账，它登记时即为合法条目。
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if isinstance(data, dict):
+        for key in ("assumptions", "atk", "entries"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        raise ValueError(f"{path}: 对象形态须含 assumptions/atk/entries 数组")
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"{path}: ATK 登记必须为数组或含数组的对象")
+
+
+def _normalise_atk(entries):
+    """归一 ATK 条目并校验字段。返回 (归一列表, 错误列表)。"""
+    normalised, errors = [], []
+    seen = set()
+    for index, item in enumerate(entries or []):
+        name = f"atk[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{name}: 必须为对象")
+            continue
+        unknown = set(item) - set(ATK_REQUIRED) - {"linked_tc", "linked_ac", "severity", "note"}
+        if unknown:
+            errors.append(f"{name}: 含未知字段 {sorted(unknown)}")
+            continue
+        missing = [key for key in ATK_REQUIRED if key not in item]
+        if missing:
+            errors.append(f"{name}: 缺少必填字段 {missing}")
+            continue
+        ident = str(item["id"]).strip()
+        if not ATK_ID_RE.match(ident):
+            errors.append(f"{name}.id: 必须以 ATK- 前缀开头（实为 {ident or '缺失'}）")
+            continue
+        if ident in seen:
+            errors.append(f"{name}.id: 重复的攻击假设 ID {ident}")
+            continue
+        seen.add(ident)
+        hypothesis = str(item["hypothesis"]).strip()
+        if not hypothesis:
+            errors.append(f"{name}.hypothesis: 模糊假设不得为空")
+            continue
+        validation_path = str(item["validation_path"]).strip()
+        if not validation_path:
+            errors.append(f"{name}.validation_path: 验证路径不得为空（人工步骤/场景推演/代码走读均可）")
+            continue
+        impact = str(item["impact"]).strip()
+        if impact not in ATK_IMPACTS:
+            errors.append(f"{name}.impact: 必须为 {list(ATK_IMPACTS)} 之一")
+            continue
+        status = str(item["status"]).strip()
+        if status not in ATK_STATUSES:
+            errors.append(f"{name}.status: 必须为 {list(ATK_STATUSES)} 之一")
+            continue
+        normalised.append({
+            "id": ident,
+            "hypothesis": hypothesis,
+            "validation_path": validation_path,
+            "impact": impact,
+            "status": status,
+            "linked_tc": item.get("linked_tc"),
+            "linked_ac": item.get("linked_ac"),
+        })
+    return normalised, errors
+
+
+def analyse_atk(entries):
+    """ATK 轨道的诊断与门禁判定。
+
+    与需求 SURF 轨道的关键差异：
+    - 「未执行」不触发待核实上限——允许长期悬置，这是保留假设锐度的有意让步；
+    - 「命中」且影响面属功能/数据/权限 → 升级为 blocker/major 复核候选；
+    - 其余状态（执行中/未命中/无法验证/体验类命中）只披露，不压上限。
+    """
+    normalised, errors = _normalise_atk(entries)
+    counts = {status: 0 for status in ATK_STATUSES}
+    for item in normalised:
+        counts[item["status"]] += 1
+    candidates = [item for item in normalised
+                  if item["status"] == "命中" and item["impact"] in ATK_SEVERITY_IMPACTS]
+    not_hit = [item["id"] for item in normalised if item["status"] == "未命中"]
+    unexecuted = [item["id"] for item in normalised if item["status"] == "未执行"]
+    return {
+        "registered": len(normalised),
+        "status_counts": counts,
+        "hit": counts["命中"],
+        "not_hit": len(not_hit),
+        "not_hit_ids": not_hit,
+        "unexecuted": len(unexecuted),
+        "unexecuted_ids": unexecuted,
+        "severity_candidates": [
+            {"id": item["id"], "impact": item["impact"], "severity": "major",
+             "reason": "攻击假设命中且影响面属功能/数据/权限，须裁定并闭环"}
+            for item in candidates],
+        "errors": errors,
+        "verdict_ceiling": "待核实" if candidates else "通过",
+        "scope": "只判 ATK 假设的登记完整性与命中升级，不判缺陷有无、不替代缺陷复核与门禁",
+    }
+
+
 def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
             residual_note=None, plan_surfaces=None, plan_risks=None,
-            surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None):
+            surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None,
+            atk_entries=None, reviewed_finding_ids=None):
     records = _normalize_events(records)
     total = len(records)
     path_counts = {k: 0 for k in PATH_TYPES}
@@ -367,6 +490,26 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                      "message": "结论将达「通过」但未声明未破的攻击面（--residual-note）："
                                 "无法区分「真的没问题」与「没找到让它失败的输入」"})
 
+    # —— ATK 独立轨道：与需求 SURF 轨道分开判定 ——
+    # 「未执行」不压上限（允许长期悬置）；「命中」且影响面属功能/数据/权限时
+    # 升级为严重度复核候选，已复核的（进入 reviewed_finding_ids）不再重复压上限。
+    atk = analyse_atk(atk_entries)
+    if atk["errors"]:
+        gaps.append({"code": "atk_registry_invalid",
+                     "message": f"ATK 登记存在 {len(atk['errors'])} 处问题：{atk['errors'][:5]}"
+                                "（攻击假设须含 ID、模糊假设、验证路径、影响面与验证状态）"})
+    reviewed = set(reviewed_finding_ids or [])
+    pending_candidates = [c for c in atk["severity_candidates"] if c["id"] not in reviewed]
+    if pending_candidates:
+        gaps.append({"code": "atk_hit_unreviewed",
+                     "message": "攻击假设命中且影响面属功能/数据/权限，尚未裁定闭环："
+                                + "、".join(c["id"] for c in pending_candidates)
+                                + "（须复核并闭环；结论上限为待核实）"})
+    if atk["unexecuted"]:
+        notices.append({"code": "atk_unexecuted",
+                        "message": f"{atk['unexecuted']} 条攻击假设尚未执行："
+                                   f"{atk['unexecuted_ids'][:6]}（允许长期悬置，不压结论上限）"})
+
     # —— 披露项：只报数，不压上限。配比可凑，凑出来的达标不代表打得深 ——
     if isinstance(density, float) and density < density_threshold:
         notices.append({"code": "attack_density_low",
@@ -420,6 +563,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "method_diversity": method_diversity,
         "probes_total": probes_total,
         "residual_note": (residual_note or "").strip() or None,
+        "atk": atk,
         "gaps": gaps,
         "notices": notices,
         "verdict_ceiling": "待核实" if gaps else "通过",
@@ -440,6 +584,11 @@ def _emit_csv(result, path):
         rows.append({"section": "hypothesis", "metric": name, "value": value})
     for name, value in result["path_type_groups"].items():
         rows.append({"section": "path_type_group", "metric": name, "value": value})
+    for name in ("registered", "hit", "not_hit", "unexecuted", "verdict_ceiling"):
+        rows.append({"section": "atk", "metric": name, "value": result["atk"][name]})
+    for candidate in result["atk"]["severity_candidates"]:
+        rows.append({"section": "atk_candidate", "metric": candidate["id"],
+                     "value": f"{candidate['impact']}/{candidate['severity']}：{candidate['reason']}"})
     for gap in result["gaps"]:
         rows.append({"section": "gap", "metric": gap["code"], "value": gap["message"]})
     for notice in result.get("notices") or []:
@@ -479,6 +628,8 @@ def main(argv=None):
                         help="计划外风险面的纳入说明；缺省时只提示，不压上限")
     parser.add_argument("--emit-json", help="结论输出路径")
     parser.add_argument("--emit-csv", help="CSV 导出路径（UTF-8-sig）")
+    parser.add_argument("--atk", help="ATK 攻击假设登记文件（数组或含数组的对象）；走独立校验轨道")
+    parser.add_argument("--reviews", help="候选复核 JSONL 路径；用于判断命中的 ATK 是否已裁定闭环")
     parser.add_argument("--density-threshold", type=float, default=DEFAULT_DENSITY_THRESHOLD)
     parser.add_argument("--independent-rate", type=float, default=DEFAULT_INDEPENDENT_RATE)
     parser.add_argument("--surf-linkage", type=float, default=DEFAULT_SURF_LINKAGE)
@@ -487,12 +638,28 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     records = _load(args.ledger)
+    atk_entries = _load_atk(args.atk) if args.atk else None
+    reviewed_ids = None
+    if args.reviews:
+        reviewed_ids = []
+        for line in Path(args.reviews).read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{args.reviews} 解析失败: {exc}") from exc
+            if isinstance(item, dict) and item.get("finding_id"):
+                reviewed_ids.append(str(item["finding_id"]))
     result = analyse(records, args.density_threshold, args.independent_rate,
                      residual_note=args.residual_note,
                      plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
                      plan_risks=_plan_risks(args.plan) if args.plan else None,
                      surf_linkage_threshold=args.surf_linkage,
-                     amend_note=args.amend_note)
+                     amend_note=args.amend_note,
+                     atk_entries=atk_entries,
+                     reviewed_finding_ids=reviewed_ids)
     if args.emit_json:
         Path(args.emit_json).write_text(json.dumps(result, ensure_ascii=False, indent=2),
                                         encoding="utf-8")

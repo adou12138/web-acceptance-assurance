@@ -1,5 +1,6 @@
 """IMP-09 回归：对抗补充门禁结论（adversarial_gate.evaluate 纯函数，离线夹具）。"""
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -103,11 +104,30 @@ class AdversarialGateTests(unittest.TestCase):
         result = self.gate.evaluate(build_plan(), [executed_event()], [review], "通过", scenarios=build_scenarios())
         self.assertEqual(result["verdict_ceiling"], "待核实")
 
-    def test_empty_plan_enables_nothing_with_note(self):
+    def test_empty_plan_enabled_by_default_lowers_ceiling(self):
+        # D7：对抗门禁默认启用。空 plan 且无豁免理由时上限为待核实——
+        # 门禁默认生效，不再依赖使用方记得传 --enforce。
         result = self.gate.evaluate(empty_plan(), [], [], "通过")
         self.assertFalse(result["adversarial_enabled"])
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+        self.assertTrue(any("对抗循环未启用" in reason for reason in result["reasons"]))
+
+    def test_explicitly_disabled_gate_passes_empty_plan(self):
+        # 显式关闭门禁是保留路径：放行，但关闭状态与理由必须可见（不得静默关闭）。
+        result = self.gate.evaluate(empty_plan(), [], [], "通过", enforce=False,
+                                    disable_reason="本轮只做文档核对，不产生技术结论")
         self.assertEqual(result["verdict_ceiling"], "通过")
-        self.assertTrue(any("未启用对抗" in note for note in result["notes"]))
+        self.assertTrue(result["adversarial_disabled"])
+        self.assertEqual(result["disable_reason"], "本轮只做文档核对，不产生技术结论")
+        self.assertTrue(any("对抗门禁未启用" in note for note in result["notes"]))
+
+    def test_disabled_gate_without_reason_still_warns(self):
+        # 未给关闭理由时仍要留痕提醒：交付物必须声明未启用及理由。
+        result = self.gate.evaluate(empty_plan(), [], [], "通过", enforce=False)
+        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertTrue(result["adversarial_disabled"])
+        self.assertIsNone(result["disable_reason"])
+        self.assertTrue(any("须在交付物声明" in note for note in result["notes"]))
 
     def test_never_relaxes_base_ceiling(self):
         # 基础 gate 已是待核实时，对抗全绿也不得抬高回"通过"
@@ -159,6 +179,115 @@ class EnforceModeTests(unittest.TestCase):
         self.assertEqual(result["verdict_ceiling"], "通过")
         self.assertTrue(result["adversarial_enabled"])
         self.assertFalse(result["waiver_granted"])
+
+
+class SamplingReviewTests(unittest.TestCase):
+    """D7 回归：抽样复核查「该登记却没登记」，登记豁免只解除单项阻断、不上抬上限。"""
+
+    def setUp(self):
+        self.gate = load("adv_gate", "scripts/adversarial_gate.py")
+
+    def test_missing_scope_is_not_reported_as_sampling_passed(self):
+        # 清单缺失 ≠ 抽样通过：必须显式记为未执行，不能显示成"查过了没问题"。
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios())
+        self.assertEqual(result["sampling"]["status"], "not_provided")
+        self.assertTrue(any("未执行抽样复核" in note for note in result["notes"]))
+
+    def test_sampled_registered_surface_keeps_ceiling(self):
+        scope = [{"id": "SURF-01"}, {"id": "SURF-02"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope)
+        self.assertEqual(result["sampling"]["status"], "ok")
+        self.assertEqual(result["verdict_ceiling"], "通过")
+
+    def test_sampled_unregistered_surface_lowers_ceiling(self):
+        # 抽中未登记的功能面且无豁免说明 → 待核实。
+        # 用足量候选确保抽中 SURF-03（清单里未登记的那个）。
+        scope = [{"id": "SURF-01"}, {"id": "SURF-02"}, {"id": "SURF-03"},
+                 {"id": "SURF-04"}, {"id": "SURF-05"}, {"id": "SURF-06"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope,
+                                    sample_size=6, sample_seed=7)
+        self.assertEqual(result["sampling"]["status"], "gap")
+        self.assertTrue(any("抽样复核抽中未登记的功能面" in r for r in result["reasons"]))
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_exemption_clears_sampling_block_but_not_other_rules(self):
+        # 豁免解除抽样对单项的阻断，但不上抬其它规则已压低的上限。
+        scope = [{"id": "SURF-03"}]
+        plan = build_plan()
+        plan["obligations"][0]["status"] = "planned"  # 另有规则压上限
+        result = self.gate.evaluate(plan, [], [], "通过", scenarios=build_scenarios(),
+                                    scope=scope, exemptions={"SURF-03": "纯静态展示，无状态迁移"})
+        self.assertEqual(result["sampling"]["status"], "exempted")
+        self.assertEqual(result["sampling"]["exempted"][0]["reason"], "纯静态展示，无状态迁移")
+        self.assertFalse(any("抽样复核抽中未登记" in r for r in result["reasons"]))
+        self.assertTrue(any("登记豁免" in note and "纯静态展示" in note
+                            for note in result["notes"]))
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_exemption_does_not_raise_ceiling_above_base(self):
+        scope = [{"id": "SURF-03"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "待核实",
+                                    scenarios=build_scenarios(), scope=scope,
+                                    exemptions={"SURF-03": "纯静态展示"})
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_sampling_is_stable_across_reruns(self):
+        # 同轮重跑复用同一批样本：种子未给时由清单内容派生。
+        scope = [{"id": "SURF-01"}, {"id": "SURF-03"}, {"id": "SURF-05"}]
+        first = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                   scenarios=build_scenarios(), scope=scope, sample_size=1)
+        second = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope, sample_size=1)
+        self.assertEqual(first["sampling"]["sampled"], second["sampling"]["sampled"])
+        self.assertEqual(first["sampling"]["sample_seed"], second["sampling"]["sample_seed"])
+
+    def test_scope_smaller_than_sample_size_takes_all(self):
+        scope = [{"id": "SURF-01"}, {"id": "SURF-03"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope, sample_size=5)
+        self.assertEqual(result["sampling"]["sample_size"], 2)
+
+    def test_disabled_gate_reports_sampling_without_lowering_ceiling(self):
+        # 门禁显式关闭时抽样只作披露，不压上限。
+        scope = [{"id": "SURF-03"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope,
+                                    enforce=False, disable_reason="只读核对")
+        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertTrue(any("仅作披露" in note for note in result["notes"]))
+
+
+class SamplingCliTests(unittest.TestCase):
+    """CLI 回归：--no-enforce 必须带理由；scope/exemptions 可从文件读入。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.gate = load("adv_gate", "scripts/adversarial_gate.py")
+
+    def _write(self, name, payload):
+        path = Path(self.tmp.name) / name
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return str(path)
+
+    def test_no_enforce_without_reason_is_rejected(self):
+        code = self.gate.main(["--no-enforce"])
+        self.assertEqual(code, 2)
+
+    def test_enforce_and_no_enforce_are_mutually_exclusive(self):
+        code = self.gate.main(["--enforce", "--no-enforce", "--disable-reason", "x"])
+        self.assertEqual(code, 2)
+
+    def test_scope_and_exemptions_from_files(self):
+        scope_path = self._write("scope.json", [{"id": "SURF-01"}, {"id": "SURF-03"}])
+        ex_path = self._write("exemptions.json", [{"id": "SURF-03", "reason": "纯静态展示"}])
+        code = self.gate.main(["--scope", scope_path, "--exemptions", ex_path,
+                               "--sample-size", "2", "--sample-seed", "1"])
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

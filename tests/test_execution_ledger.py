@@ -240,7 +240,7 @@ class ExecutionLedgerTests(unittest.TestCase):
                           # 未提供对抗门禁且未豁免 → 记 missing 并把上限压到待核实
                           "adversarial_state": "missing", "adversarial_ceiling": "待核实",
                           "adversarial_reasons": ["未提供对抗门禁结论：对抗循环为产出技术结论批次的必选项；"
-                                                  "请以 --enforce 运行 scripts/adversarial_gate.py 并传入 --adversarial-gate"]})
+                                                  "请运行 scripts/adversarial_gate.py（门禁默认启用）并传入 --adversarial-gate"]})
 
     def test_cli_init_enforces_gate_precondition(self):
         design_file = self.folder / "cases-gate.json"
@@ -384,6 +384,47 @@ class LedgerEmitsAttackFields(unittest.TestCase):
         self.assertNotIn("path_type_missing", codes)
         self.assertNotIn("method_missing", codes)
         self.assertNotIn("oracle_independence_unproven", codes)
+
+
+class AdversarialGateDisabledTests(unittest.TestCase):
+    """D7 回归：门禁被显式关闭须在台账留痕并压上限，不得与「对抗未启用」混算。"""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("execution_ledger_disabled", SCRIPT)
+        self.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tool)
+
+    def test_disabled_gate_is_recorded_and_lowers_ceiling(self):
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "通过",
+                "reasons": [], "adversarial_disabled": True,
+                "disable_reason": "本轮只做文档核对"}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_state"], "disabled")
+        self.assertTrue(info["adversarial_disabled"])
+        self.assertEqual(info["adversarial_disable_reason"], "本轮只做文档核对")
+        self.assertEqual(info["adversarial_ceiling"], "待核实")
+        self.assertTrue(any("显式关闭" in r for r in info["adversarial_reasons"]))
+
+    def test_disabled_gate_without_reason_still_warns(self):
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "通过",
+                "reasons": [], "adversarial_disabled": True, "disable_reason": None}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_state"], "disabled")
+        self.assertEqual(info["adversarial_ceiling"], "待核实")
+        self.assertTrue(any("未提供关闭理由" in r for r in info["adversarial_reasons"]))
+
+    def test_disabled_gate_is_distinct_from_empty_plan(self):
+        # 空 plan（对抗未启用）与门禁被关闭是两种状态，不得混算。
+        empty = {"adversarial_enabled": False, "verdict_ceiling": "待核实", "reasons": []}
+        info = self.tool._adversarial_precondition(empty)
+        self.assertEqual(info["adversarial_state"], "not_enabled")
+        self.assertNotIn("adversarial_disabled", info)
+
+    def test_enabled_gate_is_unaffected(self):
+        gate = {"adversarial_enabled": True, "verdict_ceiling": "通过", "reasons": []}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_state"], "verified")
+        self.assertEqual(info["adversarial_ceiling"], "通过")
 
 
 if __name__ == "__main__":

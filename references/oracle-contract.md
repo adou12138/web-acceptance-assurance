@@ -24,6 +24,33 @@
 
 每个待执行探针登记一条义务：必须关联至少一条 SURF（surface_ref）与一条 ORC（oracle_ref）、探针类型（probe_type：challenge / fault_injection / timing / permission）、预算（budget，探针数/时间盒/副作用配额任一口径）与状态（status：planned / executed / cancelled）。状态只能由主会话按事实更新；executed 必须有对应 EVT 事件佐证（见 `finding-triage.md`）。
 
+## ATK（攻击假设条目）：与 SURF 并列的第二条轨道
+
+攻击假设（`ATK-`）是**独立于 plan 的登记条目**，走自己的校验轨道，与需求来源的 SURF 平级并列，互不替代。
+
+**为什么另立轨道**：SURF 要求"可证伪预测"（`failure_hypothesis` 写成"如果 X 则 Y 会坏"），是因为需求来源的风险面必须能被证伪。而攻击假设的价值恰恰在于**模糊与整体**——"这个功能大概会在某个地方不对劲"这种直觉，拆成单条预测就失去了攻击力。强迫 ATK 套用可证伪格式，等于消灭它。
+
+**字段**（`scripts/attack_coverage.py --atk` 读取，数组或含 `assumptions`/`atk`/`entries` 数组的对象）：
+
+| 字段 | 说明 |
+|---|---|
+| `id` | `ATK-` 前缀 + 稳定标识，跨轮次不变号 |
+| `hypothesis` | 模糊假设。允许不精确，但不得为空 |
+| `validation_path` | 验证路径：人工步骤、场景推演、代码走读均可，**不要求脚本探针** |
+| `impact` | 影响面：功能 / 数据 / 权限 / 体验 / 其他 |
+| `status` | 未执行 / 执行中 / 命中 / 未命中 / 无法验证 |
+| `linked_tc` / `linked_ac` | 可选。关联则填 ID；**不关联不构成排除理由** |
+
+**校验规则**：
+
+- `status=未执行` **不触发**结论上限——允许假设长期悬置。这是对低质量假设的**有意让步**：代价是低质量 ATK 也能存续，靠披露与抽样复核间接施压。
+- `status=命中` 且 `impact` 属功能/数据/权限 → 升级为 blocker/major 复核候选；尚未裁定闭环时结论上限压"待核实"。
+- 其余状态（执行中 / 未命中 / 无法验证 / 体验类命中）只作披露，不压上限。
+- **ATK 存续不依赖事后 amend 纳入计划**：登记时即为合法条目。计划外的 ATK 不计入 `surfaces_beyond_plan`（那是需求轨道的指标）。
+- 字段缺失、ID 前缀非法、枚举越界 → 报缺口，不默认通过。
+
+ATK 与 SURF 的产物都可以进入第 4 类交付物（见 `output-templates.md`）；ATK 的复核记录走同一套候选状态机（见 `finding-triage.md`），`finding_id` 用 `ATK-` 编号。
+
 ## 冻结来源指纹
 
 plan 头部 `source_fingerprints` 必须登记两枚 sha256：

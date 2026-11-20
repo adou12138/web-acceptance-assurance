@@ -166,7 +166,7 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
                                             "但未执行对抗，结论上限仍为待核实，不得写通过"]}
         return {"adversarial_state": "missing", "adversarial_ceiling": "待核实",
                 "adversarial_reasons": ["未提供对抗门禁结论：对抗循环为产出技术结论批次的必选项；"
-                                        "请以 --enforce 运行 scripts/adversarial_gate.py 并传入 --adversarial-gate"
+                                        "请运行 scripts/adversarial_gate.py（门禁默认启用）并传入 --adversarial-gate"
                                         + (f"（豁免不成立：{why}）" if reason else "")]}
     if not isinstance(adversarial_gate, dict):
         raise ValueError("adversarial gate must be a JSON object（adversarial_gate.py 的结论输出）")
@@ -179,11 +179,26 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
     reasons = adversarial_gate.get("reasons")
     if not isinstance(reasons, list):
         raise ValueError("adversarial gate 缺 reasons 数组（须原样呈现，不得隐矞原因）")
+    # 门禁被显式关闭（--no-enforce）与"对抗未启用"是两件事：前者是使用方的选择，
+    # 须在交付物中声明关闭状态与理由，不能与"未登记对抗义务"混算。
+    disabled = bool(adversarial_gate.get("adversarial_disabled"))
+    disable_reason = adversarial_gate.get("disable_reason")
     info = {"adversarial_state": "verified" if enabled else "not_enabled",
             "adversarial_ceiling": ceiling, "adversarial_enabled": bool(enabled),
             "adversarial_reasons": list(reasons)}
+    if disabled:
+        info["adversarial_state"] = "disabled"
+        info["adversarial_disabled"] = True
+        info["adversarial_disable_reason"] = disable_reason
+        info["adversarial_ceiling"] = "待核实"
+        info["adversarial_reasons"] = list(reasons) + [
+            "对抗门禁已显式关闭（--no-enforce）："
+            + (f"关闭理由：{disable_reason}；" if disable_reason else "未提供关闭理由；")
+            + "关闭状态与理由须在交付物中原样呈现，未声明不得视为默认同意；"
+              "结论上限待核实，不得写通过"]
+        return info
     if not enabled:
-        # 空 plan 送到门禁（未 --enforce 直放行）不得当作已完成对抗
+        # 空 plan 送到门禁（对抗义务未登记）不得当作已完成对抗
         if ok:
             info["adversarial_state"] = "waived"
             info["adversarial_ceiling"] = "待核实"  # 豁免不得抬高到通过

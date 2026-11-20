@@ -123,7 +123,7 @@ python -m unittest discover -s tests -v
 
 即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`；不传这两个参数时保持旧行为，但报告须写明未做跳间校验。
 
-**对抗门禁进门条件（必选）**：台账同时记录对抗结论并**机械压制结论上限**——`init` 未提供 `--adversarial-gate` 且未豁免时，`baseline.gate_precondition.adversarial_state="missing"` 并把 `adversarial_ceiling` 置“待核实”；提供 `--adversarial-waiver <理由>` 则记 `waived` 并留痕（仅限纯只读小任务）。传入 `--adversarial-gate`（`scripts/adversarial_gate.py --enforce` 的输出）时校验其 `verdict_ceiling`/`adversarial_enabled`/`reasons` 字段；若显示对抗未启用且无豁免，同样压“待核实”。`summary` 输出的 `verdict_ceiling` 由此机械派生（存在 FAIL → 不通过；存在 BLOCKED/NOT_RUN/SKIPPED 或未执行 → 待核实；再与对抗上限取更严者），不由人工宣称。
+**对抗门禁进门条件（必选）**：台账同时记录对抗结论并**机械压制结论上限**——`init` 未提供 `--adversarial-gate` 且未豁免时，`baseline.gate_precondition.adversarial_state="missing"` 并把 `adversarial_ceiling` 置“待核实”；提供 `--adversarial-waiver <理由>` 则记 `waived` 并留痕（仅限纯只读小任务）。传入 `--adversarial-gate`（`scripts/adversarial_gate.py` 的输出，门禁默认启用）时校验其 `verdict_ceiling`/`adversarial_enabled`/`reasons` 字段；若显示对抗未启用且无豁免，同样压"待核实"。`summary` 输出的 `verdict_ceiling` 由此机械派生（存在 FAIL → 不通过；存在 BLOCKED/NOT_RUN/SKIPPED 或未执行 → 待核实；再与对抗上限取更严者），不由人工宣称。
 
 result.json必填字段：attempt_id、status、actual、evidence_paths（绝对本地路径数组）、assertions（check/actual/matched数组，与规格check一一对应）、cause、bug_ids、cleanup。PASS要求所有matched为true且cause=none；FAIL至少一个false；BLOCKED/SKIPPED可无断言与证据，但原因不得缺失。退出码0仅表示记录/摘要命令完成，输入/状态错误为2，**不是质量门禁退出码**。
 
