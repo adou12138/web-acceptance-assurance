@@ -103,7 +103,9 @@ Horizon的执行管理优势用于轻量工作区、逐例持久记录、规格/
 
 ## 安装与注册
 
-专家位于 `$WORKBUDDY_CONFIG_DIR/plugins/marketplaces/my-experts/plugins/web-acceptance-assurance`；本次环境为 `C:/Users/wjx-234/.workbuddy/plugins/marketplaces/my-experts/plugins/web-acceptance-assurance`。
+专家由 marketplace 注册：`$WORKBUDDY_CONFIG_DIR/plugins/marketplaces/my-experts/plugins/web-acceptance-assurance`，其 `marketplace.json` 的 `source` 为 `./plugins/web-acceptance-assurance`。
+
+开发源目录位于 `D:/expert-src/web-acceptance-assurance`（git 仓库，改代码、commit、push 都在这里）。C 盘注册位置是指向该目录的目录联接（junction），因此注册路径保持不变，平台仍从原路径读取，发布新版本照常重新注册；改动只需在 D 盘源目录进行，无需同步。
 
 在 WorkBuddy 的专家中心“我的专家”选择砺衡。若当前列表未刷新，可重新打开专家中心查看。
 
