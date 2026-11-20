@@ -139,7 +139,7 @@ python <专家包>/scripts/execution_ledger.py init <workspace> <cases JSON> <co
   --batches <batches.json> --gate-report <gate 报告>
 ```
 
-批次未全 done 或门禁 fail 时拒绝建台账；baseline 记 `gate_precondition`。
+批次未全 done 或门禁 fail 时**拒绝建台账**（退出码 2）；baseline 记 `gate_precondition`。**不传**这两个参数时**不拒绝建账**，但逐项留痕并把结论上限压"待核实"，报告中须写明未做跳间校验。
 
 ## 工具不可用时
 

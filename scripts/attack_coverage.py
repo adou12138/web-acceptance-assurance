@@ -81,6 +81,23 @@ ORACLE_SOURCES = ("independent", "self_attested", "unknown")
 SELF_ATTEST_HINTS = ("读回一致", "读回正确", "回显一致", "agent 回复", "助手回复",
                      "助手自述", "agent 自述", "接口返回即", "页面显示一致")
 
+# 假设结果四态。no_result 只在本脚本内作分类，不进台账枚举——
+# 台账的 hypothesis_outcome 仍是三态（execution_ledger.HYPOTHESIS_OUTCOMES）。
+# 缺结果单列的原因：没执行过 ≠ 假设成立，混进 held 会把未验证算成已验证。
+HYPOTHESIS_NO_RESULT = "no_result"
+
+# 判据缺口的两类（分开处理，不合并成一条）：
+# - no_criterion：无判据占位——没声明独立通道，或通道只写了被测物自述；
+# - no_evidence：缺真实执行证据——通道有，但拿不出可复核的证据路径。
+ORACLE_GAP_CATEGORIES = ("no_criterion", "no_evidence")
+
+# 可疑自然语言：只作提示，不压上限。合法的自然语言描述（"并发建卷时卷名重复应拒绝"）
+# 不在此表——误伤合法描述会把如实登记变成违规。
+SUSPICIOUS_PHRASES = ("应该没问题", "大概没问题", "似乎没问题",
+                      "看起来没问题", "可能没问题", "暂时没问题", "应该正常",
+                      "估计没问题", "基本上没问题")
+
+
 SURF_ID_RE = re.compile(r"^SURF-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 ATK_ID_RE = re.compile(r"^ATK-[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
@@ -215,6 +232,54 @@ def _oracle_unproven(rec):
     return None
 
 
+def _oracle_gap_category(rec):
+    """判据缺口的分类：no_criterion（无判据占位）/ no_evidence（缺真实执行证据）。
+
+    分开处理的理由：两者的补法不同——前者要补一条真正的独立通道，
+    后者要补可复核的证据路径。合成一条时使用方只会看到"判据不可证"，
+    不知道该补什么。判据成立时返回 None。
+    """
+    channel = str(rec.get("oracle_channel") or "").strip()
+    if not channel:
+        return "no_criterion", "未声明 oracle_channel（独立通道是什么）"
+    hit = [h for h in SELF_ATTEST_HINTS if h in channel]
+    if hit:
+        return "no_criterion", f"oracle_channel 只写了被测物自述（命中「{hit[0]}」），不是独立通道"
+    if not _evidence_list(rec):
+        return "no_evidence", "没有证据路径，独立判据无法复核"
+    return None, None
+
+
+def _suspicious_language(text):
+    """可疑自然语言 → 返回命中的措辞，否则 None。
+
+    只作提示，不压上限：措辞可疑不等于结论错。
+    合法描述（"并发建卷时卷名重复应拒绝"）不命中，避免把如实登记变成违规。
+    """
+    value = str(text or "")
+    for phrase in SUSPICIOUS_PHRASES:
+        if phrase in value:
+            return phrase
+    return None
+
+
+def _hypothesis_outcome(rec):
+    """失效假设的结果判定。
+
+    返回 broken / held / blocked / no_result。
+    **缺结果单列 no_result，不计 held**：没跑出结果不等于假设没被打破——
+    混进 held 会让"未验证"冒充"已验证"，那正是这套门禁要防的事。
+
+    优先级：显式 hypothesis_outcome > 由 status 派生 > 缺结果。
+    """
+    declared = str(rec.get("hypothesis_outcome") or "").strip().lower()
+    if declared in ("broken", "held", "blocked"):
+        return declared
+    status = str(rec.get("status") or "").strip().upper()
+    derived = {"FAIL": "broken", "BLOCKED": "blocked", "PASS": "held"}.get(status)
+    return derived or HYPOTHESIS_NO_RESULT
+
+
 def _load_atk(path):
     """ATK 登记文件：数组，或 {"assumptions"/"atk"/"entries": [...]}。
 
@@ -230,6 +295,195 @@ def _load_atk(path):
     if isinstance(data, list):
         return data
     raise ValueError(f"{path}: ATK 登记必须为数组或含数组的对象")
+
+
+def _plan_check_state(plan_surfaces):
+    """本轮是否真的做了「与 plan 交叉核对」。
+
+    三态而非布尔：`surf_plan_checked` 只说明「传入了风险面集合」，
+    空集合也会为真——那等于没核对却声称核对过。区分：
+    - not_provided：未提供 plan，无从核对；
+    - empty：提供了 plan 但风险面集合为空，等同未核对；
+    - checked：提供了非空风险面集合且完成交叉核对。
+    """
+    if plan_surfaces is None:
+        return "not_provided"
+    if not plan_surfaces:
+        return "empty"
+    return "checked"
+
+
+def _residual_state(residual_note, plan_surfaces, atk_entries, per_surf):
+    """残余风险声明的可核对状态（供门禁侧判定，不在此处压上限）。
+
+    三态：
+    - absent：未提供声明；
+    - unstructured：提供了但无法机械对应到任何已登记风险面或攻击假设；
+    - anchored：提供了且至少引用了一个已登记编号。
+
+    结构化声明（dict/list）不走本函数：它的逐条核对由 _parse_residual_declaration
+    + _actual_residual_status 负责（见 residual_declaration 字段）。
+    """
+    if isinstance(residual_note, (dict, list)):
+        return "structured"
+    text = str(residual_note or "").strip()
+    if not text:
+        return "absent"
+    known = set(per_surf)
+    for item in (atk_entries or []):
+        if isinstance(item, dict):
+            ident = str(item.get("id") or "").strip()
+            if ident:
+                known.add(ident)
+    import re as _re
+    referenced = set(_re.findall(r"(?:SURF|ATK)-[A-Za-z0-9_\-]+", text))
+    if referenced and referenced & known:
+        return "anchored"
+    if referenced:
+        return "unresolved_ref"
+    return "unstructured"
+
+
+# —— 残余风险声明：结构化三态（M5）——
+# 旧文本（--residual-note 自由文本）只能判"有没有引用已登记编号"，判不了
+# "这条声明说的是不是真的"。结构化声明把每条残余风险写成
+# {id, status}，才能逐条核对：
+# - id 必须在已登记清单里（否则是虚构编号）；
+# - status 必须与该编号的实际验证状态一致（否则是关联错误）。
+RESIDUAL_STATUSES = ("unbroken", "broken", "not_verified")
+RESIDUAL_STATUS_LABELS = {"unbroken": "未破", "broken": "已破", "not_verified": "尚未验证"}
+
+
+def _parse_residual_declaration(note):
+    """把残余风险声明解析为结构化条目；不是结构化则返回 None。
+
+    **何时可解析为结构化声明**（明确边界，避免"以为核过了"）：
+    - 内容是 JSON 对象（含 items 数组）或 JSON 数组；
+    - 内容是 JSON 文本（以 { 或 [ 开头且能解析成功）。
+    其余一律回落为旧文本证据（自由文本），按 anchored/unstructured 判定，
+    不做逐条核对——自由文本里写"SURF-01 未破"无法区分它指的是哪个观察。
+
+    返回 (items, error)：items 为 [{id, status}]；解析失败时 error 非空。
+    """
+    if isinstance(note, (dict, list)):
+        payload = note
+    else:
+        text = str(note or "").strip()
+        if not text:
+            return [], None
+        if not text.startswith("{") and not text.startswith("["):
+            return None, None
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return None, "残余风险声明形似结构化但无法解析为 JSON，按旧文本证据处理"
+    if isinstance(payload, dict):
+        raw = payload.get("items")
+        if raw is None:
+            return None, "结构化残余风险声明缺 items 数组"
+        if not isinstance(raw, list):
+            return None, "结构化残余风险声明的 items 必须是数组"
+    elif isinstance(payload, list):
+        raw = payload
+    else:
+        return None, "结构化残余风险声明必须是对象或数组"
+    items, error = [], None
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            error = error or f"items[{index}] 不是对象"
+            continue
+        ident = str(entry.get("id") or "").strip()
+        status = str(entry.get("status") or "").strip().lower()
+        if not ident:
+            error = error or f"items[{index}] 缺 id"
+            continue
+        if status not in RESIDUAL_STATUSES:
+            error = error or (f"items[{index}].status 必须是 "
+                              + "/".join(RESIDUAL_STATUSES) + f" 之一，实为 {status!r}")
+            continue
+        items.append({"id": ident, "status": status})
+    return items, error
+
+
+def _actual_residual_status(ident, per_surf, atk_entries):
+    """编号的实际验证状态：unbroken / broken / not_verified；不在册则 None。
+
+    判定依据只有已登记事实：
+    - SURF 面：出现过 broken 假设 → 已破；有可采信验证且未破 → 未破；
+      没打或验证不可采信 → 尚未验证。
+    - ATK 条目：命中 → 已破；未命中 → 未破；未执行/执行中/无法验证 → 尚未验证。
+    """
+    for item in (atk_entries or []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip() != ident:
+            continue
+        status = str(item.get("status") or "").strip()
+        if status == "命中":
+            return "broken"
+        if status == "未命中":
+            return "unbroken"
+        return "not_verified"
+    bucket = per_surf.get(ident)
+    if bucket is None:
+        return None
+    if bucket.get("broken", 0) > 0:
+        return "broken"
+    if bucket.get("supported", 0) > 0:
+        return "unbroken"
+    return "not_verified"
+
+
+# —— M6：ATK 停滞披露 ——
+# 「允许长期悬置」是刻意的让步，但长期悬置若一直不被看见，就退化成"登记了就算做过"。
+# 提供上一可比批次的 ATK 快照后，同范围、同稳定 ID、仍未执行、验证路径无实质变化的
+# 条目判为停滞——只披露，不改变上限（停滞本身不是缺陷，是过程事实）。
+ATK_STAGNANT_STATUS = "未执行"
+
+
+def _atk_scope_key(entry):
+    """ATK 条目的"范围"键：同一稳定 ID + 同一验证路径才算同一件事。
+
+    **旧 ID 被复用**（同一 ID 换了验证路径）不是停滞——那是换了一条假设，
+    拿它说"停滞"是误判。
+    """
+    return (str(entry.get("id") or "").strip(),
+            str(entry.get("validation_path") or "").strip())
+
+
+def _find_stagnant_atk(current_entries, prev_entries):
+    """找出停滞的 ATK：同范围同 ID、仍未执行、上一批也未执行。
+
+    返回 (stagnant_ids, reason_by_id)：
+    - 当前轮已执行的（状态不是「未执行」）→ 不算停滞（有进展）；
+    - 上一批没有该 ID 同验证路径 → 不算停滞（新登记或换了路径，无从比较）；
+    - 上一批该 ID 已执行过 → 不算停滞（曾经动过，不是持续悬置）。
+    """
+    if not prev_entries:
+        return [], {}
+    prev_by_key = {}
+    for item in prev_entries:
+        if not isinstance(item, dict):
+            continue
+        prev_by_key[_atk_scope_key(item)] = item
+    stagnant, reasons = [], {}
+    for item in current_entries or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip() != ATK_STAGNANT_STATUS:
+            continue
+        key = _atk_scope_key(item)
+        prev = prev_by_key.get(key)
+        if prev is None:
+            continue
+        if str(prev.get("status") or "").strip() != ATK_STAGNANT_STATUS:
+            continue
+        ident = key[0]
+        stagnant.append(ident)
+        reasons[ident] = "上一可比批次同 ID 同验证路径同样未执行，本轮仍无进展（验证路径无实质变化）"
+    return stagnant, reasons
+
+
 
 
 def _normalise_atk_severity(value):
@@ -372,7 +626,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
             residual_note=None, plan_surfaces=None, plan_risks=None,
             surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None,
-            atk_entries=None, reviews=None):
+            atk_entries=None, reviews=None, prev_atk_entries=None):
+
     records = _normalize_events(records)
     total = len(records)
     path_counts = {k: 0 for k in PATH_TYPES}
@@ -387,12 +642,16 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     declared_method_missing = 0
     method_unknown = []
     unproven = []
+    oracle_gaps = {name: [] for name in ORACLE_GAP_CATEGORIES}
     probes_total = 0
     hyp_records = 0
     hyp_broken = 0
     hyp_held = 0
     hyp_blocked = 0
+    hyp_no_result = 0
+    hyp_no_result_ids = []
     hyp_without_surface = []
+    suspicious_wording = []
     per_surf = {}
 
     known_methods = _method_ids()
@@ -415,6 +674,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             why = _oracle_unproven(rec)
             if why:
                 unproven.append((rec.get("id") or rec.get("case_id") or "?", why))
+                category, _reason = _oracle_gap_category(rec)
+                oracle_gaps[category].append((rec.get("id") or rec.get("case_id") or "?", why))
 
         mode = str(rec.get("discovery_mode") or "").strip().lower()
         modes[mode if mode in DISCOVERY_MODES else "undetermined"] += 1
@@ -441,35 +702,55 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
 
         # —— 失效假设：每条记录可声明"如果 X 则 Y 会坏"的可证伪预测与结果 ——
         hypothesis = str(rec.get("hypothesis") or "").strip()
+        # 可疑自然语言只作提示：在断言与假设两处取样，措辞可疑 ≠ 结论错。
+        wording = _suspicious_language(hypothesis) or _suspicious_language(
+            str(rec.get("actual") or rec.get("desc") or ""))
+        if wording:
+            suspicious_wording.append((rec.get("id") or rec.get("case_id") or "?", wording))
+        outcome = None
         if hypothesis:
             if not surf:
                 hyp_without_surface.append(rec.get("id") or rec.get("case_id") or "?")
             hyp_records += 1
-            outcome = str(rec.get("hypothesis_outcome") or "").strip().lower()
-            if outcome not in ("broken", "held", "blocked"):
-                status = str(rec.get("status") or "").strip().upper()
-                outcome = {"FAIL": "broken", "BLOCKED": "blocked"}.get(status, "held")
+            outcome = _hypothesis_outcome(rec)
             if outcome == "broken":
                 hyp_broken += 1
             elif outcome == "blocked":
                 hyp_blocked += 1
+            elif outcome == HYPOTHESIS_NO_RESULT:
+                # 缺结果不计 held：没跑出结果 ≠ 假设没被打破。
+                # 混进 held 会让"未验证"冒充"已验证"，正是这套门禁要防的事。
+                hyp_no_result += 1
+                hyp_no_result_ids.append(rec.get("id") or rec.get("case_id") or "?")
             else:
                 hyp_held += 1
 
         if surf and SURF_ID_RE.match(surf):
             bucket = per_surf.setdefault(surf, {"records": 0, "methods": set(),
                                                 "hypotheses": 0, "broken": 0, "held": 0,
-                                                "blocked": 0})
+                                                "blocked": 0, "no_result": 0,
+                                                "supported": 0, "paths": set(),
+                                                "observations": [], "broken_ids": []})
             bucket["records"] += 1
             if method in known_methods:
                 bucket["methods"].add(method)
+            if ptype in PATH_TYPES:
+                bucket["paths"].add(ptype)
+            bucket["observations"].append(
+                {"id": rec.get("id") or rec.get("case_id") or "?",
+                 "path_type": ptype, "method": method,
+                 "outcome": outcome if hypothesis else None,
+                 "hypothesis": bool(hypothesis)})
             if hypothesis:
                 bucket["hypotheses"] += 1
-                outcome = str(rec.get("hypothesis_outcome") or "").strip().lower()
-                if outcome not in ("broken", "held", "blocked"):
-                    status = str(rec.get("status") or "").strip().upper()
-                    outcome = {"FAIL": "broken", "BLOCKED": "blocked"}.get(status, "held")
                 bucket[outcome] += 1
+                if outcome == "broken":
+                    bucket["broken_ids"].append(rec.get("id") or rec.get("case_id") or "?")
+                # 支持覆盖 = 有结果 + 独立判据 + 有证据。缺任一项都不算覆盖：
+                # "写了一句预测"不等于"这个面被打过"。
+                if (outcome in ("broken", "held", "blocked")
+                        and source == "independent" and _oracle_unproven(rec) is None):
+                    bucket["supported"] += 1
 
         probes = rec.get("probes")
         if isinstance(probes, int) and probes > 0:
@@ -506,6 +787,16 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         detail = "；".join(f"{rid}: {why}" for rid, why in unproven[:5])
         gaps.append({"code": "oracle_independence_unproven",
                      "message": f"{len(unproven)} 条声明 independent 但拿不出独立通道：{detail}"})
+    # 判据缺口分两类披露（补法不同：前者补独立通道，后者补可复核证据）：
+    for category, title, advice in (
+            ("no_criterion", "无判据占位", "须补一条真正的独立通道（不得只写被测物自述）"),
+            ("no_evidence", "缺真实执行证据", "须补可复核的证据路径（截图/接口响应/日志）")):
+        items = oracle_gaps.get(category) or []
+        if items:
+            detail = "；".join(f"{rid}: {why}" for rid, why in items[:5])
+            gaps.append({"code": f"oracle_{category}",
+                         "message": f"{len(items)} 条判据属「{title}」：{detail}"
+                                    f"（{advice}）"})
     # 一条独立通道都没有，是"证据结构缺失"，与"比例偏低"不是一件事：
     # 比例可凑，零独立通道凑不出来（每条 independent 都要求点名通道 + 带证据）。
     if total >= 10 and oracle["independent"] == 0:
@@ -515,12 +806,26 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     # —— 失效假设：替代"配额"的核心判据 ——
     required_surfaces = {s for s, risk in (plan_risks or {}).items()
                          if str(risk).strip().lower() in ("high", "critical")}
-    covered = {s for s, b in per_surf.items() if b["hypotheses"] > 0}
+    # 覆盖 = 有结果 + 独立判据 + 有证据的假设。只写了一句预测不算覆盖——
+    # 缺结果、缺独立通道、缺证据任一都撑不起"这个面被打过"。
+    covered = {s for s, b in per_surf.items() if b["supported"] > 0}
     missing_hyp = sorted(required_surfaces - covered)
     if missing_hyp:
-        gaps.append({"code": "surface_without_hypothesis",
-                     "message": f"高风险风险面没有任何可证伪预测：{missing_hyp[:6]}"
-                                "（每个高风险面至少要有一条「如果 X 则 Y 会坏」的构造）"})
+        # 区分"根本没写预测"与"写了但没验证"：两种缺口的补法不同。
+        never_stated = [s for s in missing_hyp if per_surf.get(s, {}).get("hypotheses", 0) == 0]
+        stated_unverified = [s for s in missing_hyp if s not in never_stated]
+        if never_stated:
+            gaps.append({"code": "surface_without_hypothesis",
+                         "message": f"高风险风险面没有任何可证伪预测：{never_stated[:6]}"
+                                    "（每个高风险面至少要有一条「如果 X 则 Y 会坏」的构造）"})
+        if stated_unverified:
+            gaps.append({"code": "surface_hypothesis_unverified",
+                         "message": f"高风险风险面写了预测但没有可采信的验证结果：{stated_unverified[:6]}"
+                                    "（缺结果、缺独立判据或缺证据，均不算已验证）"})
+    if hyp_no_result:
+        gaps.append({"code": "hypothesis_without_result",
+                     "message": f"{hyp_no_result} 条失效假设没有结果：{hyp_no_result_ids[:5]}"
+                                "（缺结果不算「未打破」，不得计入已验证）"})
     if plan_risks is None and total >= HYPOTHESIS_MIN_RECORDS and not hyp_records:
         gaps.append({"code": "no_falsifiable_hypothesis",
                      "message": f"{total} 条记录里没有一条声明失效假设（hypothesis）："
@@ -539,10 +844,149 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     if method_unknown:
         gaps.append({"code": "method_unknown",
                      "message": f"method 不在方法库枚举内：{sorted(set(method_unknown))[:5]}"})
-    if not gaps and not (isinstance(residual_note, str) and residual_note.strip()):
+
+    # —— 高风险面方法单一：与"整体方法多样性低"分开处理 ——
+    # 整体多样性只是分布描述（可被凑）；但**某个高风险面**只用了一种方法，
+    # 是这个面没被真正打透的信号——换个面换方法不算覆盖这个面。
+    # 因此按面判定，并给出可执行的复测建议（关联风险面、既有观察、可用范围）。
+    # **只作提示，不压上限**：方法多样性一旦压档就会逼人拆碎去测没打算测的东西
+    # （见 test_single_method_surface_is_disclosed_not_gated 的既定口径），
+    # 且"换手法"是使用方的选择而非本轮结论成立与否的前提。
+    # 复测建议是附加说明，不取代原提示与理由。
+    single_method_high_risk = []
+    for surf in sorted(required_surfaces):
+        bucket = per_surf.get(surf)
+        if not bucket or bucket["records"] < 3:
+            continue
+        if len(bucket["methods"]) > 1:
+            continue
+        single_method_high_risk.append({
+            "surface": surf,
+            "method": sorted(bucket["methods"]),
+            "records": bucket["records"],
+            "hypotheses": bucket["hypotheses"],
+            "supported": bucket["supported"],
+            "observations": bucket["observations"][:5],
+            "existing_paths": sorted(bucket["paths"]),
+        })
+    if single_method_high_risk:
+        detail = "；".join(
+            f"{item['surface']}（{item['records']} 条记录仅用 {item['method']}，"
+            f"可采信验证 {item['supported']} 条）"
+            for item in single_method_high_risk[:5])
+        notices.append({"code": "high_risk_surface_single_method",
+                        "message": f"{len(single_method_high_risk)} 个高风险风险面只用了单一方法：{detail}"
+                                   "（该面未被真正打透；建议换方法复打，见 retest_suggestions；"
+                                   "仅提示，不压结论上限）"})
+
+
+    if not gaps and not (isinstance(residual_note, str) and residual_note.strip()) \
+            and not isinstance(residual_note, (dict, list)):
         gaps.append({"code": "residual_note_missing",
                      "message": "结论将达「通过」但未声明未破的攻击面（--residual-note）："
                                 "无法区分「真的没问题」与「没找到让它失败的输入」"})
+
+    # —— 弱化调用留痕：门禁链必须能看出「本轮到底核对到什么」——
+    # 原先 surf_plan_checked 只说明「传入了风险面集合」，空集合也为真，
+    # 等于没核对却声称核对过。这里按三态如实披露，压不压上限由门禁侧决定。
+    plan_state = _plan_check_state(plan_surfaces)
+    if plan_state != "checked":
+        notices.append({"code": "plan_cross_check_absent",
+                        "message": ("未与对抗 plan 交叉核对风险面（未提供 plan 或 plan 风险面为空）"
+                                    if plan_state == "not_provided" else
+                                    "提供的 plan 风险面集合为空，等同未做交叉核对")
+                                   + "：弱化调用，结论上限由门禁侧压待核实"})
+    if atk_entries is None:
+        notices.append({"code": "atk_not_submitted",
+                        "message": "未提交 ATK 攻击假设登记（--atk）：本轮未登记攻击假设，"
+                                   "非违规但门禁侧须披露"})
+    residual_state = _residual_state(residual_note, plan_surfaces, atk_entries, per_surf)
+    if residual_state in ("unstructured", "unresolved_ref"):
+        notices.append({"code": "residual_note_unanchored",
+                        "message": ("残余风险声明未引用任何已登记编号（SURF-/ATK-）："
+                                    if residual_state == "unstructured" else
+                                    "残余风险声明引用的编号在已登记清单中不存在：")
+                                   + "无法机械核对所声明的未破攻击面"})
+
+    # —— M5：残余风险声明的三态与逐条核对 ——
+    # 旧文本（自由文本）判不了"这条声明说的是不是真的"，只保留 anchored 判定；
+    # 结构化声明才能逐条核对：编号在不在册、状态与实际验证状态是否一致。
+    residual_items, residual_parse_error = _parse_residual_declaration(residual_note)
+    residual_declaration = {
+        "mode": "text" if residual_items is None else "structured",
+        "state": None,
+        "items": [],
+        "reasons": [],
+    }
+    if residual_parse_error:
+        notices.append({"code": "residual_declaration_unparsed",
+                        "message": f"残余风险声明无法解析：{residual_parse_error}"
+                                   "（按旧文本证据处理，不做逐条核对）"})
+    if residual_items is not None:
+        unmatched, mismatched, checked = [], [], []
+        for entry in residual_items:
+            ident, claimed = entry["id"], entry["status"]
+            actual = _actual_residual_status(ident, per_surf, atk_entries)
+            if actual is None:
+                unmatched.append({"id": ident, "claimed": claimed,
+                                  "label": RESIDUAL_STATUS_LABELS[claimed]})
+                continue
+            # not_verified 是**保守声明**（少报覆盖），不按状态不符记缺口——
+            # 如实登记不该被惩罚。承重的 unbroken/broken 才做严格一致性校验。
+            if claimed == "not_verified":
+                checked.append({"id": ident, "status": claimed,
+                                "label": RESIDUAL_STATUS_LABELS[claimed],
+                                "actual": actual,
+                                "actual_label": RESIDUAL_STATUS_LABELS[actual]})
+                continue
+            if actual != claimed:
+                mismatched.append({"id": ident, "claimed": claimed,
+                                   "actual": actual,
+                                   "label": RESIDUAL_STATUS_LABELS[claimed],
+                                   "actual_label": RESIDUAL_STATUS_LABELS[actual]})
+                continue
+            checked.append({"id": ident, "status": claimed,
+                            "label": RESIDUAL_STATUS_LABELS[claimed]})
+        # 三态：有未破项 / 无未破项 / 尚未验证
+        # - 有未破项：声明了至少一条 unbroken 且该条核对相符；
+        # - 无未破项：声明为空、或所有条目都已 broken 且核对相符；
+        # - 尚未验证：存在无法核对（不在册/状态不符）的条目，或声明为 not_verified。
+        if unmatched or mismatched:
+            state = "not_verified"
+        elif any(item["status"] == "unbroken" for item in checked):
+            state = "has_unbroken"
+        elif any(item["status"] == "not_verified" for item in checked):
+            state = "not_verified"
+        else:
+            state = "no_unbroken"
+        residual_declaration["state"] = state
+        residual_declaration["items"] = [
+            {"id": item["id"], "status": item["status"], "label": item["label"],
+             "verdict": "matched"} for item in checked] + [
+            {"id": item["id"], "status": item["claimed"], "label": item["label"],
+             "verdict": "not_registered"} for item in unmatched] + [
+            {"id": item["id"], "status": item["claimed"], "label": item["label"],
+             "actual": item["actual"], "actual_label": item["actual_label"],
+             "verdict": "status_mismatch"} for item in mismatched]
+        if unmatched:
+            gaps.append({"code": "residual_ref_not_registered",
+                         "message": "残余风险声明引用了未登记编号："
+                                    + "、".join(item["id"] for item in unmatched[:6])
+                                    + "（编号不在本轮已登记清单，无法核对）"})
+        if mismatched:
+            detail = "；".join(f"{item['id']} 声明「{item['label']}」实际「{item['actual_label']}」"
+                               for item in mismatched[:6])
+            gaps.append({"code": "residual_status_mismatch",
+                         "message": f"残余风险声明的状态与实际验证状态不符：{detail}"
+                                    "（须与风险面、对应观察及验证状态一致）"})
+        if state == "not_verified" and not unmatched and not mismatched:
+            declared_unverified = [item["id"] for item in checked
+                                    if item["status"] == "not_verified"]
+            notices.append({"code": "residual_not_verified",
+                            "message": "残余风险声明存在「尚未验证」的条目："
+                                       + "、".join(declared_unverified[:6])
+                                       + "（如实登记，不压结论上限）"})
+
 
     # —— ATK 独立轨道：与需求 SURF 轨道分开判定 ——
     # 「未执行」不压上限（允许长期悬置）；「命中」且影响面属功能/数据/权限时
@@ -563,6 +1007,15 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         notices.append({"code": "atk_unexecuted",
                         "message": f"{atk['unexecuted']} 条攻击假设尚未执行："
                                    f"{atk['unexecuted_ids'][:6]}（允许长期悬置，不压结论上限）"})
+    # —— M6：ATK 停滞披露（只披露，不改上限）——
+    # 与「未执行」提示分开：未执行是本轮事实，停滞是**跨轮**事实（上一批同样悬置）。
+    stagnant_ids, stagnant_reasons = _find_stagnant_atk(atk["entries"], prev_atk_entries)
+    if stagnant_ids:
+        notices.append({"code": "atk_stagnant",
+                        "message": f"{len(stagnant_ids)} 条攻击假设跨轮持续未执行："
+                                   f"{stagnant_ids[:6]}（{stagnant_reasons[stagnant_ids[0]]}；"
+                                   "仅披露，不压结论上限）"})
+
     # ATK 子结论与顶层结论必须一致：闭环判定在上一段完成后才写子结论，
     # 否则会出现「顶层通过、atk 子结论待核实」的自相矛盾产物。
     atk["pending_candidates"] = pending_candidates
@@ -582,6 +1035,32 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         notices.append({"code": "single_method_surface",
                         "message": f"以下风险面只用了 1 种方法且记录 ≥3 条：{single_method_surfs[:5]}；"
                                    "若其假设全部「未打破」，建议换手法复打"})
+
+    # —— 复测建议：把"建议换手法"落到具体动作 ——
+    # 三要素缺一不可：针对哪个风险面（surface）、已有观察是什么（observations）、
+    # 本轮可用的是什么（可用方法与路径类型取自已登记数据，不臆造）。
+    retest_suggestions = []
+    for item in single_method_high_risk:
+        used_methods = set(item["method"])
+        used_paths = set(item["existing_paths"])
+        retest_suggestions.append({
+            "surface": item["surface"],
+            "reason": "高风险面仅用单一方法，未被真正打透",
+            "observations": item["observations"],
+            "used_methods": sorted(used_methods),
+            "used_paths": sorted(used_paths),
+            "available_methods": sorted(m for m in known_methods if m not in used_methods)[:6],
+            "available_paths": sorted(p for p in ATTACK_PATH_TYPES if p not in used_paths)[:6],
+            "suggestion": ("在该面追加一条与现有方法不同、且落在已登记路径类型内的探针；"
+                           "追加后须记录 hypothesis 与结果，否则该面仍算未验证"),
+        })
+
+    # 可疑自然语言：只作提示，不压上限（措辞可疑 ≠ 结论错）。
+    if suspicious_wording:
+        detail = "；".join(f"{rid}: 命中「{phrase}」" for rid, phrase in suspicious_wording[:5])
+        notices.append({"code": "suspicious_wording",
+                        "message": f"{len(suspicious_wording)} 条记录的表述含可疑措辞：{detail}"
+                                   "（仅提示，不压上限；请确认断言写的是可观测事实而非主观判断）"})
     if surf_new:
         notices.append({"code": "new_surface",
                         "message": f"发现 {len(set(surf_new))} 个计划外风险面：{sorted(set(surf_new))[:6]}"
@@ -607,22 +1086,38 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "surf_linkage_rate": surf_rate,
         "surf_linkage_threshold": surf_linkage_threshold,
         "surf_plan_checked": plan_surfaces is not None,
+        "plan_check_state": _plan_check_state(plan_surfaces),
+        "atk_checked": atk_entries is not None,
         "surfaces_beyond_plan": len(set(surf_new)),
         "surfaces_beyond_plan_ids": sorted(set(surf_new)),
         "amend_note": (amend_note or "").strip() or None,
         "hypotheses": {"declared": hyp_records, "broken": hyp_broken,
                        "held": hyp_held, "blocked": hyp_blocked,
+                       "no_result": hyp_no_result,
+                       "no_result_ids": hyp_no_result_ids[:6],
                        "break_rate": (round(hyp_broken / hyp_records, 4)
                                       if hyp_records else None)},
-        "surface_coverage": {s: {**b, "methods": sorted(b["methods"])}
+        "surface_coverage": {s: {**b, "methods": sorted(b["methods"]),
+                                  "paths": sorted(b["paths"])}
                              for s, b in sorted(per_surf.items())},
         "single_method_surfaces": single_method_surfs,
+        "high_risk_single_method_surfaces": [item["surface"] for item in single_method_high_risk],
+        "retest_suggestions": retest_suggestions,
         "methods": methods,
         "method_missing": declared_method_missing,
         "method_diversity": method_diversity,
         "probes_total": probes_total,
-        "residual_note": (residual_note or "").strip() or None,
+        "residual_note": (str(residual_note or "").strip() or None)
+        if not isinstance(residual_note, (dict, list)) else None,
+        "residual_declaration_raw": residual_note
+        if isinstance(residual_note, (dict, list)) else None,
+        "residual_note_checked": _residual_state(residual_note, plan_surfaces,
+                                                 atk_entries, per_surf),
+        "residual_declaration": residual_declaration,
+        "oracle_gaps": {name: len(items) for name, items in oracle_gaps.items()},
         "atk": atk,
+        "atk_stagnant_ids": stagnant_ids,
+        "atk_stagnant_checked": prev_atk_entries is not None,
         "gaps": gaps,
         "notices": notices,
         "verdict_ceiling": "待核实" if gaps else "通过",
@@ -692,12 +1187,19 @@ def main(argv=None):
                         help="执行台账（JSONL/CSV/执行事件流 events.jsonl）")
     parser.add_argument("--plan", help="对抗 plan（提供时 surf_id 与风险面清单交叉核对）")
     parser.add_argument("--residual-note",
-                        help="未破攻击面声明；结论达「通过」前必填")
+                        help="未破攻击面声明（旧文本入口）；结论达「通过」前必填。"
+                             "内容为 JSON 时按结构化声明逐条核对")
+    parser.add_argument("--residual-declaration",
+                        help="结构化残余风险声明 JSON 文件（{\"items\":[{\"id\",\"status\"}]}）；"
+                             "status 取 unbroken/broken/not_verified。与 --residual-note 同时给时以此为准")
     parser.add_argument("--amend-note",
                         help="计划外风险面的纳入说明；缺省时只提示，不压上限")
     parser.add_argument("--emit-json", help="结论输出路径")
     parser.add_argument("--emit-csv", help="CSV 导出路径（UTF-8-sig）")
     parser.add_argument("--atk", help="ATK 攻击假设登记文件（数组或含数组的对象）；走独立校验轨道")
+    parser.add_argument("--atk-prev",
+                        help="上一可比批次的 ATK 登记快照；提供后披露跨轮持续未执行（atk_stagnant），"
+                             "只提示不改上限")
     parser.add_argument("--reviews", help="候选复核 JSONL 路径；用于判断命中的 ATK 是否已裁定闭环")
     parser.add_argument("--density-threshold", type=float, default=DEFAULT_DENSITY_THRESHOLD)
     parser.add_argument("--independent-rate", type=float, default=DEFAULT_INDEPENDENT_RATE)
@@ -719,14 +1221,18 @@ def main(argv=None):
                 except json.JSONDecodeError as exc:
                     raise ValueError(f"{args.reviews} 解析失败: {exc}") from exc
                 reviews.append(item)
+        residual = args.residual_note
+        if args.residual_declaration:
+            residual = json.loads(Path(args.residual_declaration).read_text(encoding="utf-8-sig"))
         result = analyse(records, args.density_threshold, args.independent_rate,
-                         residual_note=args.residual_note,
+                         residual_note=residual,
                          plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
                          plan_risks=_plan_risks(args.plan) if args.plan else None,
                          surf_linkage_threshold=args.surf_linkage,
                          amend_note=args.amend_note,
                          atk_entries=atk_entries,
-                         reviews=reviews)
+                         reviews=reviews,
+                         prev_atk_entries=_load_atk(args.atk_prev) if args.atk_prev else None)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         # 输入/解析错误以 2 退出——与包内其它脚本（adversarial_gate /
         # execution_ledger / challenge_summary / finding_summary）口径一致，

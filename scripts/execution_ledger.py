@@ -35,6 +35,9 @@ def _sibling(name):
 # 与方法库 ID 都从那里取，避免生产端与消费端各写一份然后悄悄漂移。
 _ATTACK = _sibling("attack_coverage")
 _ADV = _sibling("adversarial_data")
+# 修订分类契约的单一事实源：phase_gate 与 execution_ledger 共用同一判定函数，
+# 两端各判一次必然漂移（分类口径不同 = 放行口径不同）。
+_AMD = _sibling("amendment_class")
 ATTACK_PATH_TYPES = tuple(_ATTACK.PATH_TYPES)
 ORACLE_SOURCES = tuple(_ATTACK.ORACLE_SOURCES)
 DISCOVERY_MODES = tuple(_ATTACK.DISCOVERY_MODES)
@@ -42,6 +45,9 @@ METHOD_IDS = frozenset(_ADV.METHOD_IDS)
 
 STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED"}
 SEVERITIES = {"blocker", "major", "normal", "minor"}
+# 首屏事实的 schema 版本。报告渲染器与交付模板消费同一份 headline，
+# 版本号不同即视为旧摘要（缺字段）→ 回退并如实标注，不静默按旧口径推断。
+HEADLINE_SCHEMA = "ledger-headline/1"
 BUG_STATES = {"open", "in_progress", "fixed_pending_deploy", "fixed_pending_retest", "reopened", "closed"}
 CAUSES = {"none", "product", "environment", "data", "automation", "unknown"}
 # 证据等级门禁（对齐 blind_eval 的 grade != "E1" 不计检出）：
@@ -220,6 +226,46 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
     return info
 
 
+def _applicable_missing(gate_inputs):
+    """返回本轮**适用**且尚未提供的门禁证据项。
+
+    只记「未提供」这一事实，不代替上游产物做合格性判断：建账记初始状态，
+    收尾复核同轮最终产物，缺项在收尾时披露。
+
+    适用性判据（机械，不看理由文本）：
+
+    - **走了三阶段流程**（本轮提供了 phase_state）：阶段完整性、跳间校验、
+      攻击覆盖三项职责都由 phase_gate 承担——它的 submit 强制校验评审/用例/
+      对抗 plan 三件交接产物，execute 阶段收尾强制交攻击覆盖结论。此时台账
+      再索要 --batches/--gate-report/--attack-coverage 就是**同一职责计两次
+      缺失**，会把合法三阶段流程误压成待核实。三项均不计缺口。
+    - **旧工作流**（未提供 phase_state）：三阶段闸门未走，按专家入口契约须压
+      待核实；跳间校验与攻击覆盖的适用入口只有 --batches/--gate-report/
+      --attack-coverage，缺任一即记缺口。
+
+    对抗门禁不在此列：它的缺失由 _adversarial_precondition 单独判定并留痕
+    （adversarial_state / adversarial_reasons），此处重复计会让同一个缺口
+    出现两套原因码。
+    """
+    if gate_inputs.get("phase_state"):
+        return []
+    missing = []
+    for name in ("phase_state", "batches", "gate_report", "attack_coverage"):
+        if not gate_inputs.get(name):
+            missing.append(name)
+    return missing
+
+
+# 缺失输入的中文说明（收尾披露用）。对抗门禁缺失另有 _adversarial_precondition
+# 的专门文案，此处只补充其余四项，不重复对抗门禁的理由。
+_MISSING_INPUT_LABELS = {
+    "phase_state": "三阶段闸门状态（--phase-state）",
+    "batches": "批次闭环校验（--batches）",
+    "gate_report": "设计门禁报告（--gate-report）",
+    "attack_coverage": "攻击面覆盖结论（--attack-coverage）",
+}
+
+
 def _gate_precondition(batches, gate_report, design_ids=None, design=None):
     """校验第 2→3 跳进门条件。design_ids 为用例 ID 集合；design 为完整用例对象（用于内容绑定）。
 
@@ -344,11 +390,24 @@ def _attack_precondition(attack_coverage):
     gaps = attack_coverage.get("gaps")
     if not isinstance(gaps, list):
         raise ValueError("attack_coverage 缺 gaps 数组（须原样呈现，不得隐矞缺口）")
-    return {
+    info = {
         "attack_coverage_ceiling": ceiling,
         "attack_density": attack_coverage.get("attack_density"),
         "attack_gaps": list(gaps),
     }
+    # 弱化调用留痕：与 phase_gate._attack_check 同一口径——未做 plan 交叉核对
+    # （未提供 plan 或风险面集合为空）时，攻击面覆盖结论无法证明与计划对过账。
+    # 压上限而非拒绝文件，与其余门禁口径一致。
+    plan_state = attack_coverage.get("plan_check_state")
+    if plan_state is not None and plan_state != "checked":
+        info["attack_coverage_ceiling"] = _strictest(ceiling, "待核实")
+        info["attack_plan_check_state"] = plan_state
+        info["attack_reasons"] = [
+            "攻击覆盖未与 plan 交叉核对（plan_check_state=%s）：属弱化调用，"
+            "结论上限压待核实" % plan_state]
+    if "atk_checked" in attack_coverage:
+        info["attack_atk_checked"] = bool(attack_coverage.get("atk_checked"))
+    return info
 
 
 def _phase_precondition(phase_state):
@@ -367,8 +426,14 @@ def _phase_precondition(phase_state):
         if status != "done":
             reasons.append(f"阶段 {phase} 状态为 {status}，未走完提交-放行-开始-完成流程")
     for amendment in phase_state.get("amendments") or []:
-        if amendment.get("status") == "awaiting_approval":
-            reasons.append(f"阶段修订 {amendment.get('id')} 未获批准：{amendment.get('note')}")
+        # 修订分类契约与 phase_gate 共用（scripts/amendment_class.py 单一事实源）：
+        # 判定走同一个 is_blocking()——类别决定"需不需要先批"，状态决定"批了没有"。
+        # 只有未批准的范围变更（scope_change）阻断；只读观察（readonly_lead）
+        # 凭据齐备即可执行，不压结论上限——否则如实登记只读线索反被惩罚。
+        if _AMD.is_blocking(amendment):
+            kind = str(amendment.get("kind") or "scope_change")
+            reasons.append(f"阶段修订 {amendment.get('id')} 未获批准"
+                           f"（分类：{kind}）：{amendment.get('note')}")
     for phase, entry in phases.items():
         routing = (entry or {}).get("routing") or {}
         declared = routing.get("declared_class")
@@ -403,11 +468,21 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
         adversarial_gate, adversarial_waiver, read_only=read_only, case_count=len(cases)))
     gate_precondition.update(_phase_precondition(phase_state))
     gate_precondition.update(_attack_precondition(attack_coverage))
+    # 缺失即留痕：可选参数缺失时不再"保持旧行为无痕迹"，而是逐项记录，
+    # 收尾据此披露并压上限（与对抗门禁缺失同口径）。
+    # 记录的只是「本轮未提供」，不预判上游产物是否合格——最终判定看收尾复核。
+    # 「另记」：缺口不混进 gate_precondition（那是门禁判定结果），单独冻结在
+    # baseline 顶层，收尾据此刷新。
+    gate_inputs_present = {"phase_state": phase_state is not None,
+                           "batches": batches is not None,
+                           "gate_report": gate_report is not None,
+                           "attack_coverage": attack_coverage is not None}
+    missing_inputs = _applicable_missing(gate_inputs_present)
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
     workspace.mkdir(exist_ok=False)
-    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition}
+    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition, "gate_inputs_present": gate_inputs_present, "missing_inputs": missing_inputs}
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
@@ -645,15 +720,23 @@ def _strictest(a, b):
     return max((a, b), key=lambda x: RANK.get(x, 1))
 
 
-def _verdict_ceiling(baseline, counts, executed):
-    """机械结论上限：由台账事实与对抗门禁共同限定，不由人工宣称。
+def _verdict_ceiling(baseline, counts, executed, final_precondition=None):
+    """机械结论上限：由台账事实与各门禁共同限定，不由人工宣称。
 
     对齐 agent 口径：存在未闭环 blocker（FAIL）→ 不通过；对抗缺失/未启用或
     存在 BLOCKED/未执行 → 待核实；全部必选项已实测且对抗已验证 → 通过。
+
+    final_precondition 为**收尾复核**时读到的同轮最终产物（阶段/覆盖/对抗结论）。
+    建账时写入的只是初始状态——本轮覆盖结论要到采集后才产生，若只认建账时的
+    快照，收尾就会沿用过期结论。故收尾可刷新对应类别，且：
+    - 刷新只放宽「本轮尚未完成」造成的待核实，不放宽已成立的更严结论；
+    - 已成立的「不通过」在任何刷新下都保持不通过。
     """
     gate = (baseline.get("gate_precondition") or {})
-    adversarial = gate.get("adversarial_ceiling", "待核实")
-    phase_ceiling = gate.get("phase_ceiling")
+    final_precondition = final_precondition or {}
+    adversarial = final_precondition.get("adversarial_ceiling",
+                                         gate.get("adversarial_ceiling", "待核实"))
+    phase_ceiling = final_precondition.get("phase_ceiling", gate.get("phase_ceiling"))
     if counts.get("FAIL"):
         return "不通过"
     fact = "待核实" if (counts.get("BLOCKED") or counts.get("NOT_RUN")
@@ -661,13 +744,227 @@ def _verdict_ceiling(baseline, counts, executed):
     ceiling = _strictest(fact, adversarial)
     if phase_ceiling:
         ceiling = _strictest(ceiling, phase_ceiling)
-    attack_ceiling = gate.get("attack_coverage_ceiling")
+    attack_ceiling = final_precondition.get("attack_coverage_ceiling",
+                                            gate.get("attack_coverage_ceiling"))
     if attack_ceiling:
         ceiling = _strictest(ceiling, attack_ceiling)
+    # 建账时缺失的可选输入：收尾复核后仍未补齐的，留痕并压上限。
+    # 与对抗门禁缺失同口径——弱化调用不得自证通过。
+    # 只压到「待核实」，不放松已算出的更严结论（上面已取过更严者）。
+    missing = final_precondition.get("missing_inputs",
+                                     baseline.get("missing_inputs") or [])
+    if missing:
+        ceiling = _strictest(ceiling, "待核实")
     return ceiling
 
 
-def summarize(workspace, design, context, bugs=None):
+def _headline_checks(baseline, final_precondition, counts, evidence_issues,
+                     flaky_cases, missing_inputs, read_only):
+    """逐项必查项状态。返回 [{id, label, status, detail}]。
+
+    status 四取值：`ok`（该项无缺口且未压上限）/ `limited`（该项把上限压到待核实）/
+    `missing`（证据根本没提供）/ `unknown`（无法判定，如实标注而不猜）。
+
+    判定口径与 `_applicable_missing`、`_verdict_ceiling` 同一套：走三阶段流程时
+    攻击覆盖由 phase_gate 在 execute 收尾强制校验，台账不再重复索要——
+    否则同一职责计两次缺失，既误压上限，也让首屏出现与实际不符的"缺攻击覆盖"。
+    """
+    gate = (baseline.get("gate_precondition") or {})
+    checks = []
+
+    # 1) 三阶段闸门
+    phase_state = final_precondition.get("phase_state")
+    if phase_state is None:
+        checks.append({"id": "phase_state", "label": "三阶段闸门",
+                       "status": "missing",
+                       "detail": "未提供阶段状态：三阶段闸门未走，阶段完整性未机械核对"})
+    elif phase_state == "complete":
+        checks.append({"id": "phase_state", "label": "三阶段闸门", "status": "ok",
+                       "detail": "三阶段均按流程走完（跨会话交接与放行记录齐备）"})
+    else:
+        checks.append({"id": "phase_state", "label": "三阶段闸门", "status": "limited",
+                       "detail": "；".join(final_precondition.get("phase_reasons") or [])
+                                or "阶段流程未走完"})
+
+    # 2) 对抗门禁
+    adversarial_state = final_precondition.get("adversarial_state",
+                                              gate.get("adversarial_state"))
+    adversarial_reasons = final_precondition.get("adversarial_reasons",
+                                                 gate.get("adversarial_reasons") or [])
+    adversarial_ceiling = final_precondition.get("adversarial_ceiling",
+                                                  gate.get("adversarial_ceiling"))
+    if adversarial_state == "verified" and adversarial_ceiling == "通过":
+        checks.append({"id": "adversarial_gate", "label": "对抗门禁", "status": "ok",
+                       "detail": "对抗义务已登记且门禁通过"})
+    elif adversarial_state == "missing":
+        checks.append({"id": "adversarial_gate", "label": "对抗门禁", "status": "missing",
+                       "detail": "；".join(adversarial_reasons) or "未提供对抗门禁结论"})
+    else:
+        label = {"not_enabled": "对抗未启用", "waived": "对抗经豁免跳过",
+                 "disabled": "对抗门禁已显式关闭"}.get(str(adversarial_state),
+                                                    "对抗结论受限")
+        checks.append({"id": "adversarial_gate", "label": "对抗门禁", "status": "limited",
+                       "detail": (label + "：" + "；".join(adversarial_reasons)).strip("：")
+                                or label})
+
+    # 3) 攻击面覆盖：走三阶段时由 phase_gate 承担，不重复计缺失
+    attack_ceiling = final_precondition.get("attack_coverage_ceiling",
+                                            gate.get("attack_coverage_ceiling"))
+    phase_complete = phase_state == "complete"
+    if attack_ceiling:
+        checks.append({"id": "attack_coverage", "label": "攻击面覆盖",
+                       "status": "ok" if attack_ceiling == "通过" else "limited",
+                       "detail": (f"攻击覆盖结论上限 {attack_ceiling}")
+                                + ("；" + "；".join(final_precondition.get("attack_reasons") or [])
+                                   if final_precondition.get("attack_reasons") else "")})
+    elif phase_complete:
+        checks.append({"id": "attack_coverage", "label": "攻击面覆盖", "status": "ok",
+                       "detail": "由三阶段闸门在 execute 收尾强制校验（台账不重复索要）"})
+    else:
+        checks.append({"id": "attack_coverage", "label": "攻击面覆盖", "status": "missing",
+                       "detail": "未提供攻击覆盖结论：无法区分「用例铺得全」与「攻击面打得深」"})
+
+    # 4) 证据链完整性
+    if evidence_issues:
+        checks.append({"id": "evidence_integrity", "label": "证据链完整性",
+                       "status": "limited",
+                       "detail": f"{len(evidence_issues)} 条证据文件缺失或哈希不符，无法复核"})
+    elif flaky_cases:
+        checks.append({"id": "evidence_integrity", "label": "证据链完整性",
+                       "status": "limited",
+                       "detail": f"{len(flaky_cases)} 条用例结果不稳定（同一用例既有 PASS 又有 FAIL），须复核"})
+    else:
+        checks.append({"id": "evidence_integrity", "label": "证据链完整性", "status": "ok",
+                       "detail": "全部证据文件存在且哈希一致，无不稳定用例"})
+
+    # 5) 门禁输入齐备性
+    if missing_inputs:
+        checks.append({"id": "gate_inputs", "label": "门禁输入齐备性", "status": "missing",
+                       "detail": "本轮未提供：" + "、".join(
+                           _MISSING_INPUT_LABELS.get(name, name) for name in missing_inputs)})
+    else:
+        checks.append({"id": "gate_inputs", "label": "门禁输入齐备性", "status": "ok",
+                       "detail": "适用且须提供的门禁证据均已提供"})
+    return checks
+
+
+def _build_headline(baseline, counts, executed, cases, final_precondition, ceiling,
+                    evidence_issues, flaky_cases, context, missing_inputs):
+    """首屏事实（单一来源）：完成范围、必查项状态、限档原因。
+
+    为什么要有这一份：报告渲染器（render_report_html.py）与交付模板
+    （references/output-templates.md）此前各自从原始字段推断「完成了什么、
+    差在哪、各自的结论上限是多少」——各推断一次必然漂移，且漂移方向通常是
+    报好看的那个。现在两者都消费这份事实。
+
+    ceiling 由 `_verdict_ceiling` 唯一算出后传入，此处**不重算**——
+    首屏写什么上限与台账上限必须是同一个值。
+    """
+    read_only = context.get("dependency_mode") in {"replay", "mock"}
+    checks = _headline_checks(baseline, final_precondition, counts, evidence_issues,
+                              flaky_cases, missing_inputs, read_only)
+    planned = len(cases)
+    not_run = counts.get("NOT_RUN", 0)
+    blocked = counts.get("BLOCKED", 0)
+    failed = counts.get("FAIL", 0)
+    skipped = counts.get("SKIPPED", 0)
+
+    reasons = []
+    if failed:
+        reasons.append({"code": "failure_detected",
+                        "text": f"{failed} 项用例判定为失败：已证实的失败保留更严结论，"
+                                "不得因其他维度齐备而放宽"})
+    if blocked:
+        reasons.append({"code": "blocked_cases",
+                        "text": f"{blocked} 项用例处于阻塞状态，未取得结论"})
+    if not_run:
+        reasons.append({"code": "execution_incomplete",
+                        "text": f"{not_run} 项用例未执行，验收范围未覆盖"})
+    if skipped:
+        reasons.append({"code": "skipped_cases",
+                        "text": f"{skipped} 项用例被跳过，未取得结论"})
+    for check in checks:
+        if check["status"] == "missing":
+            reasons.append({"code": "gate_missing",
+                            "text": f"{check['label']}未提供证据：{check['detail']}"})
+        elif check["status"] == "limited":
+            reasons.append({"code": "gate_limited",
+                            "text": f"{check['label']}受限：{check['detail']}"})
+    # 仅授权限制：其他维度都齐备，但结论只在授权范围内成立。
+    # 只有这时才允许写「只读范围内已完成」——否则就是拿授权当遮羞布。
+    if not reasons and read_only:
+        reasons.append({"code": "authorization_only",
+                        "text": "本轮为只读授权范围（dependency_mode=%s），"
+                                "结论仅在授权范围内成立"
+                                % context.get("dependency_mode")})
+
+    all_ok = all(c["status"] == "ok" for c in checks)
+    can_claim_readonly_complete = bool(
+        read_only and all_ok and not failed and not blocked and not not_run
+        and not skipped and not missing_inputs)
+
+    if not planned:
+        scope_text = "本轮无计划用例，未产生验收范围"
+    elif executed >= planned and not (not_run or blocked or skipped):
+        scope_text = f"全部 {planned} 项用例已执行并取得结论"
+    else:
+        scope_text = (f"计划 {planned} 项，已执行 {executed} 项；"
+                      f"未执行 {not_run} 项、阻塞 {blocked} 项、跳过 {skipped} 项")
+
+    return {
+        "schema": HEADLINE_SCHEMA,
+        "verdict_ceiling": ceiling,
+        "completion_scope": {
+            "planned": planned,
+            "executed": executed,
+            "not_run": not_run,
+            "blocked": blocked,
+            "failed": failed,
+            "skipped": skipped,
+            "coverage": "full" if (planned and executed >= planned
+                                   and not (not_run or blocked or skipped)) else "partial",
+            "text": scope_text,
+            "readonly_only": read_only,
+            "can_claim_readonly_complete": can_claim_readonly_complete,
+        },
+        "required_checks": checks,
+        "limitation_reasons": reasons,
+    }
+
+
+def _final_precondition(baseline, phase_state=None, attack_coverage=None,
+                        adversarial_gate=None, read_only=False, case_count=None):
+    """收尾复核：读取同轮最终产物，重算各门禁的结论上限。
+
+    只重算「本轮最终产物覆盖的类别」，未提供的类别沿用建账时状态。
+    每一项都走与建账同一套判定函数，避免建账与收尾两套口径漂移。
+
+    缺口刷新：收尾补齐了某类证据，缺口即消除（临时缺口）；但已成立的更严
+    结论不因此放松——放松与否由 _verdict_ceiling 取更严者决定。
+    """
+    gate = (baseline.get("gate_precondition") or {})
+    out = {}
+    if adversarial_gate is not None:
+        out.update(_adversarial_precondition(
+            adversarial_gate, gate.get("adversarial_waiver"),
+            read_only=read_only, case_count=case_count))
+    if phase_state is not None:
+        out.update(_phase_precondition(phase_state))
+    if attack_coverage is not None:
+        out.update(_attack_precondition(attack_coverage))
+    # 缺口按同一适用性判据重算：建账时未提供、收尾仍未提供的才算缺口。
+    present = dict(baseline.get("gate_inputs_present") or {})
+    if phase_state is not None:
+        present["phase_state"] = True
+    if attack_coverage is not None:
+        present["attack_coverage"] = True
+    missing = _applicable_missing(present)
+    out["missing_inputs"] = missing
+    return out
+
+
+def summarize(workspace, design, context, bugs=None, phase_state=None,
+              attack_coverage=None, adversarial_gate=None):
     baseline, cases, warnings, same = _compatible(workspace, design, context)
     bugs = _bugs(bugs)
     events = read_events(workspace)
@@ -730,7 +1027,24 @@ def summarize(workspace, design, context, bugs=None):
         bug_delta = {"new_ids": sorted(current_open - all_old), "still_open_ids": sorted(current_open & old_open), "closed_ids": sorted(b["id"] for b in bugs if b["id"] in old_open and b["status"] == "closed"), "missing_from_current": sorted(old_open - {b["id"] for b in bugs})}
     linked = {bug_id for event in events if event["kind"] == "FINISH" for bug_id in event["bug_ids"]}
     missing_bugs = None if bugs is None else sorted(linked - {b["id"] for b in bugs})
-    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "verdict_ceiling": _verdict_ceiling(baseline, counts, executed), "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
+    # 收尾复核：同轮最终产物可刷新建账时的初始状态（覆盖结论往往采集后才产生）。
+    final_precondition = _final_precondition(
+        baseline, phase_state=phase_state, attack_coverage=attack_coverage,
+        adversarial_gate=adversarial_gate,
+        read_only=context.get("dependency_mode") in {"replay", "mock"},
+        case_count=len(cases))
+    missing_inputs = final_precondition.get("missing_inputs",
+                                            baseline.get("missing_inputs") or [])
+    missing_reasons = [
+        "未做%s：可选门禁输入缺失，结论上限压待核实"
+        % _MISSING_INPUT_LABELS.get(name, name) for name in missing_inputs]
+    # 结论上限只由 _verdict_ceiling 算一次；headline 消费这个值，不重算——
+    # 首屏写的上限与台账上限必须是同一个值。
+    verdict_ceiling = _verdict_ceiling(baseline, counts, executed, final_precondition)
+    headline = _build_headline(baseline, counts, executed, cases, final_precondition,
+                                verdict_ceiling, evidence_issues, flaky_cases,
+                                context, missing_inputs)
+    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "missing_inputs": missing_inputs, "missing_input_reasons": missing_reasons, "final_precondition": final_precondition, "headline": headline, "verdict_ceiling": verdict_ceiling, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
 
 
 def _load(path):
@@ -748,14 +1062,14 @@ def main():
         if command == "init":
             part.add_argument("round_id")
             part.add_argument("--bugs")
-            part.add_argument("--batches", help="case-generator 的 batches.json；未闭环时拒绝建台账")
-            part.add_argument("--gate-report", help="设计门禁报告；fail 时拒绝建台账")
-            part.add_argument("--adversarial-gate", help="adversarial_gate.py 结论输出；未提供且未豁免时拒绝建台账")
+            part.add_argument("--batches", help="case-generator 的 batches.json；提供且未闭环时拒绝建台账（不提供则留痕并压上限）")
+            part.add_argument("--gate-report", help="设计门禁报告；提供且 fail 时拒绝建台账（不提供则留痕并压上限）")
+            part.add_argument("--adversarial-gate", help="adversarial_gate.py 结论输出；未提供且无合资格豁免时结论上限压待核实（不拒绝建账）")
             part.add_argument("--adversarial-waiver", help="对抗循环豁免理由（纯只读小任务可用，留痕）")
             part.add_argument("--phase-state",
-                              help="phase_gate.py 状态文件；阶段未走完放行流程时结论上限压待核实")
+                              help="phase_gate.py 状态文件；未提供时留痕并压上限，阶段未走完放行流程时结论上限压待核实")
             part.add_argument("--attack-coverage",
-                              help="attack_coverage.py 结论输出；攻击密度/判据独立性不达标时压上限")
+                              help="attack_coverage.py 结论输出；未提供时留痕并压上限，攻击密度/判据独立性不达标时压上限")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -764,6 +1078,9 @@ def main():
             part.add_argument("result_json")
         else:
             part.add_argument("--bugs")
+            part.add_argument("--phase-state", help="收尾复核用：同轮最终的 phase_gate.py 状态文件")
+            part.add_argument("--attack-coverage", help="收尾复核用：同轮最终的 attack_coverage.py 结论输出")
+            part.add_argument("--adversarial-gate", help="收尾复核用：同轮最终的 adversarial_gate.py 结论输出")
     args = parser.parse_args()
     try:
         design, context = _load(args.design), _load(args.context)
@@ -781,7 +1098,10 @@ def main():
         elif args.command == "finish":
             result = finish(args.workspace, design, context, **_load(args.result_json))
         else:
-            result = summarize(args.workspace, design, context, _load(args.bugs) if args.bugs else None)
+            result = summarize(args.workspace, design, context, _load(args.bugs) if args.bugs else None,
+                               phase_state=_load(args.phase_state) if args.phase_state else None,
+                               attack_coverage=_load(args.attack_coverage) if args.attack_coverage else None,
+                               adversarial_gate=_load(args.adversarial_gate) if args.adversarial_gate else None)
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0
     except Exception as exc:

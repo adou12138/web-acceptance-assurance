@@ -1,0 +1,161 @@
+{
+  "schema": "case-eval-baseline/2",
+  "metrics_schema": "case-eval-metrics/1",
+  "tool_version": "2",
+  "scored_at": "2026-11-20T12:42:46+00:00",
+  "input": {
+    "path": "skills/case-generator/tests/fixtures/cases-sample-12.json",
+    "sha256": "f72e233cc5b3317e2b68adb820a0721fd595220a83fca0f75bd20a6ec92ac405"
+  },
+  "metrics": {
+    "testcases": 12,
+    "features": 3,
+    "coverage_layers_missing": 0,
+    "feature_l1_ratio": 1.0,
+    "method_variety": 2,
+    "assertion_density": 1.5,
+    "vague_or_placeholder": 0,
+    "smoke_ratio": 0.167,
+    "p0_ratio": 0.167,
+    "gaps_open": 0,
+    "structural_errors": 0
+  },
+  "detail": {
+    "per_case": [
+      {
+        "id": "TC-M01-001",
+        "assertions": 3,
+        "priority": "P0",
+        "suites": [
+          "feature",
+          "smoke"
+        ],
+        "layer": "ui",
+        "methods": [
+          "scenario"
+        ]
+      },
+      {
+        "id": "TC-M01-002",
+        "assertions": 1,
+        "priority": "P1",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": [
+          "boundary"
+        ]
+      },
+      {
+        "id": "TC-M01-003",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-004",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-005",
+        "assertions": 3,
+        "priority": "P0",
+        "suites": [
+          "feature",
+          "smoke"
+        ],
+        "layer": "ui",
+        "methods": [
+          "scenario"
+        ]
+      },
+      {
+        "id": "TC-M01-006",
+        "assertions": 1,
+        "priority": "P1",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-007",
+        "assertions": 1,
+        "priority": "P1",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-008",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-009",
+        "assertions": 3,
+        "priority": "P1",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": [
+          "scenario"
+        ]
+      },
+      {
+        "id": "TC-M01-010",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-011",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      },
+      {
+        "id": "TC-M01-012",
+        "assertions": 1,
+        "priority": "P2",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      }
+    ],
+    "structural_errors": [],
+    "coverage_gaps": [],
+    "missing_layers": [],
+    "methods_witnessed": 2
+  }
+}

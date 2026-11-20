@@ -53,13 +53,26 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | `surf_id` | `SURF-…` | 对应的风险面，须在对抗 plan 的 surfaces 清单内 |
 | `method` | 方法库稳定 ID（`probe-playbook.md` B 节） | 用了哪种方法；多样性只作披露，不作配额 |
 | `hypothesis` | 自由文本 | **可证伪预测**："如果 <条件> 则 <可观察的坏结果>"。每个高风险风险面至少一条；写了要能被执行出来 |
-| `hypothesis_outcome` | broken / held / blocked | 该预测是否被打破；缺省时按 status 推导（FAIL→broken、PASS→held、BLOCKED→blocked）。**broken 是产出不是违规** |
+| `hypothesis_outcome` | broken / held / blocked | 该预测是否被打破；缺省时按 status 推导（FAIL→broken、PASS→held、BLOCKED→blocked）。**broken 是产出不是违规**。**推导不出结果时为「缺结果」，不得计入 held**——没跑出结果不等于假设没被打破 |
 | `oracle_source` | independent / self_attested | 判据来自独立通道还是被测物自己的回显 |
 | `oracle_channel` | 自由文本 | `independent` 必填且要点名通道（网页端 DOM/接口响应/持久化读回）；只写"读回一致"不算 |
 | `discovery_mode` | designed_probe / incidental / undetermined | 这条来自为失效假设设计的探针，还是碰巧撞见 |
 | `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现 |
 
 收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>" [--amend-note "<计划外风险面的纳入说明>"]`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
+
+**残余风险声明的两种入口**：
+
+- `--residual-note "<自由文本>"`（旧文本入口）：判不了"这条声明说的是不是真的"，
+  只判有没有引用已登记编号（`residual_note_checked`）。保持兼容。
+- `--residual-declaration <JSON 文件>`（结构化入口）：`{"items":[{"id":"SURF-01","status":"unbroken"}]}`，
+  `status` 取 `unbroken`/`broken`/`not_verified`。逐条核对：编号须在已登记清单内，
+  状态须与该编号的实际验证状态相符。不符分别记 `residual_ref_not_registered`
+  （虚构编号）与 `residual_status_mismatch`（关联错误），两者都压结论上限。
+  声明为 `not_verified` 是保守登记，如实登记不压上限。
+  两者同时给时以 `--residual-declaration` 为准。
+  报告首屏按 `residual_declaration` 的**实际条目**呈现三态
+  （有未破项 / 无未破项 / 尚未验证），不得只写一句"已声明残余风险"。
 
 **门禁考什么、不考什么**（口径容易搞错的地方）：
 
@@ -69,6 +82,9 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | 声明 `independent` 却拿不出通道/证据 | 计划外风险面（`surfaces_beyond_plan` 计为产出） |
 | 高风险风险面没有一条可证伪预测 | 方法多样性不足 |
 | 一条独立判据都没有（绝对零，不是比例） | 风险面关联率偏低 |
+| 失效假设缺结果（`hypotheses.no_result`） | 高风险面只用单一方法（`high_risk_surface_single_method`） |
+| 高风险面写了预测但无可采信验证结果 | 可疑自然语言措辞（`suspicious_wording`） |
+| 残余风险声明引用未登记编号 / 状态与实际不符 | ATK 跨轮持续未执行（`atk_stagnant`，需 `--atk-prev`） |
 
 理由：配额能被标注操纵（改个 `discovery_mode` 就过关），而"如果 X 则 Y 会坏"凑不出来——写了就得能被执行。绝对值（一条都没有）同样凑不出来，比例能。
 
@@ -83,6 +99,8 @@ PASS/FAIL保存绝对本地证据路径和文件SHA-256；summary重读检查。
 ## 进度、缺陷与基线变化
 
 summary返回计划数、五态唯一TC计数、executed、execution_rate、pass_rate、flaky和证据问题、待测/待核对/复测/失效候选。执行率与通过率取0到1的小数，显示时转百分比；无已执行项pass_rate为null，显示N/A，不能写0%通过或100%通过。
+
+**首屏事实（`headline`）**：summary 还输出 `headline`（`schema=ledger-headline/1`），含**完成范围**（计划/已执行/未执行/阻塞/跳过/跳过数与可写「只读范围内已完成」的标志）、**必查项状态**（三阶段闸门、对抗门禁、攻击面覆盖、证据链完整性、门禁输入齐备性，各为通过/受限/缺失/未知）、**限档原因**（逐条 code 与说明）三项事实，以及与顶层 `verdict_ceiling` **同值**的结论上限（上限只由 `_verdict_ceiling` 算一次，headline 消费该值，不重算）。报告首屏与交付模板都消费这一份事实（`render_report_html.py --summary <summary.json>`），不再各自推断——各推断一次必然漂移，漂移方向通常是报好看的那个。摘要缺 `headline` 字段（旧摘要）时，渲染器回退到推断口径并**在首屏显式标注**该事实，不得静默按推断口径出首屏。
 
 有效PASS/FAIL attempt的唯一TC计入executed；波动仍算已执行但不计干净PASS；五态数加总必须等于当前计划TC数。设计/上下文变化时旧记录全量保守失效，摘要给compatible=false和待测清单，写入拒绝，必须新轮次。内容哈希保守，展示字段变化也可能触发新轮次，避免错误复用。
 
@@ -121,7 +139,9 @@ python -m unittest discover -s tests -v
 - 批次存在未完成状态或 `gate` 非 `pass`/`waived`；批次未登记 `case_ids`（空批次不得计入闭环）；`case_ids` 并集与设计用例不一致（有未登记或设计外 ID）。
 - 门禁报告 `status` 非 `pass`/`warning`；`checks` 缺失或为空；检查项缺 `id` 或状态不在 `passed`/`warning`/`failed`；存在 `failed`；缺 `S0` 通过项；缺 `counts.testcases`；覆盖条数与设计条数不一致。
 
-即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`；不传这两个参数时保持旧行为，但报告须写明未做跳间校验。
+即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`。
+
+**不传** `--batches` / `--gate-report` 时**不拒绝建账**（退出码 0），但缺口逐项记入 `baseline.missing_inputs`（顶层，与 `gate_precondition` 分开——后者是门禁判定结果），并把 `summary` 的 `verdict_ceiling` 压"待核实"；`summary.missing_input_reasons` 给出逐项可读原因，报告须写明未做跳间校验。走三阶段流程时（提供 `--phase-state`），跳间校验与攻击覆盖由 `phase_gate` 承担，台账不重复计同一职责的缺失。
 
 **对抗门禁进门条件（必选）**：台账同时记录对抗结论并**机械压制结论上限**——`init` 未提供 `--adversarial-gate` 且未豁免时，`baseline.gate_precondition.adversarial_state="missing"` 并把 `adversarial_ceiling` 置“待核实”；提供 `--adversarial-waiver <理由>` 则记 `waived` 并留痕（仅限纯只读小任务）。传入 `--adversarial-gate`（`scripts/adversarial_gate.py` 的输出，门禁默认启用）时校验其 `verdict_ceiling`/`adversarial_enabled`/`reasons` 字段；若显示对抗未启用且无豁免，同样压"待核实"。`summary` 输出的 `verdict_ceiling` 由此机械派生（存在 FAIL → 不通过；存在 BLOCKED/NOT_RUN/SKIPPED 或未执行 → 待核实；再与对抗上限取更严者），不由人工宣称。
 

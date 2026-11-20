@@ -145,6 +145,46 @@ def merge_records(rows):
     return [merged[ident] for ident in order]
 
 
+CHECK_STATUS_LABELS = {
+    "ok": "通过",
+    "limited": "受限",
+    "missing": "缺失",
+    "unknown": "未知",
+}
+CHECK_STATUS_CLASS = {
+    "ok": "v-green",
+    "limited": "v-amber",
+    "missing": "v-red",
+    "unknown": "v-amber",
+}
+
+
+def load_headline(path):
+    """读取台账摘要里的首屏事实。返回 (headline 或 None, 回退原因说明)。
+
+    三种情形必须可区分，报告里也要能看出来：
+    1. 提供了 summary 且含 headline → 消费同一份事实（正常路径）；
+    2. 提供了 summary 但缺 headline 字段（旧摘要）→ 回退推断并**标注缺字段**；
+    3. 未提供 summary → 回退推断并**标注未提供台账摘要**。
+
+    2 和 3 都必须显式说明，不能静默按渲染器自己的口径推断——否则报告首屏
+    看起来照样完整，读者却不知道限制因素是推断的。
+    """
+    if not path:
+        return None, "未提供台账摘要：首屏的完成范围与限档原因由报告渲染器按台账记录推断，非台账 summary 的口径"
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        return None, f"台账摘要不可读（{exc}）：首屏限制因素由报告渲染器推断"
+    if not isinstance(payload, dict):
+        return None, "台账摘要格式非法：首屏限制因素由报告渲染器推断"
+    headline = payload.get("headline")
+    if not isinstance(headline, dict):
+        return None, ("台账摘要缺首屏事实字段（headline）："
+                      "首屏限制因素由报告渲染器按台账记录推断，非台账 summary 的口径")
+    return headline, ""
+
+
 def build(args):
     datasets = [parse_triple(spec, "--dataset") for spec in args.dataset]
     if not datasets:
@@ -218,16 +258,48 @@ def build(args):
         f"　·　被测地址 {esc(records[0].get('page_url', ''))}</p>")
 
     ceiling_text = " / ".join(ceilings) if ceilings else "未给出"
-    verdict_cls = "v-red" if "不通过" in ceilings else ("v-green" if ceilings and "通过" in ceiling_text and "待核实" not in ceilings else "v-amber")
+    headline, headline_note = load_headline(getattr(args, "summary", None))
     reason_bits = []
     if pending:
         reason_bits.append(f"{pending} 项记录仍处于未执行状态")
     if missing_views:
         reason_bits.append("以下视角本轮无台账记录：" + "、".join(missing_views))
-    add(f"<div class='verdict {verdict_cls}'><div class='badge'>{esc(ceiling_text)}</div><div class='body'>")
-    add(f"<div><b>技术结论上限为「{esc(ceiling_text)}」。</b></div>")
-    add(f"<div class='sub'>{esc('；'.join(reason_bits) or '未见未执行记录或无记录视角，结论仍需人工断言复核')}。"
-        "台账中的候选未经复核前不计缺陷。</div></div></div>")
+    if headline:
+        # 正常路径：首屏直接消费台账摘要的首屏事实（完成范围 / 必查项 / 限档原因），
+        # 不再由渲染器另算一套——各算一次必然漂移，且漂移方向通常是报好看的那个。
+        scope = headline.get("completion_scope") or {}
+        checks = headline.get("required_checks") or []
+        limits = headline.get("limitation_reasons") or []
+        ceiling_text = str(headline.get("verdict_ceiling") or ceiling_text)
+        verdict_cls = ("v-red" if "不通过" in ceiling_text
+                       else ("v-green" if ceiling_text == "通过" else "v-amber"))
+        add(f"<div class='verdict {verdict_cls}'><div class='badge'>{esc(ceiling_text)}</div><div class='body'>")
+        add(f"<div><b>技术结论上限为「{esc(ceiling_text)}」。</b></div>")
+        add(f"<div><b>完成范围：</b>{esc(scope.get('text') or '未提供完成范围')}</div>")
+        if scope.get("can_claim_readonly_complete"):
+            add("<div><b>可写「只读范围内已完成」</b>（必查项实际完成且无其他缺口）。</div>")
+        limit_text = "；".join(str(item.get("text") or item) for item in limits) \
+            or "未见未完成项或未提供证据的限制因素"
+        add(f"<div class='sub'><b>限档原因：</b>{esc(limit_text)}。</div>")
+        if checks:
+            add("<table><tr><th style='width:150px'>必查项</th><th style='width:80px'>状态</th>"
+                "<th>说明</th></tr>")
+            for check in checks:
+                status = str(check.get("status") or "unknown")
+                add(f"<tr><td>{esc(check.get('label') or check.get('id'))}</td>"
+                    f"<td class='{CHECK_STATUS_CLASS.get(status, 'v-amber')}'>"
+                    f"{esc(CHECK_STATUS_LABELS.get(status, status))}</td>"
+                    f"<td>{esc(check.get('detail') or '')}</td></tr>")
+            add("</table>")
+        add("<div class='sub'>台账中的候选未经复核前不计缺陷。</div></div></div>")
+    else:
+        verdict_cls = "v-red" if "不通过" in ceilings else ("v-green" if ceilings and "通过" in ceiling_text and "待核实" not in ceiling_text else "v-amber")
+        add(f"<div class='verdict {verdict_cls}'><div class='badge'>{esc(ceiling_text)}</div><div class='body'>")
+        add(f"<div><b>技术结论上限为「{esc(ceiling_text)}」。</b></div>")
+        add(f"<div class='sub'>{esc('；'.join(reason_bits) or '未见未执行记录或无记录视角，结论仍需人工断言复核')}。"
+            "台账中的候选未经复核前不计缺陷。</div></div></div>")
+    if headline_note:
+        add(f"<div class='card'><b>首屏口径说明：</b>{esc(headline_note)}</div>")
 
     add("<div class='kpis'>")
     add(f"<div class='kpi'><div class='n'>{len(records)}</div><div class='l'>观察候选（去重）</div></div>")
@@ -267,14 +339,17 @@ def build(args):
     add("</table>")
     add("<div class='note'>门禁规则：可执行候选未清空、或必查视角无记录时，技术结论上限只能是「待核实」。</div>")
     add("<h3>各数据集的门禁结果</h3><table><tr><th>数据集</th><th>候选数</th><th>待执行</th>"
-        "<th>高风险待执行</th><th>缺失视角</th><th>结论上限</th></tr>")
+        "<th>高风险待执行</th><th>缺失视角</th><th>门禁自身结论上限</th></tr>")
     for item in loaded:
         gate = item["gate"]["gate"]
         add(f"<tr><td>{esc(item['label'])}</td><td>{esc(item['gate'].get('planned', ''))}</td>"
             f"<td>{esc(gate.get('ready_pending', ''))}</td><td>{esc(gate.get('ready_high_risk', ''))}</td>"
             f"<td>{esc('、'.join(gate.get('missing_views') or []) or '无')}</td>"
             f"<td>{esc(gate.get('verdict_ceiling', ''))}</td></tr>")
-    add("</table></div>")
+    add("</table>")
+    add("<div class='note'>本表是<b>各数据集门禁自身</b>的判定，不是本页的技术结论上限。"
+        "技术结论上限取自台账摘要的 headline（综合各门禁与执行事实），显示在首屏；"
+        "两者口径不同，出现差异时<b>以首屏为准</b>。</div></div>")
 
     if args.screenshot:
         add("<h2>三、视觉证据</h2>")
@@ -380,6 +455,10 @@ def main(argv=None):
     parser.add_argument("--performance", action="append", default=[], help="性能摘要JSON，可多次")
     parser.add_argument("--lighthouse", action="append", default=[], help="外部审计报告JSON，可多次")
     parser.add_argument("--evidence-dir", default=None)
+    parser.add_argument("--summary", default=None,
+                        help="台账 summary JSON（execution_ledger.py summary 的输出）。"
+                             "提供时首屏直接消费其 headline（完成范围/必查项状态/限档原因）；"
+                             "未提供或缺 headline 字段时回退到渲染器推断，并在首屏如实标注")
     parser.add_argument("--note", action="append", default=[], help="本次特有的未测项说明，可多次")
     args = parser.parse_args(argv)
     try:

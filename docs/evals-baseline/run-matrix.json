@@ -1,0 +1,71 @@
+{
+  "schema": "ab-run-matrix/1",
+  "matrix_id": "M1-2026-11-21",
+  "frozen_at": "2026-11-21",
+  "note": "本矩阵为预注册。出分后不得改夹具、重复数、阈值或预算；如需变更，另立矩阵 ID 并同时披露。",
+  "protocol": "docs/evals-baseline/detection-protocol.md",
+  "scoring": "docs/evals-baseline/ab-protocol.md",
+  "budget_minutes": 30,
+  "fixtures": [
+    "01-boundary-form",
+    "02-role-state-flow",
+    "03-async-cancel-network",
+    "04-ui-keyboard-copy-compat",
+    "06-injection-vs-natural"
+  ],
+  "arms": {
+    "A": "基线执行路径（不含对抗元素）",
+    "B": "候选执行路径（含对抗循环）"
+  },
+  "repeats": 2,
+  "runs": [
+    {"fixture": "01-boundary-form", "arm": "A", "repeat": 1, "run_id": "01-A-1"},
+    {"fixture": "01-boundary-form", "arm": "B", "repeat": 1, "run_id": "01-B-1"},
+    {"fixture": "01-boundary-form", "arm": "A", "repeat": 2, "run_id": "01-A-2"},
+    {"fixture": "01-boundary-form", "arm": "B", "repeat": 2, "run_id": "01-B-2"},
+    {"fixture": "02-role-state-flow", "arm": "A", "repeat": 1, "run_id": "02-A-1"},
+    {"fixture": "02-role-state-flow", "arm": "B", "repeat": 1, "run_id": "02-B-1"},
+    {"fixture": "02-role-state-flow", "arm": "A", "repeat": 2, "run_id": "02-A-2"},
+    {"fixture": "02-role-state-flow", "arm": "B", "repeat": 2, "run_id": "02-B-2"},
+    {"fixture": "03-async-cancel-network", "arm": "A", "repeat": 1, "run_id": "03-A-1"},
+    {"fixture": "03-async-cancel-network", "arm": "B", "repeat": 1, "run_id": "03-B-1"},
+    {"fixture": "03-async-cancel-network", "arm": "A", "repeat": 2, "run_id": "03-A-2"},
+    {"fixture": "03-async-cancel-network", "arm": "B", "repeat": 2, "run_id": "03-B-2"},
+    {"fixture": "04-ui-keyboard-copy-compat", "arm": "A", "repeat": 1, "run_id": "04-A-1"},
+    {"fixture": "04-ui-keyboard-copy-compat", "arm": "B", "repeat": 1, "run_id": "04-B-1"},
+    {"fixture": "04-ui-keyboard-copy-compat", "arm": "A", "repeat": 2, "run_id": "04-A-2"},
+    {"fixture": "04-ui-keyboard-copy-compat", "arm": "B", "repeat": 2, "run_id": "04-B-2"},
+    {"fixture": "06-injection-vs-natural", "arm": "A", "repeat": 1, "run_id": "06-A-1"},
+    {"fixture": "06-injection-vs-natural", "arm": "B", "repeat": 1, "run_id": "06-B-1"},
+    {"fixture": "06-injection-vs-natural", "arm": "A", "repeat": 2, "run_id": "06-A-2"},
+    {"fixture": "06-injection-vs-natural", "arm": "B", "repeat": 2, "run_id": "06-B-2"}
+  ],
+  "holdout": {
+    "fixture": "99-holdout",
+    "note": "仅在正式主分析冻结后做一组双臂对照，单列结果并退役；不进入主指标分母。"
+  },
+  "rules": {
+    "pairing": "按夹具与重复编号配对；同夹具两臂使用等价环境、相同授权、版本及重置方式，以及相同的时间与操作预算。",
+    "independence": "同夹具的四次运行须为四个独立执行实例；同一负责人在同夹具仅负责一臂；无法隔离同臂重复时视为技术复跑并披露，不当独立重复。",
+    "blind": "计分时仅使用匿名臂编号；执行方不得看到同夹具其他运行的输出。",
+    "isolation": "答案键、答案仓库、上轮输出与评分器目录对执行方不可读；prepare 只导出题面与允许素材；发现泄漏即停止该夹具并保留无效记录。",
+    "aggregation": "先对同夹具重复取均值，再将各夹具等权汇总；无有效配对的夹具不计入汇总分母。",
+    "adjudication": "机械未匹配的发现由评测者按冻结规则独立裁定，取值 valid/false_positive/insufficient_evidence，逐条写明理由与根因。"
+  },
+  "thresholds": {
+    "primary": "主指标（blocker/major 检出数差值）大于 0",
+    "no_new_blocker_miss": "B 无新增已知 blocker 漏检",
+    "false_positive": "配对汇总误报数不增加，且分类结果逐项复核",
+    "budget": "两臂均遵守预算；超限的配对记为无效并披露"
+  },
+  "reporting": {
+    "sample_statement": "样本不足时报告计数与配对差值，避免统计显著性表述。",
+    "required_disclosure": [
+      "两臂 run 数",
+      "夹具/协议哈希是否一致",
+      "全部 warnings 原文",
+      "派生指标的 NA 项",
+      "无效配对清单与原因"
+    ]
+  }
+}

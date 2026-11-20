@@ -124,8 +124,13 @@ def prepare(fixture_path, out_dir, run_id=None, budget_min=30):
     return {"run_dir": str(out), "spec": spec, "run": run}
 
 
-def verify_run(run_dir, fixture=None):
-    """检查执行目录是否泄漏答案，并核对执行方声明；返回问题清单（空=通过）。"""
+def verify_run(run_dir, fixture=None, redact_ids=False):
+    """检查执行目录是否泄漏答案，并核对执行方声明；返回问题清单（空=通过）。
+
+    `redact_ids=True` 时，泄漏报告只给**命中数量与文件位置**，不写答案 ID 本身。
+    原因：这份清单要进归档，而常规去敏归档不得含答案 ID——把 ID 写进问题描述
+    再脱敏，等于让脱敏只做了一半（正文干净、诊断语里还漏着）。
+    """
     run_dir = Path(run_dir)
     issues = []
     spec_path = run_dir / "spec.json"
@@ -157,7 +162,11 @@ def verify_run(run_dir, fixture=None):
             text = path.read_text(encoding="utf-8", errors="ignore")
             leaked = [i for i in ids if i and i in text]
             if leaked:
-                issues.append(f"{path.relative_to(run_dir)} 出现答案 ID：{leaked}")
+                if redact_ids:
+                    issues.append(f"{path.relative_to(run_dir)} 出现 {len(leaked)} 个答案 ID"
+                                  "（ID 本身已脱敏）")
+                else:
+                    issues.append(f"{path.relative_to(run_dir)} 出现答案 ID：{leaked}")
     return issues
 
 
@@ -609,6 +618,565 @@ def compare_ab(arm_a_dir, arm_b_dir):
     }
 
 
+ADJUDICATION_DECISIONS = ("valid", "false_positive", "insufficient_evidence")
+MATRIX_SCHEMA = "ab-run-matrix/1"
+
+
+def adjudicate_findings(score_path, adjudication_path):
+    """独立裁定：把评测者对「机械未匹配发现」的判断与机械计分并列留痕。
+
+    存在目的：机械评分只认词元命中，未命中可能是措辞差异、也可能是答案键漏了、
+    也可能是无效发现——三选一属人工判断，工具不猜。未匹配的发现若无人裁定，
+    整体误报率就没有分母，汇总也就无从下手。
+
+    纪律：
+    1. 裁定必须**逐条覆盖**该次计分的全部未匹配发现：漏一条即拒（否则裁定不可复算）；
+    2. 裁定只针对未匹配发现，命中答案键的发现不得被裁定为无效；
+    3. 每条裁定必须有理由，`root_cause` 用于把同一根因的重复发现归并；
+    4. 裁定结果写在 score.json 同级的 adjudication.json，与计分分离，不改计分本身。
+    """
+    score = _read_json(score_path)
+    unmatched = score.get("unmatched_findings") or []
+    if not isinstance(unmatched, list):
+        raise ValueError("score.json 的 unmatched_findings 必须是数组")
+    payload = _read_json(adjudication_path)
+    items = payload.get("adjudications")
+    if not isinstance(items, list):
+        raise ValueError("裁定文件必须含 adjudications 数组")
+    unmatched_ids = [str(item.get("id")) for item in unmatched
+                     if isinstance(item, dict) and item.get("id") is not None]
+    if len(unmatched_ids) != len(unmatched):
+        raise ValueError("score.json 的 unmatched_findings 结构异常：部分条目缺 id")
+    seen = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("adjudications 每项必须为对象")
+        finding_id = str(item.get("finding_id") or "")
+        if finding_id not in unmatched_ids:
+            raise ValueError(f"裁定对象 {finding_id!r} 不在本次未匹配发现列表内："
+                             "机械已命中的发现不得被裁定为无效")
+        if finding_id in seen:
+            raise ValueError(f"发现 {finding_id} 被重复裁定")
+        decision = str(item.get("decision") or "")
+        if decision not in ADJUDICATION_DECISIONS:
+            raise ValueError(f"裁定结论必须为 {'/'.join(ADJUDICATION_DECISIONS)} 之一：got {decision!r}")
+        if not str(item.get("reason") or "").strip():
+            raise ValueError(f"发现 {finding_id} 的裁定缺理由")
+        seen[finding_id] = {"finding_id": finding_id, "decision": decision,
+                            "reason": str(item["reason"]).strip(),
+                            "root_cause": str(item.get("root_cause") or finding_id)}
+    missing = [fid for fid in unmatched_ids if fid not in seen]
+    if missing:
+        raise ValueError(f"以下未匹配发现未裁定：{missing}——裁定须逐条覆盖，否则分母不可复算")
+    counts = {decision: 0 for decision in ADJUDICATION_DECISIONS}
+    for entry in seen.values():
+        counts[entry["decision"]] += 1
+    # 同一根因的重复发现归并：根因去重后的误报数才是误报分子
+    fp_roots = {entry["root_cause"] for entry in seen.values()
+                if entry["decision"] == "false_positive"}
+    valid_roots = {entry["root_cause"] for entry in seen.values()
+                   if entry["decision"] == "valid"}
+    result = {
+        "schema": "blind-adjudication/1",
+        "scored_run_id": score.get("run_id"),
+        "protocol_sha256": score.get("protocol_sha256"),
+        "fixture_sha256": score.get("fixture_sha256"),
+        "adjudicated_at": _now(),
+        "adjudications": [seen[fid] for fid in unmatched_ids],
+        "counts": counts,
+        "false_positive_roots": sorted(fp_roots),
+        "valid_roots": sorted(valid_roots),
+        "false_positives_deduped": len(fp_roots),
+        "valid_deduped": len(valid_roots),
+    }
+    out_path = Path(score_path).with_name("adjudication.json")
+    _write_json(out_path, result)
+    result["adjudication_path"] = str(out_path)
+    return result
+
+
+def _load_matrix(path):
+    """读取冻结的运行矩阵。矩阵是本轮实验的「预注册」：出分后不得改。"""
+    matrix = _read_json(path)
+    if matrix.get("schema") != MATRIX_SCHEMA:
+        raise ValueError(f"运行矩阵 schema 必须为 {MATRIX_SCHEMA}")
+    fixtures = matrix.get("fixtures")
+    arms = matrix.get("arms")
+    repeats = matrix.get("repeats")
+    runs = matrix.get("runs")
+    if not isinstance(fixtures, list) or not fixtures:
+        raise ValueError("运行矩阵缺 fixtures")
+    if not isinstance(arms, dict) or len(arms) < 2:
+        raise ValueError("运行矩阵至少需要两个臂（A/B）")
+    if not isinstance(repeats, int) or repeats < 1:
+        raise ValueError("运行矩阵缺 repeats")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("运行矩阵缺 runs")
+    for run in runs:
+        for field in ("fixture", "arm", "repeat", "run_id"):
+            if not str(run.get(field) or "").strip():
+                raise ValueError(f"运行矩阵的 runs 条目缺字段 {field}：{run}")
+        if run["fixture"] not in fixtures:
+            raise ValueError(f"运行矩阵出现未登记的夹具：{run['fixture']}")
+        if run["arm"] not in arms:
+            raise ValueError(f"运行矩阵出现未登记的臂：{run['arm']}")
+        if not isinstance(run.get("repeat"), int) or run["repeat"] < 1:
+            raise ValueError(f"运行矩阵的 repeat 须为正整数：{run}")
+    return matrix
+
+
+def _answers_by_fixture(fixtures_dir):
+    """读夹具答案键（评测者侧资产）：id → severity。汇总明细需要它还原命中集合。"""
+    mapping = {}
+    for path in sorted(Path(fixtures_dir).glob("*.json")):
+        fixture = _read_json(path)
+        answers = {}
+        for answer in fixture.get("hidden_answers") or []:
+            if isinstance(answer, dict) and answer.get("id"):
+                answers[str(answer["id"])] = str(answer.get("severity") or "normal")
+        mapping[path.stem] = {"answers": answers,
+                              "near_misses": len(fixture.get("legit_near_misses") or []),
+                              "sha256": sha256_path(path)}
+    return mapping
+
+
+def _hit_set(score, answers):
+    """从 score.json 还原该 run 命中的答案键集合。
+
+    score.json 只存了各严重度的 missed 列表与总数，未存全部答案 id，
+    因此命中集合 = 答案键 − 未命中。答案键不在结果文件里（评测者侧资产），
+    故必须由汇总方提供夹具目录。
+    """
+    missed = set()
+    for entry in (score.get("detection") or {}).values():
+        for answer_id in (entry or {}).get("missed") or []:
+            missed.add(str(answer_id))
+    return {answer_id for answer_id in answers if answer_id not in missed}
+
+
+def _bm_count(score):
+    """blocker/major 检出数（主指标的计数口径）。"""
+    detection = score.get("detection") or {}
+    return sum((detection.get(sev) or {}).get("detected", 0) for sev in ("blocker", "major"))
+
+
+def _collect_findings_count(score):
+    """提交给评测者的发现数（机械三类的和）：命中答案 + 误报近似 + 未匹配。
+
+    这是整体误报率的分母。机械部分无法从 score.json 还原根因去重，
+    人工裁定部分按 root_cause 归并——两段口径的差异在汇总里如实标注。
+    """
+    return (int(score.get("detected_total") or 0)
+            + len(score.get("near_miss_hits") or [])
+            + len(score.get("unmatched_findings") or []))
+
+
+def _fp_numerator(score, adjudication):
+    """误报分子：机械认定的误报（合法近似反例）+ 人工裁定的误报（按根因去重）。"""
+    return len(score.get("near_miss_hits") or []) + int(
+        (adjudication or {}).get("false_positives_deduped") or 0)
+
+
+def _load_adjudication(score_path):
+    path = Path(score_path).with_name("adjudication.json")
+    if not path.is_file():
+        return None
+    return _read_json(path)
+
+
+def pair_fixture(matrix, fixture, results_root, answers_by_fixture, arm_a=None, arm_b=None):
+    """按夹具配对评分：同一夹具下按重复编号把 A 臂与 B 臂的 run 配成对。
+
+    配对键是（夹具，重复编号），不是臂内聚合——方案要求「按夹具和重复编号配对，
+    同夹具两臂使用等价环境、相同授权、版本及重置方式」。臂内聚合会把不同环境的
+    运行混在一起，配对差值就不再是「同一条件下换个做法」的差值。
+
+    返回：配对明细 + 同夹具均值 + 缺陷级明细（新增命中/共同命中/A 有 B 无/皆漏）。
+    """
+    arms = list(matrix["arms"].keys())
+    arm_a = arm_a or arms[0]
+    arm_b = arm_b or arms[1]
+    results_root = Path(results_root)
+    registered = [r for r in matrix["runs"] if r["fixture"] == fixture]
+    if not registered:
+        raise ValueError(f"运行矩阵未登记夹具 {fixture}")
+    fixture_info = answers_by_fixture.get(fixture)
+    if fixture_info is None:
+        raise ValueError(f"夹具目录中找不到 {fixture}")
+    answers = fixture_info["answers"]
+
+    def _score_of(run):
+        path = results_root / fixture / run["arm"] / str(run["repeat"]) / "score.json"
+        if not path.is_file():
+            return None, path
+        return _read_json(path), path
+
+    pairs, invalid = [], []
+    repeats = sorted({r["repeat"] for r in registered})
+    for repeat in repeats:
+        run_a = next((r for r in registered if r["arm"] == arm_a and r["repeat"] == repeat), None)
+        run_b = next((r for r in registered if r["arm"] == arm_b and r["repeat"] == repeat), None)
+        if not run_a or not run_b:
+            invalid.append({"repeat": repeat,
+                            "reason": "矩阵中该重复编号缺少配对的一臂 run"})
+            continue
+        score_a, path_a = _score_of(run_a)
+        score_b, path_b = _score_of(run_b)
+        if score_a is None or score_b is None:
+            missing = [str(p) for p, s in ((path_a, score_a), (path_b, score_b)) if s is None]
+            invalid.append({"repeat": repeat, "reason": "缺少计分结果：" + "、".join(missing)})
+            continue
+        reasons = []
+        if score_a.get("fixture_sha256") != score_b.get("fixture_sha256"):
+            reasons.append("两臂夹具指纹不同：不是同一夹具，配对无效")
+        if score_a.get("protocol_sha256") != score_b.get("protocol_sha256"):
+            reasons.append("两臂协议哈希不同：判据已变，配对无效")
+        if score_a.get("budget_minutes") != score_b.get("budget_minutes"):
+            reasons.append(f"两臂预算不一致（A={score_a.get('budget_minutes')}, "
+                           f"B={score_b.get('budget_minutes')}）：配对无效")
+        executor_a = (score_a.get("executor") or {}).get("name")
+        executor_b = (score_b.get("executor") or {}).get("name")
+        if executor_a and executor_a == executor_b:
+            reasons.append(f"两臂同一执行方（{executor_a}）：存在学习效应，配对独立性不成立")
+        adj_a = _load_adjudication(path_a)
+        adj_b = _load_adjudication(path_b)
+        pairs.append({
+            "repeat": repeat,
+            "run_a": run_a["run_id"], "run_b": run_b["run_id"],
+            "executor_a": executor_a, "executor_b": executor_b,
+            "bm_a": _bm_count(score_a), "bm_b": _bm_count(score_b),
+            "delta_bm": _bm_count(score_b) - _bm_count(score_a),
+            "fp_a": _fp_numerator(score_a, adj_a), "fp_b": _fp_numerator(score_b, adj_b),
+            "delta_fp": _fp_numerator(score_b, adj_b) - _fp_numerator(score_a, adj_a),
+            "findings_a": _collect_findings_count(score_a),
+            "findings_b": _collect_findings_count(score_b),
+            "hits_a": sorted(_hit_set(score_a, answers)),
+            "hits_b": sorted(_hit_set(score_b, answers)),
+            "adjudicated_a": bool(adj_a), "adjudicated_b": bool(adj_b),
+            "valid": not reasons, "invalid_reasons": reasons,
+        })
+    valid_pairs = [p for p in pairs if p["valid"]]
+    hit_a = set()
+    hit_b = set()
+    for pair in valid_pairs:
+        hit_a |= set(pair["hits_a"])
+        hit_b |= set(pair["hits_b"])
+    all_ids = set(answers)
+    detail = {
+        "newly_detected": [{"id": i, "severity": answers.get(i, "normal")}
+                           for i in sorted(hit_b - hit_a)],
+        "common": [{"id": i, "severity": answers.get(i, "normal")}
+                   for i in sorted(hit_a & hit_b)],
+        "only_a": [{"id": i, "severity": answers.get(i, "normal")}
+                   for i in sorted(hit_a - hit_b)],
+        "missed_both": [{"id": i, "severity": answers.get(i, "normal")}
+                        for i in sorted(all_ids - hit_a - hit_b)],
+    }
+    # 新增 blocker 漏检：A 命中、B 未命中的 blocker。冻结阈值里的
+    # 「B 无新增已知 blocker 漏检」要拿这个字段判，不是拿总漏检数判。
+    newly_missed_blocker = sorted(
+        i for i in (hit_a - hit_b) if answers.get(i) == "blocker")
+    mean_delta = (sum(p["delta_bm"] for p in valid_pairs) / len(valid_pairs)
+                  if valid_pairs else None)
+    mean_fp = (sum(p["delta_fp"] for p in valid_pairs) / len(valid_pairs)
+               if valid_pairs else None)
+    # 有效配对不足 → 标为证据不足：夹具不计入汇总分母。
+    # 部分配对无效时，若仍按剩下的一半算均值，那个均值描述的是"另一半运行"，
+    # 不是这个夹具——把它当夹具级结论报出去就是在拿残缺数据充数。
+    sufficient = bool(valid_pairs) and len(valid_pairs) == len(repeats) and not invalid
+    return {
+        "fixture": fixture,
+        "fixture_sha256": fixture_info["sha256"],
+        "answer_total": len(answers),
+        "near_miss_total": fixture_info["near_misses"],
+        "pairs": pairs,
+        "valid_pairs": len(valid_pairs),
+        "planned_pairs": len(repeats),
+        "invalid_pairs": invalid,
+        "mean_delta_bm": mean_delta,
+        "mean_delta_fp": mean_fp,
+        "detail": detail,
+        "newly_missed_blocker": newly_missed_blocker,
+        "valid": sufficient,
+        "evidence_sufficient": sufficient,
+        "insufficient_reason": ("" if sufficient else
+                                f"有效配对 {len(valid_pairs)}/{len(repeats)}：证据不足，不计入汇总分母"),
+    }
+
+
+def summarize_matrix(matrix_path, results_root, fixtures_dir=None):
+    """汇总配对差值：先对同夹具重复取均值，再将各夹具等权汇总。
+
+    主指标 = 配对运行中满足证据要求并命中冻结答案键的 blocker/major 缺陷数差值（B−A），
+    先对同夹具重复取均值，再将五个夹具等权汇总。
+
+    输出只产事实与派生指标；「改造是否有效」由人按 ab-protocol.md 解读。
+    """
+    matrix = _load_matrix(matrix_path)
+    fixtures_dir = Path(fixtures_dir or (ROOT / "docs" / "evals-baseline" / "detection-fixtures"))
+    answers_by_fixture = _answers_by_fixture(fixtures_dir)
+    per_fixture = []
+    for fixture in matrix["fixtures"]:
+        try:
+            per_fixture.append(pair_fixture(matrix, fixture, results_root, answers_by_fixture))
+        except ValueError as exc:
+            per_fixture.append({"fixture": fixture, "valid": False, "pairs": [],
+                                "valid_pairs": 0, "invalid_pairs": [{"reason": str(exc)}],
+                                "mean_delta_bm": None, "mean_delta_fp": None,
+                                "insufficient_reason": str(exc),
+                                "detail": {"newly_detected": [], "common": [],
+                                           "only_a": [], "missed_both": []}})
+    valid_fixtures = [f for f in per_fixture
+                      if f.get("valid") and f.get("mean_delta_bm") is not None]
+    primary = (sum(f["mean_delta_bm"] for f in valid_fixtures) / len(valid_fixtures)
+               if valid_fixtures else None)
+    fp_deltas = [f["mean_delta_fp"] for f in valid_fixtures if f.get("mean_delta_fp") is not None]
+    mean_fp_delta = (sum(fp_deltas) / len(fp_deltas)) if fp_deltas else None
+
+    # 已知反例误报率：被错报的已知反例数 / 冻结的可评估反例数
+    near_miss_hits = 0
+    near_miss_total = 0
+    for fixture in per_fixture:
+        near_miss_total += int(fixture.get("near_miss_total") or 0)
+    # 整体误报率：独立裁定的误报数 / 已裁定的去重提交发现数
+    fp_total = 0
+    findings_total = 0
+    insufficient = 0
+    for fixture in per_fixture:
+        for pair in fixture.get("pairs") or []:
+            fp_total += pair["fp_a"] + pair["fp_b"]
+            findings_total += pair["findings_a"] + pair["findings_b"]
+            insufficient += pair.get("insufficient_a", 0) + pair.get("insufficient_b", 0)
+
+    warnings = []
+    invalid_pairs = []
+    newly_missed_blocker = []
+    for fixture in per_fixture:
+        for pair in fixture.get("pairs") or []:
+            if not pair.get("valid", True):
+                invalid_pairs.append({"fixture": fixture["fixture"], "repeat": pair.get("repeat"),
+                                      "reasons": pair.get("invalid_reasons")})
+        for item in fixture.get("invalid_pairs") or []:
+            invalid_pairs.append({"fixture": fixture["fixture"], "repeat": item.get("repeat"),
+                                  "reasons": [item.get("reason")]})
+        newly_missed_blocker.extend(
+            {"fixture": fixture["fixture"], "id": answer_id}
+            for answer_id in (fixture.get("newly_missed_blocker") or []))
+    if invalid_pairs:
+        warnings.append(f"存在 {len(invalid_pairs)} 个无效配对：其数据不计入汇总，"
+                       "无效原因逐条列在 invalid_pairs")
+    if len(valid_fixtures) < len(matrix["fixtures"]):
+        warnings.append(f"参与汇总的有效夹具数 {len(valid_fixtures)} < 计划 "
+                       f"{len(matrix['fixtures'])}：结论只覆盖已汇总部分，不得外推")
+    if not valid_fixtures:
+        warnings.append("无有效配对：不得给出任何效果结论")
+
+    # 冻结阈值对照：只给逐项事实，不替人下「改造有效/无效」的结论。
+    thresholds = matrix.get("thresholds") or {}
+    threshold_check = [
+        {"name": "primary",
+         "requirement": thresholds.get("primary"),
+         "observed": primary,
+         "observed_text": ("主指标为 None（无有效配对）" if primary is None
+                           else f"主指标 = {primary}"),
+         "met": None if primary is None else primary > 0},
+        {"name": "no_new_blocker_miss",
+         "requirement": thresholds.get("no_new_blocker_miss"),
+         "observed": newly_missed_blocker,
+         "observed_text": (f"B 新增漏检的 blocker：{newly_missed_blocker}"
+                           if newly_missed_blocker else "无新增 blocker 漏检"),
+         "met": None if not valid_fixtures else not newly_missed_blocker},
+        {"name": "false_positive",
+         "requirement": thresholds.get("false_positive"),
+         "observed": mean_fp_delta,
+         "observed_text": ("误报差值为 None（无有效配对）" if mean_fp_delta is None
+                           else f"误报差值 = {mean_fp_delta}"),
+         "met": None if mean_fp_delta is None else mean_fp_delta <= 0},
+    ]
+    if all(item["met"] is None for item in threshold_check):
+        warnings.append("冻结阈值无法对照：没有有效配对，全部阈值项为 NA")
+    return {
+        "schema": "ab-matrix-summary/1",
+        "matrix_id": matrix.get("matrix_id"),
+        "frozen_at": matrix.get("frozen_at"),
+        "thresholds": matrix.get("thresholds") or {},
+        "per_fixture": per_fixture,
+        "primary_metric": {
+            "name": "blocker/major 检出数差值（B−A）",
+            "value": primary,
+            "unit": "个/夹具（同夹具重复取均值后，夹具间等权平均）",
+            "denominator": len(valid_fixtures),
+            "denominator_note": f"参与汇总的有效夹具数（计划 {len(matrix['fixtures'])}）",
+        },
+        "false_positive": {
+            "mean_delta": mean_fp_delta,
+            "false_positives": fp_total,
+            "submitted_findings": findings_total,
+            "overall_rate": (round(fp_total / findings_total, 4) if findings_total else "NA"),
+            "known_near_miss_rate": "NA",
+            "known_near_miss_denominator": near_miss_total,
+            "known_near_miss_hits": near_miss_hits,
+            "insufficient_evidence": insufficient,
+            "denominator_note": "机械部分未做根因去重（无法从 score.json 还原），"
+                                "人工裁定部分按 root_cause 归并",
+        },
+        "invalid_pairs": invalid_pairs,
+        "newly_missed_blocker": newly_missed_blocker,
+        "threshold_check": threshold_check,
+        "warnings": warnings,
+        "comparable": bool(valid_fixtures) and not invalid_pairs,
+        "scope": ("本输出只产事实与派生指标；是否达标由人按 "
+                  "docs/evals-baseline/ab-protocol.md 的冻结阈值解读，"
+                  "不得由本输出自动推断"),
+    }
+
+
+def matrix_to_csv(summary):
+    """把汇总转成可复算 CSV（UTF-8 BOM）：一行一个夹具一列一项事实。"""
+    lines = ["fixture,answer_total,near_miss_total,pairs,valid_pairs,"
+             "mean_delta_bm,mean_delta_fp,newly_detected,common,only_a,missed_both"]
+    for fixture in summary.get("per_fixture") or []:
+        detail = fixture.get("detail") or {}
+        lines.append(",".join([
+            str(fixture.get("fixture")),
+            str(fixture.get("answer_total", "")),
+            str(fixture.get("near_miss_total", "")),
+            str(len(fixture.get("pairs") or [])),
+            str(fixture.get("valid_pairs", 0)),
+            ("" if fixture.get("mean_delta_bm") is None else str(fixture["mean_delta_bm"])),
+            ("" if fixture.get("mean_delta_fp") is None else str(fixture["mean_delta_fp"])),
+            str(len(detail.get("newly_detected") or [])),
+            str(len(detail.get("common") or [])),
+            str(len(detail.get("only_a") or [])),
+            str(len(detail.get("missed_both") or [])),
+        ]))
+    return "\ufeff" + "\n".join(lines) + "\n"
+
+
+def _sanitize_summary(summary):
+    """去掉汇总里的答案 ID，只留计数与严重度分布。
+
+    答案 ID 属受限资产（执行方目录里混入答案 ID 即判泄漏），而常规归档要能
+    随报告流转。因此去敏版只保留：条目数、严重度、限档原因与无效记录原因——
+    这些足以复算指标，但拼不回答案键。
+    """
+    out = json.loads(json.dumps(summary, ensure_ascii=False))
+    for fixture in out.get("per_fixture") or []:
+        detail = fixture.get("detail") or {}
+        for key in ("newly_detected", "common", "only_a", "missed_both"):
+            entries = detail.get(key) or []
+            detail[key] = [{"severity": e.get("severity")} for e in entries]
+        fixture["newly_missed_blocker"] = [
+            {"severity": "blocker"} for _ in (fixture.get("newly_missed_blocker") or [])]
+    out["newly_missed_blocker"] = [
+        {"fixture": item.get("fixture"), "severity": "blocker"}
+        for item in (out.get("newly_missed_blocker") or [])]
+    for fixture_entry in out.get("per_fixture") or []:
+        for pair in fixture_entry.get("pairs") or []:
+            pair.pop("hits_a", None)
+            pair.pop("hits_b", None)
+    out["sanitized"] = True
+    out["sanitized_note"] = ("答案 ID 已去除；本件为常规去敏归档，"
+                              "含答案 ID 的完整记录留在受限区。")
+    return out
+
+
+def archive_run(matrix_path, results_root, out_dir, fixtures_dir=None, sanitized=False):
+    """归档一次正式运行：协议、矩阵、原始计分、裁定、隔离检查、无效记录与汇总。
+
+    归档原则（方案 §5.6）：
+    - **答案与敏感原始证据留在受限区**：归档不含夹具答案键，也不含证据文件本体，
+      只留证据索引（发现里声明的证据路径）；
+    - **原始记录保留**：无效配对也进归档（连同无效原因），不得只留有效的那部分；
+    - **可复算**：同时给 summary.json 与 UTF-8 BOM 的 summary.csv；
+    - 归档写入**新目录**，已存在即拒，避免覆盖既有归档。
+
+    隔离检查在此重跑一次并留档：`prepare` 产物当时通过了检查，不代表执行完成后
+    的目录仍干净——执行方可能事后把答案写回目录。这类泄漏必须进归档。
+
+    `sanitized=True` 产出**常规去敏归档**：不含原始计分（score.json 含答案 ID）、
+    不含答案 ID，只留汇总事实、去敏明细、可复算 CSV 与协议副本。
+    完整件（含答案 ID 与原始计分）留在受限区。
+    """
+    matrix = _load_matrix(matrix_path)
+    results_root = Path(results_root)
+    out_dir = Path(out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise ValueError(f"归档目录非空，拒绝覆盖：{out_dir}")
+    fixtures_dir = Path(fixtures_dir or (ROOT / "docs" / "evals-baseline" / "detection-fixtures"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ("protocol", "scores", "adjudications", "isolation"):
+        (out_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    # 协议与矩阵：冻结时的副本，事后不得靠现网文件解释历史结果
+    for name in ("detection-protocol.md", "ab-protocol.md"):
+        source = ROOT / "docs" / "evals-baseline" / name
+        if source.is_file():
+            shutil.copy2(source, out_dir / "protocol" / name)
+    shutil.copy2(matrix_path, out_dir / "protocol" / "run-matrix.json")
+
+    isolation = []
+    for run in matrix["runs"]:
+        score_path = (results_root / run["fixture"] / run["arm"] / str(run["repeat"])
+                      / "score.json")
+        if not score_path.is_file():
+            isolation.append({"run_id": run["run_id"], "fixture": run["fixture"],
+                              "arm": run["arm"], "repeat": run["repeat"],
+                              "checked": False, "issues": ["缺少计分结果"]})
+            continue
+        score = _read_json(score_path)
+        target = out_dir / "scores" / f"{run['fixture']}__{run['arm']}__{run['repeat']}.json"
+        if not sanitized:
+            shutil.copy2(score_path, target)
+            adjudication = score_path.with_name("adjudication.json")
+            if adjudication.is_file():
+                shutil.copy2(adjudication,
+                             out_dir / "adjudications" / target.name)
+        issues = []
+        fixture_path = fixtures_dir / f"{run['fixture']}.json"
+        if fixture_path.is_file():
+            issues = verify_run(score_path.parent, fixture_path, redact_ids=sanitized)
+        isolation.append({"run_id": run["run_id"], "fixture": run["fixture"],
+                          "arm": run["arm"], "repeat": run["repeat"],
+                          "checked": True, "issues": issues,
+                          "executor_saw_answers": (score.get("executor") or {}).get("saw_answers")})
+    (out_dir / "isolation" / "isolation-checks.json").write_text(
+        json.dumps(isolation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    summary = summarize_matrix(matrix_path, results_root, fixtures_dir)
+    if sanitized:
+        summary = _sanitize_summary(summary)
+    (out_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (out_dir / "summary.csv").write_text(matrix_to_csv(summary), encoding="utf-8")
+    (out_dir / "invalid-records.json").write_text(
+        json.dumps({"invalid_pairs": summary.get("invalid_pairs") or [],
+                    "warnings": summary.get("warnings") or []},
+                   ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    leaked = [item for item in isolation if item.get("issues")]
+    index = {
+        "schema": "ab-archive-index/1",
+        "matrix_id": summary.get("matrix_id"),
+        "frozen_at": summary.get("frozen_at"),
+        "archived_at": _now(),
+        "sanitized": bool(sanitized),
+        "runs_archived": len(isolation),
+        "isolation_issues": len(leaked),
+        "isolation_issue_detail": leaked,
+        "contains_answer_key": False,
+        "contains_answer_ids": not sanitized,
+        "contains_raw_evidence": False,
+        "note": ("常规去敏归档：不含答案 ID 与原始计分。"
+                 if sanitized else
+                 "受限区完整归档：含原始计分与答案 ID，不随报告流转。"),
+        "files": sorted(str(p.relative_to(out_dir)).replace("\\", "/")
+                        for p in out_dir.rglob("*") if p.is_file()),
+    }
+    (out_dir / "index.json").write_text(
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"archive_dir": str(out_dir), "index": index, "summary": summary}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="独立盲测：准备/隔离检查/计分/对照")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -637,6 +1205,35 @@ def main(argv=None):
     p_ab.add_argument("--arm-a", required=True, help="改造前（基线）臂目录")
     p_ab.add_argument("--arm-b", required=True, help="改造后（对抗）臂目录")
 
+    p_adj = sub.add_parser("adjudicate", help="独立裁定：判定机械未匹配的发现")
+    p_adj.add_argument("--score", required=True, help="score.json 路径")
+    p_adj.add_argument("--adjudication", required=True,
+                       help="裁定 JSON：{adjudications:[{finding_id,decision,reason,root_cause}]}，"
+                            "decision ∈ valid/false_positive/insufficient_evidence")
+
+    p_pair = sub.add_parser("pair", help="按夹具配对评分（同一夹具下按重复编号配对两臂）")
+    p_pair.add_argument("--matrix", required=True, help="冻结的运行矩阵 JSON")
+    p_pair.add_argument("--fixture", required=True, help="夹具名（不含 .json）")
+    p_pair.add_argument("--results", required=True,
+                        help="结果根目录，结构 <fixture>/<arm>/<repeat>/score.json")
+    p_pair.add_argument("--fixtures-dir", default=None, help="夹具目录（评测者侧资产）")
+
+    p_matrix = sub.add_parser("matrix", help="汇总配对差值（先夹具内取均值，再夹具间等权汇总）")
+    p_matrix.add_argument("--matrix", required=True, help="冻结的运行矩阵 JSON")
+    p_matrix.add_argument("--results", required=True,
+                          help="结果根目录，结构 <fixture>/<arm>/<repeat>/score.json")
+    p_matrix.add_argument("--fixtures-dir", default=None, help="夹具目录（评测者侧资产）")
+    p_matrix.add_argument("--out-csv", default=None, help="可复算 CSV 输出路径（UTF-8 BOM）")
+
+    p_archive = sub.add_parser("archive", help="归档一次正式运行（不含答案键与原始证据）")
+    p_archive.add_argument("--matrix", required=True, help="冻结的运行矩阵 JSON")
+    p_archive.add_argument("--results", required=True,
+                           help="结果根目录，结构 <fixture>/<arm>/<repeat>/score.json")
+    p_archive.add_argument("--out", required=True, help="归档目录（须不存在或为空）")
+    p_archive.add_argument("--fixtures-dir", default=None, help="夹具目录（评测者侧资产）")
+    p_archive.add_argument("--sanitized", action="store_true",
+                            help="产出常规去敏归档：不含原始计分与答案 ID（完整件留在受限区）")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
@@ -651,6 +1248,29 @@ def main(argv=None):
                              ensure_ascii=False, indent=2))
         elif args.command == "ab":
             print(json.dumps(compare_ab(args.arm_a, args.arm_b), ensure_ascii=False, indent=2))
+        elif args.command == "adjudicate":
+            print(json.dumps(adjudicate_findings(args.score, args.adjudication),
+                             ensure_ascii=False, indent=2))
+        elif args.command == "pair":
+            matrix = _load_matrix(args.matrix)
+            fixtures_dir = Path(args.fixtures_dir or (ROOT / "docs" / "evals-baseline" / "detection-fixtures"))
+            print(json.dumps(pair_fixture(matrix, args.fixture, args.results,
+                                          _answers_by_fixture(fixtures_dir)),
+                             ensure_ascii=False, indent=2))
+        elif args.command == "matrix":
+            summary = summarize_matrix(args.matrix, args.results, args.fixtures_dir)
+            if args.out_csv:
+                out_csv = Path(args.out_csv)
+                if not out_csv.parent.is_dir():
+                    raise ValueError("CSV 输出父目录不存在")
+                out_csv.write_text(matrix_to_csv(summary), encoding="utf-8")
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        elif args.command == "archive":
+            result = archive_run(args.matrix, args.results, args.out, args.fixtures_dir,
+                                 args.sanitized)
+            print(json.dumps({"archive_dir": result["archive_dir"],
+                              "index": result["index"]},
+                             ensure_ascii=False, indent=2))
         else:
             print(json.dumps(compare_scores(args.a, args.b), ensure_ascii=False, indent=2))
     except (ValueError, OSError, json.JSONDecodeError) as exc:

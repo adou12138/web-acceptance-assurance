@@ -1,6 +1,7 @@
-# SYNC-NOTES — 抽取副本人工对照清单
+# SYNC-NOTES — 抽取副本人工对照清单与版本变更记录
 
-> 只服务开发期对照，**运行时完全不读**（集成方案 v2.4 §9）。
+> 文件分两部分：**上半部分**（对照清单）是开发期抽取副本的人工对照，**运行时完全不读**
+> （集成方案 v2.4 §9）。**下半部分**按版本追加变更记录与发布说明，是本包的变更日志载体。
 > 冻结源：qa-req2testcase-generator **4.17.0**（以 SKILL.md frontmatter 为准），frozen_at **2026-11-16T18:12:05+08:00**（policy.json meta）。
 > 已知风险并接受：源 skill 升级后副本可能漂移；漂移只影响判据新旧，不影响本包运行（运行时不读取 qa 的任何路径、版本或配置）。
 
@@ -738,3 +739,451 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - 三项探针双侧验证：真页 0 误报 + 注入已知故障必捕获（间距覆盖 `before=2/after=2` 证明必须做差分；2.5.8 例外 6/6；背景 `NONE` 与 `SOLID:#fff` 可区分）
 
 **边界（不宣称已解决的）**：`ui_metrics` 仍只判六类可量化项，不构成 WCAG 合规认证；图片/渐变/动效上的文字只能人工判；`state_matrix` 不排业务优先级；`copy_consistency` 判不了语义歧义；`assertion_mutation` 只证明抽样断言会响，不证明断言覆盖了该覆盖的东西。**A/B 两臂对照未跑，因此本轮不宣称"检出能力提升"**——只宣称"测量装置误报收敛、反激励拆除、新增 5 项可执行检测能力"。
+
+## v1.45.0（2026-11-21）：砺衡项目修订方案 M1–M10 落地
+
+按《砺衡项目修改方案与执行计划（修订版）》（2026-11-21）执行，本版一次性落地
+M1–M10 共十项改造，分批推进、每批单独准出：
+
+| 批次 | 范围 | 核心变更 | 新增回归 |
+|---|---|---|---|
+| S1 | M1 / M12 / M2 / M3 | 门禁链接线闭环：建账→采集→收尾共用同一份产物契约；未做跳间校验时拒绝建账并压结论上限 | `test_gate_link_contract.py`（19 + 4 subtests） |
+| S2 | M4 / M5 / M6 | 攻击面深度校验：结构校验、残余风险报告、跨轮提示与固定正反例 | `test_attack_depth_contract.py`（25） |
+| S3 | M7 | 修订申请分级：`readonly_lead`（凭据齐备可继续）与 `scope_change`（先批后动）二分，判定收敛到 `scripts/amendment_class.py` 单一事实源 | `test_amendment_class.py`（20） |
+| S3 | M8 | 首屏事实单一来源：台账摘要输出 `headline`，报告首屏与摘要消费同一份事实 | `test_headline_contract.py`（12） |
+| S4 | M9 | A/B 运行矩阵：5 夹具 × 2 臂 × 2 重复的配对、汇总、独立裁定与两层归档 | `test_ab_matrix_contract.py`（19） |
+| S4 | M10 | 用例资产基线：固定输入指纹与工具版本，差异定位到条目级 | `test_eval_baseline_contract.py`（12） |
+
+### 准出记录
+
+- **全量回归**：`python -m pytest tests/ -q` → **737 passed, 230 subtests passed**（v1.44.2 为 691 + 230）。
+- **变异验证**：本轮 34 处语义变异全部被对应断言精确捕获，无假阴性；其中 M7 首轮 2 处
+  未捕获（分类判定存在死分支、`execution_ledger` 未真实加载分类模块）已修复后重做。
+- **引用回链**：全仓 `.md` 语料扫描，references 与新增脚本的孤儿引用数为 0。
+
+### 兼容性说明
+
+- **旧产物可读**：旧格式基线 `case-eval-baseline/1`（`docs/evals-baseline/fixture-12.json`）保留可读，
+  指标照常比对，仅条目级定位标为不可用；旧工作流缺产物时按新口径限档，原因写入报告。
+- **CLI 兼容**：新增参数均为可选；不传 `--summary` 时报告走回退路径并显式标注口径说明。
+- **历史报告保留**：已用旧口径产出的报告不重算，按当时有效版本存档。
+
+### 回退说明
+
+- 本版对应 tag `v1.45.0`，上一已验证基线为 `v1.44.2`。
+- 回退路径：暂停候选版本用于真实验收 → 切回 `v1.44.2` 对应提交并重新注册 →
+  按确认后的有效版本重新计算并登记两个结果。
+- 源仓库保留可审计的回退提交；原始台账、交接记录、评测记录与标签不随回退删除。
+- 若已按新口径登记的任务需要回退，须按受影响范围逐项标注，不整体作废。
+
+### 本版不宣称的能力
+
+- **不宣称检出能力提升**：M9 的正式 A/B 矩阵尚未在真实执行方与真实夹具上运行，本版只交付
+  运行装置、配对口径、汇总口径与裁定流程。检出收益须待矩阵实跑后按冻结阈值签收。
+- **不宣称真实需求样本覆盖**：`docs/evals-baseline/samples/` 现为合成脱敏样本，
+  真实需求样本须由项目方提供已脱敏且获准使用的素材后按同一管线接入。
+- **M11（时序证明）、M13、M14 未在本版范围内**。
+
+## 门禁链接线闭环（M1–M3，2026-11-21）
+
+本轮把「建账 → 采集 → 收尾」的证据链从"各脚本各判各的"改为**同一份契约、两端消费**。
+改动落在 `scripts/execution_ledger.py`、`scripts/attack_coverage.py`、`scripts/phase_gate.py`，
+回归由 `tests/test_gate_link_contract.py` 锁定（19 项 + 4 subtests）。
+
+### 一、措辞—行为对照表（M1）
+
+**三分类的定义**（判定依据是代码实际路径，不是文案承诺）：
+
+- **拦操作**：命令直接失败（退出码 2），不产生台账/工作区。
+- **限结论**：命令成功、产物照常写出，但 `summary.verdict_ceiling` 被机械压低。
+- **仅披露**：记入留痕字段（`missing_inputs` / `missing_input_reasons`），不影响上限。
+
+**建账期（`init`）各输入的真实处置**
+
+| 输入 | 提供且不合规 | 未提供 | 分类 |
+|---|---|---|---|
+| `--batches` | 拒绝建台账（rc=2）：批次未 `done`、`gate` 非 `pass`/`waived`、批次未登记 `case_ids`、`case_ids` 与设计不一致 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |
+| `--gate-report` | 拒绝建台账（rc=2）：`status` 非 `pass`/`warning`、`checks` 缺失或为空、存在 `failed`、缺 `S0` 通过项、缺 `counts.testcases`、覆盖条数与设计不一致、`binding` 校验不过 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |
+| `--adversarial-gate` | 提供但字段不合法（缺 `verdict_ceiling`/`adversarial_enabled`/`reasons`）→ 拒绝建台账 | `adversarial_state="missing"`，`adversarial_ceiling="待核实"`；有合资格 `--adversarial-waiver` 记 `waived` 但**上限仍为待核实** | 限 |
+| `--phase-state` | 阶段未走完放行流程（有未批准修订 / 路由误配未确认 / 同会话放行 / 交接未消费）→ `phase_ceiling="待核实"` | 记 `missing_inputs` 缺口 → 压「待核实」 | 限 |
+| `--attack-coverage` | 缺 `verdict_ceiling` 或 `gaps` → 拒绝建台账 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |
+
+**关键修正**：文档此前写"不传这两个参数时保持旧行为"。实测为**不拒绝建账、但逐项留痕并压上限「待核实」**——
+"保持旧行为"会让使用方以为不传就没有后果。已在 `agents/web-acceptance-assurance.md`、
+`skills/case-generator/SKILL.md`、`references/execution-management.md`、`references/phase-workflow.md`
+四处同步改写。CLI 帮助文本同样逐条对齐（`--adversarial-gate` 原文写"拒绝建账"，实为压上限）。
+
+**已登记的其他措辞差异（记录影响，留待对应任务处理，本轮不改）**
+
+| 位置 | 差异 | 影响 | 归属 |
+|---|---|---|---|
+| `scripts/execution_ledger.py` `--adversarial-waiver` | 豁免成立时仍记 `adversarial_ceiling="待核实"`，文案暗示"豁免后可恢复通过" | 豁免被理解为放行时，使用方预期与上限不符 | M7（修订分类契约）落地时统一表述 |
+| `references/execution-management.md` 结论上限段 | 只写了对抗门禁与跳间校验对上限的影响，未提 `missing_inputs` 通路 | 使用方只知两条压档路径，不知第三条 | 已在本轮补入 |
+
+### 二、plan 交叉核对三态契约（M2）
+
+`attack_coverage.py` 产出 `plan_check_state`，取值三态：
+
+| 值 | 含义 | 后果 |
+|---|---|---|
+| `not_provided` | 未提供 plan | 弱化调用 → 压「待核实」 |
+| `empty` | 提供了 plan 但风险面集合为空 | 弱化调用 → 压「待核实」 |
+| `checked` | plan 与风险面已交叉核对 | 不额外压档 |
+
+**空 plan 不得自证覆盖**——这是三态设计与单一布尔位（`surf_plan_checked` 兼容读取）的根本差别：
+布尔位分不出"没传"和"传了空的"，两者都会冒充"已核对"。
+
+两个消费端（`phase_gate._attack_check`、`execution_ledger._attack_precondition`）按**同一口径**消费：
+非 `checked` 即压「待核实」并留痕。生产端 → 消费端串链由 `test_producer_consumer_chain` 锁定。
+旧产物缺该字段时**不压档**（字段缺失 ≠ 弱化调用），保证存量批次可复跑。
+
+### 三、缺失即留痕与收尾刷新（M3）
+
+- **缺口另记**：缺口写入 `baseline.missing_inputs`（顶层），**不混进 `baseline.gate_precondition`**——
+  后者是门禁判定结果，已有精确断言锁定其形状。
+- **同一职责不得被计两次缺失**：走三阶段流程时（提供 `--phase-state`），阶段完整性、跳间校验、
+  攻击覆盖三项职责都由 `phase_gate` 承担（它的 `submit` 强制校验评审/用例/对抗 plan 三件交接产物，
+  `execute` 阶段收尾强制交攻击覆盖结论）。此时台账**不再索要** `--batches`/`--gate-report`/
+  `--attack-coverage`——否则合法三阶段流程会被误压成「待核实」，让"走完流程"比"只做一半"更差。
+  旧工作流（未提供 `--phase-state`）则按原入口契约计缺口。
+- **对抗门禁单独判定**：其缺失由 `_adversarial_precondition` 判定并留痕
+  （`adversarial_state`/`adversarial_reasons`），不在缺口清单里重复计——否则同一缺口会出现两套原因码。
+- **收尾复核同轮最终产物**：`summary` 可接 `--phase-state`/`--attack-coverage`/`--adversarial-gate`，
+  按同一判据重算缺口；同轮补齐即消除对应临时缺口，**已成立的更严结论不因此放松**
+  （「不通过」在任何刷新下保持「不通过」）。
+
+### 四、清单新增标准（M12）
+
+**适用范围**：本包所有维度清单与条目清单——`references/bug-detection-map.md` 的检出维度总图、
+`skills/requirement-review/references/prd-dimensions.md` 的八维度、
+`skills/figma-ui-parity/references/check-dimensions.md` 的 7.x 编号表、
+`skills/api-test/references/framework.md` 的 A–AE 大类，以及各 skill 的 `MANUAL_CHECKS` 类黑名单。
+
+**新增一个维度/条目，必须附三项论证，缺一项即驳回**：
+
+1. **对应漏测类型**：说明它覆盖哪一类**原本发现不了**的问题。必须指到具体的失败模式
+   （如"上传成功但内容为空"），不能写"提升全面性"这类无法证伪的话。
+2. **为什么现有维度覆盖不到**：须点名是**哪个现有维度**覆盖不到、差在哪。
+   若现有维度加一个判据就能覆盖 → **驳回**（这是加判据的事，不是加维度的事）。
+3. **共享规则归属**：说明它落在哪套共享清单口径下。与现有维度重叠时，
+   走 `references/bug-detection-map.md` §三的共享口径（重叠允许，但结论口径各自独立，
+   跨 skill 引用必须带 skill 名、禁止裸编号），并在总图里登记，不另起一套事实源。
+
+**"暂不支持"类条目的移出同样是变更**：以编码期事实（能否拿到输入/观测通道）为准，
+不因"名字在不在某个字典里"而永久化。移出须在同一次提交里补上替代路径或写明为何不需要。
+
+**拟增条目演示（审核记录）**
+
+拟增：主体系五视角新增「**跨会话交接完整性**」维度。
+
+| 论证项 | 提交内容 | 裁定 |
+|---|---|---|
+| 对应漏测类型 | 交接包缺失或交接内容与上一阶段实际结论不符，导致下一阶段按错误的起点继续 | 成立——交接错误一旦发生，后续全部观察都建立在错基线上，且不易从单阶段产物看出 |
+| 为什么现有维度覆盖不到 | `phase_gate` 的机械校验只管**交接是否发生**（token、session、确认码），不管交接**内容是否忠实**。五视角各看各的页面，不看上一阶段说了什么 | 成立——"发生"与"忠实"是两个正交失败模式，现有维度查后者查不到 |
+| 共享规则归属 | 落在 `bug-detection-map` 总图的「流程纪律」组，与三阶段闸门组交叉索引；不新增编号空间 | 成立 |
+
+**裁定：驳回（留待 M7 落地时重新提报）**。理由：本轮 M7 正在改 `phase_gate` 的修订分类契约，
+交接内容的忠实性判定需要 `request_amendment` 的 `kind` 分类作为载体（当前 `request_amendment()`
+没有 `kind` 字段），先立维度会造成"有维度、无判定依据"的空挂。等 M7 的分类契约落地后，
+按本标准重新提报，届时须补上机械判据（交接包声明与上一阶段终态的逐项比对）。
+
+### 五、验证
+
+- 全量：`pytest tests/ -q` → **649 passed, 230 subtests passed**（改造前基线 630 + 新增 19）。
+- 新增回归：`tests/test_gate_link_contract.py` 19 项 + 4 subtests，覆盖 M1/M2/M3 三条。
+- **变异验证**（证明新增测试不是恒真）：注入三处语义变异，各自被精确捕获——
+  移除三阶段适用性豁免 → `test_same_duty_not_counted_twice` 转红；
+  移除 `phase_gate` 消费侧 `plan_check_state` 压档分支 → `test_phase_gate_consumes_weak_call`
+  的 `not_provided`/`empty` 两态转红；把 `--adversarial-gate` 帮助文案改回"拒绝建台账" →
+  `test_adversarial_gate_help_does_not_claim_reject` 转红。变异体均在确认注入后执行，
+  失败信息均为语义断言而非 SyntaxError。
+
+## 攻击面深度校验（M4/M5/M6，2026-11-21）
+
+改动落在 `scripts/attack_coverage.py`，回归由 `tests/test_attack_depth_contract.py` 锁定（25 项）。
+
+### 一、M4 结构校验与假设质检
+
+**三类分开处理**（合成一条时使用方只知道"判据不可证"，不知道该补什么）：
+
+| 情形 | 缺口码 | 补法 |
+|---|---|---|
+| 无判据占位（未声明独立通道，或通道只写被测物自述） | `oracle_no_criterion` | 补一条真正的独立通道 |
+| 缺真实执行证据（通道有，但拿不出可复核的证据路径） | `oracle_no_evidence` | 补可复核的证据路径（截图/接口响应/日志） |
+
+**两条硬规则**：
+
+- **缺结果不能计为 held**。原先 `hypothesis_outcome` 缺失时按 status 兜底成 `held`，
+  于是 NOT_RUN 的记录被算成"假设没被打破"——**未验证冒充已验证**，
+  正是这套门禁要防的事。现在结果推导不出时单列 `no_result`，
+  记缺口 `hypothesis_without_result`，且不计入 `held`。
+- **无独立判据或证据无法支持覆盖**。风险面"被覆盖"现在要求该面的失效假设
+  **有结果 + 独立判据 + 有证据**三者齐备（`surface_coverage[surf].supported`）。
+  只写了一句预测不算打过——否则高风险面门槛可被一行文字绕过。
+  高风险面因此分两种缺口：`surface_without_hypothesis`（没写预测）与
+  `surface_hypothesis_unverified`（写了但无可采信验证结果）。
+
+**只提示不压上限的两项**（误伤合法描述会把如实登记变成违规）：
+
+- `suspicious_wording`：可疑自然语言措辞（如"这个应该没问题"）。
+  合法描述（"并发建卷时卷名重复应拒绝"）不命中。
+- `single_method_surface`：同方法重复。
+
+**高风险面方法单一**（`high_risk_surface_single_method`）单独成条，与整体方法多样性分开：
+整体多样性只是分布描述（可被凑），但某个高风险面只用一种方法是该面没被打透的信号。
+**只提示，不压上限**——方法多样性一旦压档就会逼人拆碎去测没打算测的东西
+（`test_single_method_surface_is_disclosed_not_gated` 的既定口径），
+且"换手法"是使用方的选择，不是本轮结论成立与否的前提。
+
+**复测建议**（`retest_suggestions`）把"建议换手法"落到具体动作，三要素齐备：
+针对哪个风险面（`surface`）、已有观察是什么（`observations`）、
+本轮可用的是什么（`available_methods` / `available_paths`，取自已登记数据，不臆造）。
+建议是**附加说明**，不取代原提示与理由。
+
+### 二、M5 残余风险声明三态
+
+旧文本入口（`--residual-note` 自由文本）判不了"这条声明说的是不是真的"，保持兼容，
+只判有没有引用已登记编号。新增结构化入口 `--residual-declaration`（JSON 文件）：
+
+```json
+{"items": [{"id": "SURF-01", "status": "unbroken"}]}
+```
+
+`status` 取 `unbroken` / `broken` / `not_verified`，逐条核对：
+
+| 情形 | 处理 |
+|---|---|
+| 真编号且状态相符 | `residual_declaration.items[].verdict = "matched"` |
+| 编号存在但关联错误（状态与实际验证状态不符） | 缺口 `residual_status_mismatch`，压上限 |
+| 虚构编号（不在已登记清单） | 缺口 `residual_ref_not_registered`，压上限 |
+| 零项（空 items） | 三态为「无未破项」，不压上限 |
+| 声明为 `not_verified` | 三态为「尚未验证」，**不压上限**——保守登记不该被惩罚 |
+
+三态：**有未破项**（has_unbroken）/ **无未破项**（no_unbroken）/ **尚未验证**（not_verified）。
+"实际验证状态"只由已登记事实决定：SURF 面出现过 broken 假设 → 已破；
+有可采信验证且未破 → 未破；没打或验证不可采信 → 尚未验证。
+ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证。
+
+**报告首屏**按 `residual_declaration` 的实际条目呈现三态，不得只写一句"已声明残余风险"。
+
+### 三、M6 ATK 跨轮停滞披露
+
+「允许长期悬置」是刻意的让步，但长期悬置若一直不被看见，就退化成"登记了就算做过"。
+新增 `--atk-prev`（上一可比批次的 ATK 快照），判停滞的条件全部机械可核对：
+
+- **同范围同稳定 ID**：范围键 = （ID，验证路径）。旧 ID 被复用（换了验证路径）不是停滞——
+  那是换了一条假设，拿它说"停滞"是误判。
+- **仍未执行**：本轮状态为「未执行」；上一批同键也须为「未执行」（曾经动过就不是持续悬置）。
+- **验证路径无实质变化**：已含在范围键里。
+
+**只披露不压上限**（`atk_stagnant`）：停滞是过程事实，不是缺陷。
+与本轮的 `atk_unexecuted` 分开——后者是本轮事实，前者是**跨轮**事实。
+
+### 四、验证
+
+- 全量：`pytest tests/ -q` → **674 passed, 230 subtests passed**（M4–M6 改造前 649）。
+- 新增回归：`tests/test_attack_depth_contract.py` 25 项，覆盖 M4/M5/M6 三个方向 + CLI 入口。
+- **变异验证**（证明新增测试不是恒真）：七处语义变异各自被精确捕获——
+  缺结果不再单列 → `test_missing_result_is_not_counted_as_held` 转红；
+  覆盖判定不看独立判据与证据 → `test_shallow_record_cannot_support_coverage` 转红；
+  判据缺口不再分两类 → `test_missing_oracle_and_missing_evidence_are_separate` 转红；
+  高风险面方法单一不再提示 → `test_high_risk_single_method_is_disclosed_with_retest_plan` 转红；
+  状态不符不再记缺口 → `test_status_mismatch_is_a_gap` 转红；
+  虚构编号不再记缺口 → `test_fabricated_reference_is_a_gap` 转红；
+  停滞判定的两处条件失效 → `test_same_id_same_path_still_unexecuted_is_stagnant`
+  与 `test_old_id_reuse_is_not_stagnant` 转红。
+  变异体均在注入后做语法校验（首轮两处因替换成 `pass` 造成 SyntaxError、
+  一处未触及有效分支，均已重做并确认捕获）。
+
+## 修订申请分级（M7，2026-11-21）
+
+修订申请此前只有一条处置路径：登记 → 等批准 → 才能继续。这条路径对**范围变更**是对的
+（新增写入、扩权、换环境、超预算必须先批后动），对**固定授权范围内的只读观察**则是错的——
+如实登记一个只读线索，比"先做后说"更糟，却反而被卡住。
+
+现按两类分流，处置相反：
+
+| 分类 | 凭据 | 处置 |
+|---|---|---|
+| `readonly_lead` | `scope` / `environment` / `role` / `allowed_actions` / `no_state_change` 五项齐备 | 登记后即可继续，状态记 `approved_readonly`，不阻断推进、不压结论上限 |
+| `scope_change` | 命中 `writes` / `role_change` / `environment_change` / `over_budget` / `unknown_attributes` / `incomplete_evidence` 任一信号 | 先批后动，状态记 `awaiting_approval` |
+
+### 一、判据只认登记事实
+
+- **从严顺序固定**：先看范围变更信号，再看只读凭据是否齐备。反过来会让"有写入信号
+  但也填了只读字段"的申报蒙混过关。
+- **缺凭据从严**：五项只读凭据缺任一项 → 归 `scope_change`。
+- **`path_type`、HTTP 方法、"未看到写操作"单独都不是只读凭据**（方案 §3.2）。
+- **不传声明从严**：旧调用（不传 `declaration`）一律按 `scope_change` 处理，原行为不放宽。
+
+### 二、单一事实源
+
+分类契约落在 `scripts/amendment_class.py`（新增），`phase_gate` 与 `execution_ledger`
+共用同一个 `is_blocking()` 判定函数。口径是「**类别决定需不需要先批，状态决定批了没有**」。
+
+首轮实现把判定写成「`status == awaiting_approval` 且 `kind != readonly_lead`」，
+**变异验证时发现这处 kind 判断是死分支**：`readonly_lead` 登记后的状态是
+`approved_readonly`，永远不等于 `awaiting_approval`，条件恒不成立——kind 字段无人消费。
+且 `execution_ledger` 当时只在注释里说"共用契约"，实际上根本没加载该模块。
+现已改为判定统一收敛到 `is_blocking()`，kind 重新承重（只读观察即便落在待批准状态也不阻断）。
+
+### 三、阻断点覆盖四个入口
+
+未批准的范围变更在 `start` / `checkpoint` / `resume` / `check-verdict` 四处一致阻断。
+`resume` 是本轮补上的——跨会话换会话不应成为绕过先批后动的缺口。
+台账侧（`_phase_precondition`）与 `phase_gate` 同口径，不再各判一份。
+
+### 四、验证
+
+- 全量：`pytest tests/ -q` → **694 passed, 230 subtests passed**（M4–M6 改造后 674）。
+- 新增回归：`tests/test_amendment_class.py` 20 项，覆盖分类判据、phase_gate 四处阻断行为、
+  台账上限、CLI 入口。
+- **变异验证**（证明新增测试不是恒真）：七处语义变异全部被精确捕获——
+  只读不得压过写入信号 → 1 failed；只读凭据缺项不再从严 → 2 failed；
+  `is_blocking` 去掉类别判断 → 2 failed；`phase_gate` 退回只认 status → 1 failed；
+  台账退回只认 status → 1 failed；`resume` 不再阻断 → 1 failed；
+  登记时分类不再决定处置状态 → 2 failed。
+  首轮两处变异（撤掉的是死分支）未触发红，经复核判定为**假阴性**并重做。
+
+## 首屏事实单一来源（M8，2026-11-21）
+
+首屏此前由两处各自推断：报告渲染器从 CSV 台账与门禁 JSON 拼「未执行项/缺失视角」，
+交付模板则由人按印象写「完成范围」。两者各算一次，结论必然漂移——而且漂移方向
+通常是报好看的那个：门禁自身判「通过」，综合后其实「待核实」，报告首屏却只显示前者。
+
+现由 `execution_ledger.py summary` 产出 `headline`（`schema=ledger-headline/1`），
+**报告渲染器与交付模板消费同一份事实**：
+
+- **完成范围**（`completion_scope`）：计划/已执行/未执行/阻塞/跳过/失败计数与一句人话；
+  `can_claim_readonly_complete` 标志「只读范围内已完成」是否**允许**写。
+- **必查项状态**（`required_checks`）：三阶段闸门、对抗门禁、攻击面覆盖、证据链完整性、
+  门禁输入齐备性五项，状态为 通过/受限/缺失/未知，各带可核对说明。
+- **限档原因**（`limitation_reasons`）：逐条 code 与说明（失败/阻塞/未执行/跳过/
+  门禁缺失/门禁受限/仅授权限制）。
+
+### 一、上限只有一个来源
+
+`headline.verdict_ceiling` 与顶层 `verdict_ceiling` **同值**：上限只由
+`_verdict_ceiling()` 算一次，headline 消费该值，不重算。
+
+渲染时另有一处修正：报告第二屏「各数据集的门禁结果」里的结论上限是**门禁单项判定**，
+此前与首屏并列显示，同样读作「本报告结论上限」。现表头改为「门禁自身结论上限」，
+并加注说明两者口径不同、冲突时以首屏为准——两套上限并排而不加区分，读者只会取其一。
+
+### 二、口径来源必须可区分
+
+渲染器新增 `--summary` 参数，三种情形在报告上可区分：
+
+1. 提供 summary 且含 headline → 正常路径，首屏直接消费；
+2. 提供 summary 但缺 headline（旧摘要）→ 回退推断，**首屏显式标注**「台账摘要缺首屏事实字段」；
+3. 未提供 summary → 回退推断，**首屏显式标注**「未提供台账摘要」。
+
+第 2、3 种不得静默按推断口径出首屏——否则报告看起来照样完整，读者却不知道限制因素是推断的。
+
+### 三、只读完成声明的条件
+
+`can_claim_readonly_complete` 为 true **当且仅当**：本轮为只读授权范围、
+五个必查项全为「通过」、无失败/阻塞/未执行/跳过、无适用门禁输入缺失。
+任一条件不满足即为 false——授权限制不能替代未完成的必查项。
+
+### 四、验证
+
+- 全量：`pytest tests/ -q` → **706 passed, 230 subtests passed**（M7 后 694）。
+- 新增回归：`tests/test_headline_contract.py` 12 项，覆盖台账侧五种首屏情形与
+  渲染器端到端（真实 CLI 产出 HTML，断言首屏取自 summary 而非门禁值）。
+- **变异验证**：七处语义变异全部被精确捕获——只读完成标志恒真 / 恒假各 1 failed；
+  首屏上限另算一份 → 3 failed；渲染器改用门禁上限 → 1 failed；
+  缺字段与未提供两种标注被撤掉各 1/2 failed；走三阶段时误报攻击覆盖缺失 → 2 failed。
+
+## A/B 运行矩阵与配对汇总（M9，2026-11-21）
+
+此前 `blind_eval.py` 只能做两臂**全局聚合**对照（`ab` 子命令）。但方案要求的是
+**按夹具分别配对评分，再汇总配对差值**——臂内聚合把不同环境的运行混在一起，
+配对差值就不再是"同一条件下换个做法"的差值。
+
+### 一、冻结的运行矩阵
+
+新增 `docs/evals-baseline/run-matrix.json`（`ab-run-matrix/1`）：5 个夹具 × 2 臂 × 2 次
+重复 = 20 次运行，逐条登记（夹具、臂、重复编号、run_id）、预算、规则与**冻结阈值**。
+出分后不得改夹具、重复数、阈值或预算；如需变更，另立矩阵 ID 并同时披露。
+
+### 二、三个新子命令
+
+- `pair`：单夹具配对。配对键 = （夹具，重复编号）。产出每对的差值、夹具内均值，
+  以及缺陷级明细（新增命中 / 共同命中 / A 有 B 无 / 两臂皆漏）与**新增 blocker 漏检**
+  （A 命中、B 未命中的 blocker）。
+- `matrix`：汇总。先对同夹具重复取均值，再将各夹具**等权**汇总；主指标 =
+  配对运行中命中冻结答案键的 blocker/major 缺陷数差值（B−A）。输出逐夹具明细、
+  无效配对清单、冻结阈值逐项对照（`threshold_check`，只给事实不下效果结论）与
+  UTF-8 BOM 的可复算 CSV。
+- `adjudicate`：独立裁定。机械未匹配的发现逐条裁定（`valid` / `false_positive` /
+  `insufficient_evidence`），每条写明理由与 `root_cause`，同根因重复发现按根因归并。
+  **必须逐条覆盖**：漏一条即拒——否则误报率没有可复算的分母。机械已命中的发现
+  不得被裁定为无效。
+
+### 三、无效配对与证据不足
+
+无效配对（夹具/协议指纹不同、预算不同、跨臂同一执行方、缺一侧 run）一律排除，
+原因逐条列出。**有效配对不足的夹具标为证据不足，不计入汇总分母**——拿一半运行
+算出的均值描述的是那一半，不是这个夹具。
+
+### 四、归档分两层
+
+- **受限区完整件**：协议副本、矩阵副本、原始计分、裁定、隔离检查、无效记录、汇总。
+- **常规去敏件**（`--sanitized`）：不含原始计分与答案 ID，只留汇总事实、去敏明细与
+  可复算 CSV。答案键与原始证据一律不进归档。
+
+隔离检查在归档时**重跑一次**并留档：`prepare` 当时通过不代表执行完成后目录仍干净
+（执行方可能事后把答案写回目录）。去敏模式下，泄漏诊断只报**命中数量与文件位置**，
+不写答案 ID 本身——把 ID 写进问题描述再脱敏，等于脱敏只做了一半。
+
+### 五、验证
+
+- 全量：`pytest tests/ -q` → **725 passed, 230 subtests passed**（M8 后 706）。
+- 新增回归：`tests/test_ab_matrix_contract.py` 19 项，覆盖配对口径、汇总口径、
+  无效配对、证据不足、裁定完备性、阈值对照与两层归档。
+- **变异验证**：八处语义变异全部被精确捕获——配对退化为单次 → 3 failed；
+  夹具内均值改拉平求和 → 2 failed；无效配对不再排除 → 5 failed；
+  跨臂同执行方不再判无效 → 1 failed；裁定漏一条不再拒 → 1 failed；
+  证据不足夹具仍进分母 → 2 failed；去敏归档不脱敏 → 1 failed；
+  新增 blocker 漏检不报 → 1 failed。
+
+## 用例资产基线：固定输入与条目级定位（M10，2026-11-21）
+
+`eval_cases.py` 此前只存一组指标做跨版本比对，有三个缺口：
+①基线不记输入，换一份用例也能拿来比，指标对不上时无从判断是"退化"还是"换题了"；
+②工具换版后口径可能已变，但基线看不出来；
+③差异只到指标级——"断言密度下降"这种报告，仍然不知道该改哪条用例。
+
+### 一、基线新格式（`case-eval-baseline/2`）
+
+基线除指标外还固定三样：**输入指纹**（用例文件 sha256）、**工具版本**、**条目级摘要**
+（每用例的断言数/优先级/套件/层/方法、结构错误、覆盖缺口、缺层）。
+
+- 输入指纹不同 → 输出标 `comparable=false` 并说明"换题了"：机械指标口径可能已变，
+  差异仅供参考，**不得直接当退化判定**。
+- 工具版本不同 → 同样标不可比并写明版本差。
+- **旧格式基线保留可用**：`fixture-12.json` 是历史口径锚点，仍能读（指标照常比对），
+  只是没有条目级摘要，差异定位标为不可用——不猜、不用当前值冒充基线。
+
+### 二、差异定位到条目
+
+`diff_detail` 把差异落到三类：**结构**（新增/已修复的结构错误逐条列出）、
+**覆盖**（新增/已闭合的缺口、缺层变化）、**断言**（哪条用例的断言数从几变到几），
+外加用例的新增/删除。主 CSV 增加「变化」与「条目级定位」两列，
+`--out-diff` 输出完整明细（UTF-8 BOM）。
+
+### 三、样本与分账
+
+- `docs/evals-baseline/samples/`：新增脱敏样本 `requirement-sample-desensitized.json`
+  及其已发布基线，附 `README.md` 写明可复跑命令、真实需求样本的接入与脱敏要求。
+  **现有样本是合成教学需求，不是真实客户需求**——真实需求样本须由项目方提供
+  已脱敏且获准使用的素材后按同一管线接入。
+- **M10 的结构评分与 M9 的实际检出指标分账出具**：结构更完整不等于抓到更多真缺陷；
+  M9 的检出收益也不能反推结构评分达标。
+
+### 四、验证
+
+- 全量：`pytest tests/ -q` → **737 passed, 230 subtests passed**（M9 后 725）。
+- 新增回归：`tests/test_eval_baseline_contract.py` 12 项，覆盖输入指纹固定、版本固定、
+  换题标不可比、旧基线兼容、四类条目级定位、差异 CSV 与样本可复跑。

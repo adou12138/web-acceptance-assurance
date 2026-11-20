@@ -94,10 +94,38 @@ python scripts/phase_gate.py check-verdict <state> \
 - **状态单写者**：`active_session` 之外的会话调任何推进命令一律拒绝（"无权操作"）。会话交替改同一份状态被机械禁止。
 - 放行人、放行时间、放行依据三者缺一，`approve` / `resume` 拒绝。
 - 被驳回（`reject`）后须修订再 `submit`，驳回理由进 history，不得覆盖。
-- 存在未批准的修订申请时，`check-verdict` 返回"待核实"。
+- **未批准的范围变更修订申请（`scope_change`）存在时，`start` / `checkpoint` / `resume` / `check-verdict` 一律阻断**；**只读观察（`readonly_lead`，凭据齐备）登记后即可继续**，不阻断也不压上限（判据见 2.3）。
 - **交接产物必须真实存在**：`submit` 逐条校验 `--artifact` 为已存在的绝对路径；规划阶段交给执行阶段时还必须凑齐**需求评审结论 / 用例集 / 对抗 plan** 三件（文件名分别含 `review`、`cases`、`adversarial`）。状态流转不能代替这三件产物——曾经零产物加三个不存在的路径也能推进到执行阶段。
 
-### 2.3 防自授、防篡改与防蒙混（自攻发现，均已修）
+### 2.3 修订申请分级（`readonly_lead` / `scope_change`）
+
+修订申请分两类，**处置完全相反**，判错就是"没批就写了"或"该批的不批"：
+
+| 分类 | 含义 | 处置 |
+|---|---|---|
+| `readonly_lead` | 固定授权范围内的只读观察：已获授权、无业务状态变化、可凭计划与通道记录核对 | **登记后即可继续**，状态记 `approved_readonly`，不阻断推进、不压结论上限 |
+| `scope_change` | 范围变更：新增写入、角色或权限扩展、环境变更、超预算、属性未知、凭据不全 | **先批后动**，状态记 `awaiting_approval`，未批准不得执行 |
+
+判定只认**已登记事实**（申报字段本身），不认自然语言自述：
+
+```bash
+# 只读观察：五项凭据齐备 → 登记后继续
+python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
+  --note "计划外发现一个只读线索" --declaration readonly-lead.json
+# readonly-lead.json：
+# {"kind":"readonly_lead","scope":"查看已授权项目的列表页","environment":"sandbox",
+#  "role":"editor","allowed_actions":["view_list","read_dom"],"no_state_change":true}
+```
+
+- `readonly_lead` 须同时具备 `scope` / `environment` / `role` / `allowed_actions` / `no_state_change` 五项凭据，**缺任一项从严归 `scope_change`**。
+- 申报命中 `writes` / `role_change` / `environment_change` / `over_budget` / `unknown_attributes` / `incomplete_evidence` 任一信号 → 直接归 `scope_change`，**即使只读凭据齐备**。
+- **`path_type`、HTTP 方法或"未看到写操作"单独都不是只读凭据**——凭"看着像只读"放行，等于把先批后动变成先做后说。
+- 不传 `--declaration`（或声明里没有有效 `kind`）→ 从严按 `scope_change` 处理（保留旧行为，不放宽）。
+- 分类契约的**单一事实源是 `scripts/amendment_class.py`**：`phase_gate` 与 `execution_ledger` 共用同一个 `is_blocking()` 判定函数，两端各判一份必然漂移（分类口径不同 = 放行口径不同）。口径是「**类别决定需不需要先批，状态决定批了没有**」。
+
+未批准的范围变更在 `start` / `checkpoint` / `resume` / `check-verdict` 四处一致阻断；`approve-amendment` 批准后即放行（`resume` 也不例外——不得借跨会话绕过先批后动）。
+
+### 2.4 防自授、防篡改与防蒙混（自攻发现，均已修）
 
 | 攻击 | 修复前 | 修复后 |
 |---|---|---|
@@ -129,7 +157,7 @@ python scripts/phase_gate.py check-verdict <state> \
 - 禁判定字段：`verdict` / `judgement` / `conclusion` / `severity` / `defect` / `classification` / `root_cause` / `pass_fail`。
 - `collection_state` 只许 `collected` / `blocked` / `not_run` / `skipped` / `partial`；出现 `PASS` / `FAIL` / `通过` 即拒绝。
 - `collected` 必须附 `evidence_paths`，否则裁决阶段无法复核。
-- 新发现的风险线索写 `new_lead`，**不得**自行扩写计划或改判用例——走 `amend` 修订申请。
+- 新发现的风险线索写 `new_lead`，**不得**自行扩写计划或改判用例——走 `amend` 修订申请。申请按 **2.3** 分级：固定授权范围内的只读观察（`readonly_lead`，五项凭据齐备）登记后即可继续；写入、扩权、换环境、超预算、属性未知、凭据不全一律 `scope_change`，先批后动。
 
 **已知盲区**：自然语言观察文本里的判定（"功能看起来正常"）拦不住。发现此类记录按流程缺陷处理，并计入本批次的过程问题。
 
@@ -165,7 +193,7 @@ execution_ledger.verdict_ceiling
   = strictest(台账事实上限, adversarial_ceiling, phase_ceiling)
 ```
 
-`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在未批准修订、存在未确认的路由误配、存在**同会话放行**（`approval.mode = same_session`）、交接未消费（`awaiting_session_for` 非空）、执行阶段收尾未交攻击覆盖结论、执行阶段收尾未交探索清单 gate 结论、风险假设未清算或有开放项、回归影响面未评估。
+`phase_ceiling = "待核实"` 当且仅当：任一阶段未 done、存在**未批准的范围变更修订**（`scope_change`；只读观察 `readonly_lead` 不计）、存在未确认的路由误配、存在**同会话放行**（`approval.mode = same_session`）、交接未消费（`awaiting_session_for` 非空）、执行阶段收尾未交攻击覆盖结论、执行阶段收尾未交探索清单 gate 结论、风险假设未清算或有开放项、回归影响面未评估。
 
 ### 5.0 授权模式决定的天花板（开工前先说清，别让用户反复收到「待核实」）
 
@@ -190,7 +218,7 @@ execution_ledger.verdict_ceiling
 | `skipped` | `SKIPPED` | 主动跳过并写明理由，不计覆盖 |
 | `not_run` | `NOT_RUN` | 未执行 |
 
-规则：采集阶段只允许左列；右列只能由裁决阶段依据证据落定。两套枚举**不互相推导**——`collected` 不是 `PASS`。`execution_ledger init --phase-state <state>` 会把这几项写入 `baseline.gate_precondition`，不传该参数时保持旧行为（结构不变，便于存量批次复跑）。
+规则：采集阶段只允许左列；右列只能由裁决阶段依据证据落定。两套枚举**不互相推导**——`collected` 不是 `PASS`。`execution_ledger init --phase-state <state>` 会把这几项写入 `baseline.gate_precondition`；不传该参数时**不拒绝建账**，但该缺口逐项记入 `baseline.missing_inputs` 并把 `summary` 的 `verdict_ceiling` 压"待核实"（`gate_precondition` 结构不变，便于存量批次复跑）。
 
 ## 6. 常见错误与处置
 
@@ -206,3 +234,5 @@ execution_ledger.verdict_ceiling
 | 交接产物写占位路径（`D:/不存在/review-result.json`） | 规划阶段等于没做，却显示"已放行" | `submit` 会逐条校验文件存在且为绝对路径，缺三件直接拒 |
 | 风险假设只在报告里写"应该没问题" | 假设既不验证也不登记缺口 | 写进 `assumptions.json`，`result=open` 的项会压上限并要求复测或转为风险条目 |
 | 有变更但不列回归候选 | 破坏旧功能无机械要求 | 交 `regression.json`：候选带 `basis`，或写 `no_impact_reason` |
+| 计划外发现一律按"要扩范围"走审批 | 如实登记只读线索比先做后说更糟，登记行为反被惩罚 | 按 2.3 分级：只读观察（`readonly_lead`，凭据齐备）登记后即可继续；确有写入/扩权/换环境才走 `scope_change` 先批后动 |
+| 只读观察只写 `path_type=positive` 或"看着像只读"就放行 | 凭据不足的只读申报放行 = 先批后动变先做后说 | `readonly_lead` 须五项凭据齐备；`path_type`、HTTP 方法、"未看到写操作"单独都不算凭据，缺任一项从严归 `scope_change` |

@@ -1,0 +1,56 @@
+{
+  "schema": "case-eval-baseline/2",
+  "metrics_schema": "case-eval-metrics/1",
+  "tool_version": "2",
+  "scored_at": "2026-11-20T12:42:52+00:00",
+  "input": {
+    "path": "docs/evals-baseline/samples/requirement-sample-desensitized.json",
+    "sha256": "392c1c6906dbc29684f012c380077b01903e01284899f79490204d94bc6bc5d5"
+  },
+  "metrics": {
+    "testcases": 2,
+    "features": 1,
+    "coverage_layers_missing": 3,
+    "feature_l1_ratio": 0.0,
+    "method_variety": 0,
+    "assertion_density": 1.0,
+    "vague_or_placeholder": 0,
+    "smoke_ratio": 0.0,
+    "p0_ratio": 0.5,
+    "gaps_open": 0,
+    "structural_errors": 0
+  },
+  "detail": {
+    "per_case": [
+      {
+        "id": "TC-NAME-001",
+        "assertions": 1,
+        "priority": "P0",
+        "suites": [
+          "feature",
+          "regression"
+        ],
+        "layer": "e2e",
+        "methods": []
+      },
+      {
+        "id": "TC-NAME-002",
+        "assertions": 1,
+        "priority": "P1",
+        "suites": [
+          "feature"
+        ],
+        "layer": "ui",
+        "methods": []
+      }
+    ],
+    "structural_errors": [],
+    "coverage_gaps": [],
+    "missing_layers": [
+      "L1",
+      "L2",
+      "L3"
+    ],
+    "methods_witnessed": 0
+  }
+}

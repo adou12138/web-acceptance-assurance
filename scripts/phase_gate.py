@@ -26,6 +26,24 @@ import json
 from pathlib import Path
 import sys
 
+
+def _sibling(name):
+    """按文件路径加载同目录脚本，不依赖 sys.path（CLI 与测试导入都能用）。"""
+    try:
+        return __import__(name)
+    except ImportError:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+# 修订分类契约的单一事实源：phase_gate 与 execution_ledger 共用，
+# 两处各写一份必然漂移（判定口径不同 = 放行口径不同）。
+_AMD = _sibling("amendment_class")
+AMENDMENT_KINDS = tuple(_AMD.AMENDMENT_KINDS)
+
 SCHEMA = "phase-state/2"
 PHASES = ("plan", "execute", "adjudicate")
 NEXT_PHASE = {"plan": "execute", "execute": "adjudicate", "adjudicate": None}
@@ -34,6 +52,17 @@ PHASE_LABELS = {"plan": "规划与用例生成", "execute": "批量执行与状�
 # 结论上限的合法取值。三种都要认：attack_coverage 会产出「不通过」，exploration 目前
 # 只产出前两种，但把「不通过」拒之门外只会在上游改用时报一句误导性的「缺字段」。
 CEILINGS = ("通过", "待核实", "不通过")
+
+
+def _strictest(left, right):
+    """取更严的结论上限。通过 < 待核实 < 不通过。
+
+    用于「不得把已算出的更严结论降级」：解除阻断（豁免/关闭/弱化调用补齐）
+    只解除「对抗必选」这类阻断，不放松已成立的结论。
+    """
+    if left not in CEILINGS or right not in CEILINGS:
+        raise ValueError(f"结论上限取值非法：{left!r} / {right!r}（需为 {list(CEILINGS)}）")
+    return left if CEILINGS.index(left) >= CEILINGS.index(right) else right
 
 # 交接产物：submit 时逐条要求真实存在（不认占位路径），plan 交棒给 execute 时
 # 还必须凑齐三件——需求评审、用例集、对抗 plan。缺任何一件都说明规划阶段只是走
@@ -397,8 +426,11 @@ def start(state, phase, session=None):
     if approval.get("mode") == "cross_session" and approval.get("to_session") != session:
         raise ValueError(f"阶段 {phase} 的放行发生在新会话 {approval.get('to_session')}，"
                          f"当前会话 {session} 不得开始；跨会话须由放行会话自己执行")
-    if any(a["status"] == "awaiting_approval" for a in state["amendments"]):
-        raise ValueError("存在未批准的阶段修订申请：修订批准前不得开始或继续阶段")
+    pending = _pending_scope_changes(state)
+    if pending:
+        raise ValueError("存在未批准的范围变更修订申请："
+                         + "、".join(a["id"] for a in pending)
+                         + "（先批后动；只读观察不阻断）")
     if entry.get("routing") is None:
         session_record = _session_record(state, session) or {}
         entry["routing"] = {
@@ -513,10 +545,22 @@ def _attack_check(coverage):
     # 上游自相矛盾（ceiling=通过 却带着缺口）时按缺口从严：缺口机械可核对，ceiling 只是一个词。
     if ceiling == "通过" and gaps:
         ceiling = "待核实"
+    # 弱化调用留痕：上游没做 plan 交叉核对（未提供 plan 或风险面集合为空）时，
+    # 攻击面覆盖结论无法证明"与计划对过账"，按缺口压上限。
+    # 不拒绝文件本身——与"压上限而非拒绝"的口径一致。
+    reasons = [] if ceiling == "通过" else \
+              [f"攻击覆盖不达标（{ceiling}）：{[g.get('code') if isinstance(g, dict) else g for g in gaps]}"]
+    plan_state = coverage.get("plan_check_state")
+    if plan_state is not None and plan_state != "checked":
+        ceiling = _strictest(ceiling, "待核实")
+        reasons.append(
+            "攻击覆盖未与 plan 交叉核对（plan_check_state=%s）：属弱化调用，"
+            "攻击面覆盖结论无法证明与计划对过账，结论上限压待核实" % plan_state)
     return {"state": "provided", "ceiling": ceiling,
             "density": coverage.get("attack_density"), "gaps": list(gaps),
-            "reasons": [] if ceiling == "通过" else
-                       [f"攻击覆盖不达标（{ceiling}）：{[g.get('code') if isinstance(g, dict) else g for g in gaps]}"]}
+            "plan_check_state": plan_state,
+            "atk_checked": coverage.get("atk_checked"),
+            "reasons": reasons}
 
 
 def revise(state, phase, attack_coverage=None, exploration=None, note=None, session=None,
@@ -629,8 +673,11 @@ def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=Non
     if entry["status"] not in {"in_progress", "done"}:
         raise ValueError(f"phase {phase} 不能收尾（status={entry['status']}）；"
                          "须先 start 并完成本阶段工作")
-    if any(a["status"] == "awaiting_approval" for a in state["amendments"]):
-        raise ValueError("存在未批准的阶段修订申请：先处理修订再 checkpoint")
+    pending = _pending_scope_changes(state)
+    if pending:
+        raise ValueError("存在未批准的范围变更修订申请："
+                         + "、".join(a["id"] for a in pending)
+                         + "（先处理范围变更再 checkpoint；只读观察不阻断）")
     handoff_dir = Path(handoff_dir)
     if not handoff_dir.is_dir():
         raise ValueError(f"交接目录必须已存在：{handoff_dir}")
@@ -760,6 +807,13 @@ def resume(state, phase, new_session, user_confirm, model_class=None, model_name
     ok, why = _prior_done(state, phase)
     if not ok:
         raise ValueError(why)
+    # 范围变更先批后动：跨会话 resume 同样是"继续往前做"，未批准的范围变更
+    # 不得借换会话绕过。只读观察凭据齐备即可继续，不在此列。
+    pending = _pending_scope_changes(state)
+    if pending:
+        raise ValueError("存在未批准的范围变更修订申请："
+                         + "、".join(a["id"] for a in pending)
+                         + "（先批后动；不得借跨会话 resume 绕过）")
     confirm = _text(user_confirm, "user_confirm")
     token = str(handoff.get("token") or "").upper()
     if not token:
@@ -800,15 +854,57 @@ def resume(state, phase, new_session, user_confirm, model_class=None, model_name
     return state
 
 
-def request_amendment(state, phase, by, note, session=None):
-    """阶段中发现的计划缺口：登记修订申请，批准前不得给出裁决。"""
+def _pending_scope_changes(state):
+    """尚未批准的范围变更修订（须先批后动的那些）。
+
+    只读观察（`readonly_lead`）**不在此列**——固定授权范围内的只读观察
+    凭据齐备即可继续，阻断它等于让"如实登记只读线索"变得比"先做后说"更糟。
+
+    判定走分类契约的单一事实源（scripts/amendment_class.py 的 `is_blocking`），
+    与 execution_ledger 同一口径：类别决定"需不需要先批"，状态决定"批了没有"。
+    """
+    return [a for a in state.get("amendments") or [] if _AMD.is_blocking(a)]
+
+
+def request_amendment(state, phase, by, note, session=None, declaration=None):
+    """阶段中发现的计划缺口：登记修订申请。
+
+    **分类决定处置**（契约见 scripts/amendment_class.py，单一事实源）：
+    - `readonly_lead`：固定授权范围内的只读观察，凭据齐备 → **登记后即可继续**，
+      状态记 `approved_readonly`，不阻断阶段推进；
+    - `scope_change`：新增写入、角色或权限扩展、环境变更、超预算、
+      属性未知或凭据不全 → **先批后动**，状态记 `awaiting_approval`，阻断推进。
+
+    旧调用（不传 declaration）保持原行为：一律按 `scope_change` 处理并等待批准——
+    没有分类信息时从严，是"先批后动"而非"先做后说"。
+
+    分类由登记事实机械判定，不认自然语言自述：`path_type`、HTTP 方法或
+    「未看到写操作」单独都不能作为只读凭据。
+    """
     _require_session(state, session)
     _phase(phase)
+    ok, message = _AMD.validate_declaration(declaration or {})
+    if not ok:
+        raise ValueError(message)
+    kind, reasons = _AMD.classify(declaration or {})
+    readonly = kind == "readonly_lead"
     record = {"id": f"AMD-{len(state['amendments']) + 1}", "phase": phase,
-              "status": "awaiting_approval", "requested_by": _text(by, "by"),
-              "requested_at": _now(), "note": _text(note, "note"), "approval": None}
+              "kind": kind, "status": "approved_readonly" if readonly else "awaiting_approval",
+              "requested_by": _text(by, "by"),
+              "requested_at": _now(), "note": _text(note, "note"),
+              "declaration": declaration or None,
+              "classification_reasons": reasons,
+              "approval": None}
+    if readonly:
+        # 只读观察可继续：放行记录写明它依据什么放行，不能只留一句"已处理"。
+        record["approval"] = {"by": _text(by, "by"), "at": _now(),
+                              "mode": "readonly_lead",
+                              "note": "固定授权范围内的只读观察，凭据齐备，登记后放行",
+                              "reasons": reasons}
     state["amendments"].append(record)
-    _record(state, "amendment_request", phase, {"id": record["id"], "note": record["note"]})
+    _record(state, "amendment_request", phase,
+            {"id": record["id"], "note": record["note"], "kind": kind,
+             "status": record["status"], "reasons": reasons})
     return state
 
 
@@ -928,8 +1024,12 @@ def check_verdict(state, assumptions=None, regression=None):
         if status != "done":
             reasons.append(f"{phase}（{PHASE_LABELS[phase]}）状态为 {status}，未完成")
     for amendment in state["amendments"]:
-        if amendment["status"] == "awaiting_approval":
-            reasons.append(f"阶段修订申请 {amendment['id']} 未获批准：{amendment['note']}")
+        # 只读观察不阻断裁决——它凭据齐备即可执行；
+        # 未批准的范围变更（awaiting_approval）阻断，保留先批后动。
+        # 判定走分类契约单一事实源，与 start/checkpoint/resume 及台账摘要同口径。
+        if _AMD.is_blocking(amendment):
+            reasons.append(f"阶段修订申请 {amendment['id']} 未获批准"
+                           f"（分类：{amendment.get('kind') or 'scope_change'}）：{amendment['note']}")
     # 同会话放行：无法换模型，也没有独立的“人看过交接包”环节
     same_session_phases = [phase for phase in PHASES
                            if ((state["phases"][phase].get("approval") or {}).get("mode")
@@ -1211,6 +1311,9 @@ def main(argv=None):
     p.add_argument("--by", required=True)
     p.add_argument("--note", required=True)
     p.add_argument("--session", help="本会话标识")
+    p.add_argument("--declaration",
+                   help="修订分类声明 JSON 文件（kind + 只读凭据/范围变更信号）。"
+                        "不提供则一律按 scope_change 处理（先批后动）")
 
     p = sub.add_parser("approve-amendment", help="放行计划修订申请")
     p.add_argument("state")
@@ -1291,7 +1394,8 @@ def main(argv=None):
                    note=args.note, session=args.session,
                    allow_relax=args.allow_relax)
         elif args.command == "amend":
-            request_amendment(state, args.phase, args.by, args.note, args.session)
+            request_amendment(state, args.phase, args.by, args.note, args.session,
+                              declaration=_read_json_arg(args.declaration))
         elif args.command == "approve-amendment":
             approve_amendment(state, args.id, args.by, args.note)
         elif args.command == "ack-routing":
