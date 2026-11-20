@@ -138,18 +138,21 @@ def _sample_entries(entries, sample_size, seed):
     if not entries:
         return [], seed
     if seed is None:
-        digest = hashlib.sha256("\n".join(e["id"] for e in entries).encode("utf-8")).hexdigest()
+        # 种子按条目 ID 排序后派生：同一组功能面无论清单如何排列都抽到同一批，
+        # 避免"仅调整清单顺序"就换掉样本、让复核结果不可比。
+        digest = hashlib.sha256(
+            "\n".join(sorted(e["id"] for e in entries)).encode("utf-8")).hexdigest()
         seed = int(digest[:12], 16)
     size = min(sample_size, len(entries))
-    # 确定性洗牌：以种子驱动的线性同余序，避免依赖 random 的全局状态
-    order = list(range(len(entries)))
-    state = seed % (2 ** 31 - 1) or 1
-    for i in range(len(order) - 1, 0, -1):
-        state = (state * 1103515245 + 12345) % (2 ** 31)
-        j = state % (i + 1)
-        order[i], order[j] = order[j], order[i]
-    picked = [entries[idx] for idx in order[:size]]
-    return picked, seed
+    # 确定性抽样：按 sha256(种子 + 条目ID) 排序取前 N。
+    # 不使用线性同余洗牌——LCG 的低阶位周期极短，实测位置分布严重偏斜
+    # （3000 次抽样中第 4 位仅占 5.7%，期望 20%），抽样就查不出问题。
+    # 哈希排序无放回、各位置机会均等，且同种子同清单结果恒定。
+    keyed = sorted(
+        entries,
+        key=lambda e: hashlib.sha256(f"{seed}\x00{e['id']}".encode("utf-8")).hexdigest(),
+    )
+    return keyed[:size], seed
 
 
 def _sampling_review(scope, exemptions, registered_ids, sample_size, sample_seed):
@@ -271,10 +274,13 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
                          "豁免不上抬上限，verdict_ceiling 最高仍为待核实；豁免合资格与否"
                          "——只读且小任务——由 execution_ledger 台账侧机械校验）")
         else:
-            # enforce=False（显式关闭）：保持放行行为，关闭状态与理由进交付物
-            empty_ceiling = base_ceiling or "通过"
+            # enforce=False（显式关闭）：关闭状态必须可见，且不得看起来像
+            # "已完成对抗"——门禁自报上限与台账侧（execution_ledger 对
+            # disabled 状态一律压"待核实"）必须一致，否则同一批产物出现
+            # 两个上限，使用方按门禁输出写"通过"而台账判"待核实"。
+            empty_ceiling = _strictest(base_ceiling or "通过", "待核实")
             notes.append("空 plan：未登记任何风险面与对抗义务；对抗门禁已显式关闭，"
-                         "按基础 gate 上限放行")
+                         "按基础 gate 上限与「关闭态不得自证通过」取更严者")
         return {
             "adversarial_enabled": False,
             "verdict_ceiling": empty_ceiling,
@@ -350,6 +356,11 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
             adversarial_ceiling = "待核实"
 
     ceiling = _strictest(adversarial_ceiling, base_ceiling) if base_ceiling else adversarial_ceiling
+    if not enforce:
+        # 关闭态与台账侧口径对齐：门禁显式关闭时不得自证"通过"——
+        # 台账（execution_ledger）对 disabled 状态一律压"待核实"，
+        # 门禁若自报"通过"，同一批产物会出现两个上限。
+        ceiling = _strictest(ceiling, "待核实")
     accepted = [r for r in reviews if r.get("verdict") == "accepted"]
     stats = {
         "plan_id": plan_id,

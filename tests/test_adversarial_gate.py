@@ -113,10 +113,12 @@ class AdversarialGateTests(unittest.TestCase):
         self.assertTrue(any("对抗循环未启用" in reason for reason in result["reasons"]))
 
     def test_explicitly_disabled_gate_passes_empty_plan(self):
-        # 显式关闭门禁是保留路径：放行，但关闭状态与理由必须可见（不得静默关闭）。
+        # 显式关闭门禁是保留路径：关闭状态与理由必须可见（不得静默关闭），
+        # 且关闭态不得自证"通过"——台账侧对 disabled 状态一律压"待核实"，
+        # 门禁若自报"通过"，同一批产物会出现两个上限。
         result = self.gate.evaluate(empty_plan(), [], [], "通过", enforce=False,
                                     disable_reason="本轮只做文档核对，不产生技术结论")
-        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertEqual(result["verdict_ceiling"], "待核实")
         self.assertTrue(result["adversarial_disabled"])
         self.assertEqual(result["disable_reason"], "本轮只做文档核对，不产生技术结论")
         self.assertTrue(any("对抗门禁未启用" in note for note in result["notes"]))
@@ -124,10 +126,16 @@ class AdversarialGateTests(unittest.TestCase):
     def test_disabled_gate_without_reason_still_warns(self):
         # 未给关闭理由时仍要留痕提醒：交付物必须声明未启用及理由。
         result = self.gate.evaluate(empty_plan(), [], [], "通过", enforce=False)
-        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertEqual(result["verdict_ceiling"], "待核实")
         self.assertTrue(result["adversarial_disabled"])
         self.assertIsNone(result["disable_reason"])
         self.assertTrue(any("须在交付物声明" in note for note in result["notes"]))
+
+    def test_disabled_gate_never_raises_above_base_ceiling(self):
+        # 关闭态取更严者：基础 gate 已是"不通过"时，关闭状态不得把它降级。
+        result = self.gate.evaluate(empty_plan(), [], [], "不通过", enforce=False,
+                                    disable_reason="只读核对")
+        self.assertEqual(result["verdict_ceiling"], "不通过")
 
     def test_never_relaxes_base_ceiling(self):
         # 基础 gate 已是待核实时，对抗全绿也不得抬高回"通过"
@@ -251,13 +259,51 @@ class SamplingReviewTests(unittest.TestCase):
         self.assertEqual(result["sampling"]["sample_size"], 2)
 
     def test_disabled_gate_reports_sampling_without_lowering_ceiling(self):
-        # 门禁显式关闭时抽样只作披露，不压上限。
+        # 门禁显式关闭时抽样只作披露，不因抽样再压上限；
+        # 但关闭态本身仍把上限压到"待核实"（与台账侧口径一致）。
         scope = [{"id": "SURF-03"}]
         result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
                                     scenarios=build_scenarios(), scope=scope,
                                     enforce=False, disable_reason="只读核对")
-        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertEqual(result["verdict_ceiling"], "待核实")
         self.assertTrue(any("仅作披露" in note for note in result["notes"]))
+        # 抽样本身没有压上限（压的是关闭态）
+        self.assertFalse(any("抽样复核抽中未登记" in r for r in result["reasons"]))
+
+    def test_sampling_distribution_is_not_skewed(self):
+        # 抽样位置分布须大致均匀：此前的 LCG 洗牌低阶位周期极短，
+        # 实测某一位只占 5.7%（期望 20%），抽样就永远查不到那一类问题。
+        picks = {}
+        for i in range(400):
+            scope = [{"id": f"FP-{i}-{j}", "surf_id": f"FP-{i}-{j}"} for j in range(5)]
+            picked, _ = self.gate._sample_entries(scope, 1, None)
+            key = picked[0]["id"].rsplit("-", 1)[-1]
+            picks[key] = picks.get(key, 0) + 1
+        # 期望各 80；卡宽松阈值以免偶发抖动误判，但须挡住 5.7% 的严重偏斜
+        for key in ("0", "1", "2", "3", "4"):
+            self.assertGreater(picks.get(key, 0), 40, f"位置 {key} 抽中过少：{picks}")
+
+    def test_sampling_is_independent_of_scope_order(self):
+        # 同一组功能面无论清单如何排列都抽到同一批：仅调顺序不应换掉样本。
+        scope = [{"id": f"SURF-0{j}", "surf_id": f"SURF-0{j}"} for j in range(1, 6)]
+        first, _ = self.gate._sample_entries(scope, 2, None)
+        second, _ = self.gate._sample_entries(list(reversed(scope)), 2, None)
+        self.assertEqual(sorted(e["id"] for e in first),
+                         sorted(e["id"] for e in second))
+
+    def test_sampling_never_repeats_an_entry(self):
+        scope = [{"id": f"SURF-0{j}", "surf_id": f"SURF-0{j}"} for j in range(1, 6)]
+        picked, _ = self.gate._sample_entries(scope, 3, None)
+        self.assertEqual(len(picked), 3)
+        self.assertEqual(len({e["id"] for e in picked}), 3)
+
+    def test_sample_size_zero_samples_nothing(self):
+        scope = [{"id": "SURF-01"}, {"id": "SURF-03"}]
+        result = self.gate.evaluate(build_plan(), [executed_event()], [], "通过",
+                                    scenarios=build_scenarios(), scope=scope, sample_size=0)
+        self.assertEqual(result["sampling"]["sample_size"], 0)
+        self.assertEqual(result["sampling"]["sampled"], [])
+        self.assertEqual(result["sampling"]["status"], "ok")
 
 
 class SamplingCliTests(unittest.TestCase):

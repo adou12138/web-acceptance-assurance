@@ -426,6 +426,54 @@ class AdversarialGateDisabledTests(unittest.TestCase):
         self.assertEqual(info["adversarial_state"], "verified")
         self.assertEqual(info["adversarial_ceiling"], "通过")
 
+    def test_disabled_gate_does_not_downgrade_a_failing_verdict(self):
+        # 关闭门禁只解除「对抗未启用」的阻断，不得把门禁已算出的"不通过"
+        # 降级为"待核实"——那会让已确认未闭环的严重缺陷凭空消失。
+        gate = {"adversarial_enabled": True, "verdict_ceiling": "不通过",
+                "reasons": ["存在 accepted 且严重度为 blocker/major 的未闭环复核"],
+                "adversarial_disabled": True, "disable_reason": "本轮只做文档核对"}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_state"], "disabled")
+        self.assertEqual(info["adversarial_ceiling"], "不通过")
+
+    def test_disabled_gate_still_lifts_a_passing_verdict(self):
+        # 反向：门禁算出"通过"时，关闭状态仍须压住（不得因关闭而放行）。
+        gate = {"adversarial_enabled": True, "verdict_ceiling": "通过",
+                "reasons": [], "adversarial_disabled": True, "disable_reason": "x"}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_ceiling"], "待核实")
+
+    def test_gate_and_ledger_agree_on_disabled_ceiling(self):
+        # 跨模块一致性：门禁自报的上限必须与台账压制的上限相同。
+        # 此前门禁在 --no-enforce 下自报"通过"、台账压"待核实"，
+        # 同一批产物出现两个上限，使用方按门禁写结论就会与台账打架。
+        import importlib.util
+        gate_spec = importlib.util.spec_from_file_location(
+            "adv_gate_consistency", ROOT / "scripts" / "adversarial_gate.py")
+        gate = importlib.util.module_from_spec(gate_spec)
+        gate_spec.loader.exec_module(gate)
+        result = gate.evaluate({"surfaces": [], "obligations": []}, [], [], "通过",
+                                enforce=False, disable_reason="只读核对")
+        info = self.tool._adversarial_precondition(result)
+        self.assertEqual(result["verdict_ceiling"], info["adversarial_ceiling"])
+        self.assertEqual(info["adversarial_ceiling"], "待核实")
+
+    def test_adversarial_not_enabled_does_not_downgrade_a_failing_verdict(self):
+        # 对抗未启用只解除"对抗必选"的阻断，不得把更严结论降级为"待核实"。
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "不通过",
+                "reasons": ["存在 accepted 且严重度为 blocker/major 的未闭环复核"]}
+        info = self.tool._adversarial_precondition(gate)
+        self.assertEqual(info["adversarial_state"], "not_enabled")
+        self.assertEqual(info["adversarial_ceiling"], "不通过")
+
+    def test_adversarial_not_enabled_waived_does_not_downgrade_a_failing_verdict(self):
+        # 豁免成立时同样不得降级更严结论。
+        gate = {"adversarial_enabled": False, "verdict_ceiling": "不通过", "reasons": []}
+        info = self.tool._adversarial_precondition(gate, waiver="只读小任务",
+                                                    read_only=True, case_count=1)
+        self.assertEqual(info["adversarial_state"], "waived")
+        self.assertEqual(info["adversarial_ceiling"], "不通过")
+
 
 if __name__ == "__main__":
     unittest.main()

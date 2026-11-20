@@ -383,7 +383,8 @@ class AtkTrackTests(unittest.TestCase):
     def test_reviewed_atk_hit_no_longer_gap(self):
         result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
                                  atk_entries=[self.atk(status="命中", impact="数据")],
-                                 reviewed_finding_ids=["ATK-001"])
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "accepted",
+                                           "tie_to_bug": "BUG-01"}])
         self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
 
     def test_experience_impact_hit_is_disclosure_only(self):
@@ -426,6 +427,68 @@ class AtkTrackTests(unittest.TestCase):
         result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
                                  atk_entries=[self.atk(status="未执行")])
         self.assertNotIn("new_surface_amend_missing", [n["code"] for n in result["notices"]])
+
+    def test_unresolved_review_does_not_close_atk_hit(self):
+        # 未裁定（unresolved）不算闭环：证据不足的命中仍须压上限，
+        # 否则一条 unresolved 记录就能让未裁定的命中悄悄放行。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "unresolved"}])
+        self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
+    def test_accepted_review_without_bug_link_does_not_close_atk_hit(self):
+        # accepted 但未建 BUG/未关联 → 未闭环（与台账同一口径）。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="功能")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "accepted"}])
+        self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_rejected_review_closes_atk_hit(self):
+        # rejected（判为误报）已定性，不再压上限。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "rejected"}])
+        self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_review_without_verdict_does_not_close_atk_hit(self):
+        # 只凭"有一条记录"不算裁定：verdict 缺失按未闭环处理。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001"}])
+        self.assertIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
+
+    def test_atk_sub_conclusion_matches_top_level(self):
+        # 子结论与顶层结论必须一致：已闭环时顶层"通过"，atk 子结论不得仍是"待核实"。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")],
+                                 reviews=[{"finding_id": "ATK-001", "verdict": "accepted",
+                                           "tie_to_bug": "BUG-01"}])
+        self.assertEqual(result["verdict_ceiling"], "通过")
+        self.assertEqual(result["atk"]["verdict_ceiling"], "通过")
+        self.assertEqual(result["atk"]["pending_candidates"], [])
+        self.assertEqual(len(result["atk"]["closed_candidates"]), 1)
+
+    def test_atk_explicit_severity_is_honoured(self):
+        # 显式登记的严重度不得被静默忽略（此前恒为 major）。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据",
+                                                      severity="blocker")])
+        self.assertEqual(result["atk"]["severity_candidates"][0]["severity"], "blocker")
+
+    def test_atk_default_severity_follows_impact(self):
+        # 未登记严重度时按影响面推定：功能/数据/权限 → major，体验 → minor。
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+                                 atk_entries=[self.atk(status="命中", impact="数据")])
+        self.assertEqual(result["atk"]["severity_candidates"][0]["severity"], "major")
+
+    def test_atk_entry_details_are_exposed(self):
+        # 登记内容必须能被读到——linked_tc/linked_ac/note 被归一化后不得成为死字段。
+        entry = self.atk(status="未执行", linked_tc="TC-9", note="待后续轮次")
+        result = self.ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=[entry])
+        exported = result["atk"]["entries"][0]
+        self.assertEqual(exported["linked_tc"], "TC-9")
+        self.assertEqual(exported["note"], "待后续轮次")
         self.assertEqual(result["surfaces_beyond_plan"], 0)
 
     def test_no_atk_input_keeps_legacy_behaviour(self):
@@ -459,6 +522,17 @@ class AtkCliTests(unittest.TestCase):
             code = self.ac.main(["--ledger", str(ledger), "--atk", str(atk_path),
                                   "--reviews", str(reviews), "--residual-note", "x"])
             self.assertEqual(code, 0)
+
+    def test_input_errors_exit_with_code_two(self):
+        # 输入/解析错误以 2 退出——与包内其它脚本口径一致，
+        # 裸抛异常会变成退出码 1，调用方按 2 判失败就漏判。
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing.jsonl"
+            self.assertEqual(self.ac.main(["--ledger", str(missing)]), 2)
+            bad_atk = Path(tmp) / "atk.json"
+            bad_atk.write_text(json.dumps({"assumptions": "not-a-list"}), encoding="utf-8")
+            self.assertEqual(self.ac.main(["--ledger", "/dev/null",
+                                           "--atk", str(bad_atk)]), 2)
 
 
 if __name__ == "__main__":

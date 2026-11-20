@@ -190,23 +190,29 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
         info["adversarial_state"] = "disabled"
         info["adversarial_disabled"] = True
         info["adversarial_disable_reason"] = disable_reason
-        info["adversarial_ceiling"] = "待核实"
+        # 关闭门禁只是"未启用对抗"，不得掩盖门禁已算出的更严结论：
+        # 门禁算出"不通过"（存在已确认未闭环的 blocker/major）时，关闭状态
+        # 不得把它降级为"待核实"。取更严者：通过 < 待核实 < 不通过。
+        info["adversarial_ceiling"] = _strictest(ceiling, "待核实")
         info["adversarial_reasons"] = list(reasons) + [
             "对抗门禁已显式关闭（--no-enforce）："
             + (f"关闭理由：{disable_reason}；" if disable_reason else "未提供关闭理由；")
             + "关闭状态与理由须在交付物中原样呈现，未声明不得视为默认同意；"
-              "结论上限待核实，不得写通过"]
+              "关闭只解除「对抗未启用」的阻断，不放松门禁已算出的结论——"
+              f"本轮对抗上限为{info['adversarial_ceiling']}"]
         return info
     if not enabled:
-        # 空 plan 送到门禁（对抗义务未登记）不得当作已完成对抗
+        # 空 plan 送到门禁（对抗义务未登记）不得当作已完成对抗。
+        # 但"对抗未启用"只解除"对抗必选"的阻断，不得把门禁或基础 gate
+        # 已算出的更严结论降级——取更严者：通过 < 待核实 < 不通过。
         if ok:
             info["adversarial_state"] = "waived"
-            info["adversarial_ceiling"] = "待核实"  # 豁免不得抬高到通过
+            info["adversarial_ceiling"] = _strictest(ceiling, "待核实")  # 豁免不得抬高到通过
             info["adversarial_waiver"] = reason
             info["adversarial_reasons"] = list(reasons) + [
                 f"豁免成立（只读且 {case_count} 条）：{reason}；但对抗未执行，上限仍待核实"]
         else:
-            info["adversarial_ceiling"] = "待核实"
+            info["adversarial_ceiling"] = _strictest(ceiling, "待核实")
             info["adversarial_reasons"] = list(reasons) + [
                 "对抗未启用（adversarial_enabled=false）且豁免不成立：结论上限待核实"
                 + (f"（{why}）" if reason else "")]
