@@ -277,13 +277,38 @@ _HYP_OBJECT = re.compile(r"条目|记录|名称|卷名|输入|数据|订单|用�
                          r"余额|附件|标题|描述|链接|图片|金额|密码|验证码")
 
 
+_CASE_DATA = None
+
+
+def _case_data():
+    """按文件路径加载同目录 case_data，不依赖 sys.path。
+
+    本脚本会被别的门禁/台账按文件路径加载；裸 `import case_data` 在 sys.path
+    未含 scripts 时会 ImportError，把整轮结论变成崩溃——导入失败等于丢掉全部
+    覆盖信号，比多一层加载代价大得多。口径与 execution_ledger._sibling 一致。
+    """
+    global _CASE_DATA
+    if _CASE_DATA is None:
+        try:
+            import case_data as module
+        except ImportError:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "case_data", Path(__file__).with_name("case_data.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        _CASE_DATA = module
+    return _CASE_DATA
+
+
 def _hypothesis_vague_reason(text):
     """假设不够锐利 → 返回原因；锐利 → None。
 
     复用 case_data 的占位/非承诺词表；合法自然语言假设（「并发建卷时卷名重复应拒绝」）
     必须通过——误伤如实登记的假设等于惩罚诚实自检。
     """
-    from case_data import has_placeholder, is_noncommittal
+    cd = _case_data()
+    has_placeholder, is_noncommittal = cd.has_placeholder, cd.is_noncommittal
 
     value = str(text or "").strip()
     if not value:
@@ -691,6 +716,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     hyp_no_result_ids = []
     hyp_without_surface = []
     hyp_vague = []
+    hyp_vague_broken = []
     suspicious_wording = []
     per_surf = {}
 
@@ -751,12 +777,16 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         vague_reason = None
         if hypothesis:
             vague_reason = _hypothesis_vague_reason(hypothesis)
-            if vague_reason:
-                hyp_vague.append((rec.get("id") or rec.get("case_id") or "?", vague_reason))
             if not surf:
                 hyp_without_surface.append(rec.get("id") or rec.get("case_id") or "?")
             hyp_records += 1
             outcome = _hypothesis_outcome(rec)
+            # 笼统假设的两种命运必须分开：拿来冒充覆盖的要拦，
+            # 真的打破了的是产出（表述笼统也该记功，不该按缺口压档）。
+            if vague_reason and outcome == "broken":
+                hyp_vague_broken.append((rec.get("id") or rec.get("case_id") or "?", vague_reason))
+            elif vague_reason:
+                hyp_vague.append((rec.get("id") or rec.get("case_id") or "?", vague_reason))
             if outcome == "broken":
                 hyp_broken += 1
             elif outcome == "blocked":
@@ -884,6 +914,12 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         gaps.append({"code": "hypothesis_vague",
                      "message": f"{len(hyp_vague)} 条假设不够锐利，不计入覆盖：{detail}"
                                 "（须含可核对的取值/对象/状态或明确预期方向；记录保留披露，不删除）"})
+    if hyp_vague_broken:
+        detail = "；".join(f"{rid}: {why}" for rid, why in hyp_vague_broken[:5])
+        notices.append({"code": "hypothesis_vague_but_broken",
+                        "message": f"{len(hyp_vague_broken)} 条假设表述笼统但确实被打破：{detail}"
+                                   "（打破即产出，计为缺陷线索，不压结论上限；"
+                                   "建议补记具体取值/对象，便于复现）"})
     if surf_bad_format:
         gaps.append({"code": "surf_format_invalid",
                      "message": f"surf_id 形态非法（需 SURF- 前缀 + 稳定标识）：{surf_bad_format[:5]}"})
@@ -904,17 +940,19 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     # 要么追加一条不同方法的探针（记录 hypothesis + 结果），要么提交点名该面的
     # 不复打理由（--replay-note）。两者皆无才压上限；这不是方法多样性配额，
     # 不要求凑够 N 种方法，只要求对「为什么不复打」给出可核对回应。
-    single_method_high_risk = []
+    # 两件事分开：**建议**与**披露**覆盖全部高风险面（含 critical，比 high 更严，
+    # 漏掉它等于只拦次严重的面），**义务**同样落在这些面上（N6）。
+    # 未定级面不在 required_surfaces 内，由 single_method_surface 泛提示另作披露。
+    single_method_all = []
     for surf in sorted(required_surfaces):
         bucket = per_surf.get(surf)
         if not bucket or bucket["records"] < 3:
             continue
         if len(bucket["methods"]) > 1:
             continue
-        if (plan_risks or {}).get(surf) != "high":
-            continue
-        single_method_high_risk.append({
+        single_method_all.append({
             "surface": surf,
+            "risk": str((plan_risks or {}).get(surf) or "未定级").strip().lower(),
             "method": sorted(bucket["methods"]),
             "records": bucket["records"],
             "hypotheses": bucket["hypotheses"],
@@ -923,6 +961,10 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             "observations": bucket["observations"][:5],
             "existing_paths": sorted(bucket["paths"]),
         })
+    # high 与 critical 都算高风险面：旧版按 required_surfaces（high/critical）取面，
+    # 只判 "high" 会把 critical 面整段漏出义务与建议范围。
+    single_method_high_risk = [
+        i for i in single_method_all if i["risk"] in ("high", "critical")]
     replay_notes = replay_notes or {}
 
     def _needs_replay(item):
@@ -965,7 +1007,9 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                     if plan_state == "not_provided" else
                                     "提供的 plan 风险面集合为空，等同未做交叉核对")
                                    + "：弱化调用，结论上限由门禁侧压待核实"})
-    if atk_entries is None:
+    # 空数组等同零登记：传了 `--atk` 但一条都没登记，仍是"本轮零登记"。
+    # 只判 `is None` 会给空文件留一条免解释的旁路，等于给"什么都没写"发核对过的凭证。
+    if not atk_entries:
         absent_reason = str(atk_absent_reason or "").strip()
         if absent_reason:
             notices.append({"code": "atk_not_submitted",
@@ -973,7 +1017,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                        f"理由：{absent_reason}（非违规，披露备查）"})
         else:
             gaps.append({"code": "atk_absent_unexplained",
-                         "message": "未提交 ATK 攻击假设登记（--atk）且未说明理由："
+                         "message": "未提交 ATK 攻击假设登记（--atk）或提交为空且未说明理由："
                                     "零登记本身不是问题，未解释才是；请补充 --atk-absent-reason"})
     residual_state = _residual_state(residual_note, plan_surfaces, atk_entries, per_surf)
     if residual_state in ("unstructured", "unresolved_ref"):
@@ -1062,15 +1106,6 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                        + "、".join(declared_unverified[:6])
                                        + "（如实登记，不压结论上限）"})
 
-    # N7：结论将达「通过」时，残余风险声明必须是结构化声明（可逐条对账）。
-    # 仅自由文本且当前无其他缺口 → 记缺口；待核实档（已有其他缺口）保留文本入口，
-    # 不抬高诚实登记成本。
-    if residual_declaration["mode"] == "text" and not gaps:
-        gaps.append({"code": "residual_declaration_required_for_pass",
-                     "message": "结论将达「通过」但残余风险声明为自由文本：须改为结构化声明"
-                                "（--residual-declaration，逐条 {id,status} 对账已实现）"})
-
-
     # —— ATK 独立轨道：与需求 SURF 轨道分开判定 ——
     # 「未执行」不压上限（允许长期悬置）；「命中」且影响面属功能/数据/权限时
     # 升级为严重度复核候选，已裁定闭环的（见 _closed_review_ids）不再重复压上限。
@@ -1105,6 +1140,16 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     atk["closed_candidates"] = [c for c in atk["severity_candidates"] if c["id"] in reviewed]
     atk["verdict_ceiling"] = "待核实" if pending_candidates else "通过"
 
+    # N7：结论将达「通过」时，残余风险声明必须是结构化声明（可逐条对账）。
+    # 必须放在 ATK 轨道之后判定：ATK 命中未闭环、登记非法这些缺口同样会把结论压到
+    # 待核实，此前判定会一边报「结论将达通过、文本声明不合格」，一边报「ATK 未闭环」，
+    # 自相矛盾且误罚——本来就到不了通过，不该再追加一条声明义务。
+    # 已有其他缺口时不追加：待核实档保留文本入口，不抬高诚实登记成本。
+    if residual_declaration["mode"] == "text" and not gaps:
+        gaps.append({"code": "residual_declaration_required_for_pass",
+                     "message": "结论将达「通过」但残余风险声明为自由文本：须改为结构化声明"
+                                "（--residual-declaration，逐条 {id,status} 对账已实现）"})
+
     # —— 披露项：只报数，不压上限。配比可凑，凑出来的达标不代表打得深 ——
     if isinstance(density, float) and density < density_threshold:
         notices.append({"code": "attack_density_low",
@@ -1123,12 +1168,14 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     # 三要素缺一不可：针对哪个风险面（surface）、已有观察是什么（observations）、
     # 本轮可用的是什么（可用方法与路径类型取自已登记数据，不臆造）。
     retest_suggestions = []
-    for item in single_method_high_risk:
+    for item in single_method_all:
         used_methods = set(item["method"])
         used_paths = set(item["existing_paths"])
+        label = "关键" if item["risk"] == "critical" else "高"
         retest_suggestions.append({
             "surface": item["surface"],
-            "reason": "高风险面仅用单一方法，未被真正打透",
+            "risk": item["risk"],
+            "reason": f"{label}风险面仅用单一方法，未被真正打透",
             "observations": item["observations"],
             "used_methods": sorted(used_methods),
             "used_paths": sorted(used_paths),
@@ -1170,14 +1217,15 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "surf_linkage_threshold": surf_linkage_threshold,
         "surf_plan_checked": plan_surfaces is not None,
         "plan_check_state": _plan_check_state(plan_surfaces),
-        "atk_checked": atk_entries is not None,
+        "atk_checked": bool(atk_entries),
         "surfaces_beyond_plan": len(set(surf_new)),
         "surfaces_beyond_plan_ids": sorted(set(surf_new)),
         "amend_note": (amend_note or "").strip() or None,
         "hypotheses": {"declared": hyp_records, "broken": hyp_broken,
                        "held": hyp_held, "blocked": hyp_blocked,
                        "no_result": hyp_no_result,
-                       "vague": len(hyp_vague),
+                       "vague": len(hyp_vague) + len(hyp_vague_broken),
+                       "vague_but_broken": len(hyp_vague_broken),
                        "vague_ids": [rid for rid, _ in hyp_vague[:6]],
                        "no_result_ids": hyp_no_result_ids[:6],
                        "break_rate": (round(hyp_broken / hyp_records, 4)

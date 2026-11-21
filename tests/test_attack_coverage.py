@@ -247,6 +247,20 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
         self.assertEqual(structured["gaps"], [])
         self.assertEqual(structured["verdict_ceiling"], "通过")
 
+    def test_text_residual_is_not_blamed_when_other_gap_blocks_pass(self):
+        """N7 判定必须在 ATK 轨道之后：ATK 命中未闭环已把结论压到待核实，
+        再追加「结论将达通过，但声明是自由文本」属自相矛盾且误罚。"""
+        records = [rec(i, "positive") for i in range(7)] + [rec(i, "boundary") for i in range(3)]
+        result = ac.analyse(
+            records, residual_note="未破：并发删除",
+            atk_entries=[{"id": "ATK-001", "hypothesis": "重复提交可能双扣",
+                          "validation_path": "并发提交比对流水", "impact": "功能",
+                          "status": "命中"}])
+        codes = [g["code"] for g in result["gaps"]]
+        self.assertIn("atk_hit_unreviewed", codes)
+        self.assertNotIn("residual_declaration_required_for_pass", codes)
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+
     def test_plan_cross_check_flags_unknown_surface(self):
         records = [rec(i, "boundary") for i in range(4)]
         for record in records:
@@ -602,6 +616,20 @@ class AtkAbsentReasonTests(unittest.TestCase):
         result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR, atk_entries=atk)
         self.assertNotIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
 
+    def test_empty_atk_registry_needs_reason(self):
+        """`--atk` 传空数组仍是零登记：认 None 不认空文件会留下免解释旁路，
+        还会把「什么都没写」标成已核对。"""
+        result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR,
+                            atk_entries=[])
+        self.assertIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
+        self.assertFalse(result["atk_checked"])
+
+    def test_empty_atk_registry_with_reason_is_disclosed(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR,
+                            atk_entries=[], atk_absent_reason=NO_ATK_REASON)
+        self.assertNotIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
+        self.assertIn("atk_not_submitted", [n["code"] for n in result["notices"]])
+
 
 class HypothesisSharpnessTests(unittest.TestCase):
     """N5：空话假设不计覆盖；锐利自然语言假设不得被误伤。"""
@@ -622,8 +650,22 @@ class HypothesisSharpnessTests(unittest.TestCase):
     def test_numeric_hypothesis_is_sharp(self):
         record = rec(1, "boundary")
         record["hypothesis"] = "卷名 256 字符时保存应拒绝并保留输入"
-        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR)
+        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR,
+                            atk_absent_reason=NO_ATK_REASON)
         self.assertNotIn("hypothesis_vague", [g["code"] for g in result["gaps"]])
+
+    def test_vague_hypothesis_that_broke_something_is_output_not_gap(self):
+        """笼统假设真的打破了：打破即产出，只补披露不压档——
+        按缺口处理会让「诚实但写得笼统、却挖到真 bug」的记录反被扣分。"""
+        record = rec(1, "boundary")
+        record["hypothesis"] = "如果输入不对就会坏"
+        record["hypothesis_outcome"] = "broken"
+        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR,
+                            atk_absent_reason=NO_ATK_REASON)
+        self.assertNotIn("hypothesis_vague", [g["code"] for g in result["gaps"]])
+        self.assertIn("hypothesis_vague_but_broken", [n["code"] for n in result["notices"]])
+        self.assertEqual(result["hypotheses"]["broken"], 1)
+        self.assertEqual(result["hypotheses"]["vague_but_broken"], 1)
 
 
 class ReplayObligationTests(unittest.TestCase):
@@ -660,6 +702,17 @@ class ReplayObligationTests(unittest.TestCase):
     def test_second_method_probe_clears_gap(self):
         result = self._analyse(self._records(second_method=True))
         self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+
+    def test_critical_surface_carries_the_same_obligation(self):
+        """critical 比 high 更严：只判 high 会把 critical 面整段漏出义务与建议范围。"""
+        result = ac.analyse(
+            self._records(), plan_surfaces={"SURF-01"},
+            plan_risks={"SURF-01": "critical"},
+            residual_note={"items": [{"id": "SURF-01", "status": "unbroken"}]},
+            atk_absent_reason=NO_ATK_REASON)
+        self.assertIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["high_risk_single_method_surfaces"], ["SURF-01"])
+        self.assertEqual(result["retest_suggestions"][0]["risk"], "critical")
 
 
 if __name__ == "__main__":

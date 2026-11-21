@@ -742,22 +742,23 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 ## v1.46.0（2026-11-21）：批判者口径加固——假设锐度、解释或复打、只读 × 写台账对账
 
-按《砺衡项目修改方案与执行计划-v3》落地。目的锚点：专家作为批判者/挑刺者，主动质疑需求、假设与实现，扩大覆盖、减少漏测、在自主测试中多发现 bug；全部新增检测服从「加检测不加锁」，如实登记不被惩罚。
+按本轮修订方案（N3–N12）落地。目的锚点：专家作为批判者/挑刺者，主动质疑需求、假设与实现，扩大覆盖、减少漏测、在自主测试中多发现 bug；全部新增检测服从「加检测不加锁」，如实登记不被惩罚。
 
 | 条目 | 变更 | 回归 |
 |---|---|---|
 | N3 | 基线口径修正：735 passed + 2 skipped（环境依赖）+ 230 subtests；v1.44.2 为 630 总（628 passed + 2 跳过）+ 226 subtests；passed 与 skipped 分账书写 | — |
 | N12 | `case_data.py` YAML 写入改为 `open(..., newline=)`，兼容 Python 3.9（旧 `Path.write_text(newline=)` 仅 3.10 支持） | 既有 CLI 链 |
-| N4 | 未提交 ATK 且无理由 → `atk_absent_unexplained` 压档；有非空理由只留痕；新增 `--atk-absent-reason` | 3 例三向（无 ATK 无理由 / 有理由 / 已提交不受影响） |
-| N5 | 假设锐度质检：空话、占位词不计入覆盖（`hypothesis_vague`），记录保留披露；合格信号含数值/长度、角色状态名、条件组合、对象 + 预期方向词 | 3 例双向（空话被拦、自然语言与数值假设放行） |
-| N6 | **政策反转**：高风险面单一方法且可采信结果全部 held，须换方法复打或提交 `--replay-note` 点名不复打理由，否则 `surface_unreplayed_unexplained`；已 broken 的面不触发；不是方法数量配额 | 4 例双向（无理由被拦 / 复打理由放行 / broken 不触发 / 第二方法探针放行） |
-| N7 | 通过档残余声明必须为结构化声明；仅自由文本 → `residual_declaration_required_for_pass`；待核实档保留文本入口 | 并入 M5 残余声明用例改写 |
+| N4 | 未提交 ATK 或提交为空且无理由 → `atk_absent_unexplained` 压档；有非空理由只留痕；新增 `--atk-absent-reason`；`atk_checked` 仅在登记非空时为真 | 5 例三向（无 ATK 无理由 / 有理由 / 已提交不受影响 / 空登记无理由 / 空登记有理由） |
+| N5 | 假设锐度质检：空话、占位词不计入覆盖（`hypothesis_vague`），记录保留披露；**已 broken 的笼统假设只披露不压档**（`hypothesis_vague_but_broken`，打破即产出）；合格信号含数值/长度、角色状态名、条件组合、对象 + 预期方向词 | 4 例双向（空话被拦、自然语言与数值假设放行、笼统但 broken 不被罚） |
+| N6 | **政策反转**：高风险面（含 `critical`）单一方法且可采信结果全部 held，须换方法复打或提交 `--replay-note` 点名不复打理由，否则 `surface_unreplayed_unexplained`；已 broken 的面不触发；不是方法数量配额 | 5 例双向（无理由被拦 / 复打理由放行 / broken 不触发 / 第二方法探针放行 / critical 面同义务） |
+| N7 | 通过档残余声明必须为结构化声明；仅自由文本 → `residual_declaration_required_for_pass`；待核实档保留文本入口；**判定排在 ATK 轨道之后**，ATK 已压档时不再追加声明义务 | 并入 M5 残余声明用例改写 + 1 例顺序回归 |
 | N8 | `readonly_lead` × 写台账交叉核对：只对账显式 `linked_records`；关联到 `caution`/`danger` 写记录 → 过程问题 + 压待核实 + 首屏披露；写台账缺失或未显式关联只披露不压档；新增 `--write-ops-ledger` | 5 例三向（不符压档 / 无关联放行 / 缺台账只披露 / 未关联只披露 / 已批 scope_change 不受本项约束） |
 | N10 | 浏览器通道降级路由：DevTools 通道无 route/fulfill，需要黑盒注入时切 Playwright 或按缺口四分类登记「能力待探测，未实测」，不得虚构注入 | 文档 |
 
 ### 准出记录
 
-- **全量回归**：`python -m pytest tests/ -q` → **750 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.45.0 基线 735 + 本轮新增 15 例）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过。
+- **全量回归**：`python -m pytest tests/ -q` → **755 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.45.0 基线 735 + 本轮新增 20 例）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过。
+- **二轮审核修正（以项目目的为准绳的四条）**：① N7 判定移到 ATK 轨道之后，消除「同时报结论将达通过 + ATK 未闭环」的自相矛盾误罚；② 笼统假设但结果 broken 只披露不压档（打破即产出，不因措辞笼统扣分）；③ `--atk` 传空数组等同零登记，须附理由，堵住「空文件免解释且标为已核对」的旁路；④ 高风险面判定补回 `critical`（旧版按 high/critical 取面，只判 high 会把更严的面整段漏出义务与建议）。另修 `case_data` 裸 import 为按文件路径加载，避免门禁按路径加载本脚本时导入失败。
 - **政策反转显式登记**：N6 替代旧「高风险面单一方法只提示、不压上限」口径。旧测试 `test_single_method_surface_is_disclosed_not_gated`、`test_single_method_repeat_is_notice_only` 覆盖的是低风险/未验证/多方法场景，维持只披露；全 held 的高风险单一方法面走新「解释或复打」义务。
 - **文档回链**：`agents/web-acceptance-assurance.md`、`references/execution-management.md`、`references/phase-workflow.md`、`references/browser-connection.md` 口径已同步；孤儿引用扫描为 0。
 

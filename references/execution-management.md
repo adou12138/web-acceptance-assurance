@@ -86,9 +86,9 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | 失效假设缺结果（`hypotheses.no_result`） | 高风险面单一方法但未全 held、或尚未验证（`high_risk_surface_single_method` 提示 + 复测建议） |
 | 高风险面写了预测但无可采信验证结果 | 可疑自然语言措辞（`suspicious_wording`） |
 | 残余风险声明引用未登记编号 / 状态与实际不符 | ATK 跨轮持续未执行（`atk_stagnant`，需 `--atk-prev`） |
-| 未提交 ATK 且未说明理由（`atk_absent_unexplained`） | 已说明理由的零 ATK 登记（`atk_not_submitted` 留痕） |
-| 假设空话、不可核对（`hypothesis_vague`，不计覆盖） | 假设锐度存疑但有取值/对象/方向词时放行 |
-| 高风险面单一方法且结果全部 held，既未换方法复打也无点名不复打理由（`surface_unreplayed_unexplained`） | 已 broken 的面不触发本项 |
+| 未提交 ATK（含提交为空）且未说明理由（`atk_absent_unexplained`） | 已说明理由的零 ATK 登记（`atk_not_submitted` 留痕） |
+| 假设空话、不可核对（`hypothesis_vague`，不计覆盖） | 假设锐度存疑但有取值/对象/方向词时放行；**已 broken 的笼统假设只披露**（`hypothesis_vague_but_broken`，打破即产出） |
+| 高风险面（含 `critical`）单一方法且结果全部 held，既未换方法复打也无点名不复打理由（`surface_unreplayed_unexplained`） | 已 broken 的面不触发本项 |
 | 通过档残余声明为自由文本（`residual_declaration_required_for_pass`） | 待核实档保留文本残余声明入口 |
 | 只读申报关联到 `caution`/`danger` 写记录（只读 × 写台账对账不符） | 写台账缺失或修订未显式关联条目：只披露未做机械对账 |
 
