@@ -356,6 +356,29 @@ class MatrixSummaryContract(MatrixBase):
         self.assertEqual(fp["known_near_miss_denominator"], 2)
         self.assertIn("known_near_miss_hits",
                       [item["field"] for item in fp["not_measured"]])
+        self.assertIn("known_near_miss_rate",
+                      [item["field"] for item in fp["not_measured"]],
+                      "比率由命中数派生，分子未测量时比率也必须列入未测量清单")
+
+    def test_score_with_null_near_miss_field_is_unmeasured_not_zero(self):
+        """score.json 里 near_miss_hits 为显式 null 时按未测量处理，不得当 0。
+
+        「统计过且零命中」（空数组）与「这轮没统计」（null/缺字段）是两个事实：
+        把 null 读成 0，会让汇总把"没测"报成"已知反例零误报"。
+        """
+        matrix_path = self._single_fixture_matrix()
+        a = score_payload("f1-A-1", "sha-f1", self.protocol_sha, [], self.severity,
+                          executor="exec-A")
+        a["near_miss_hits"] = None
+        self.write_score("f1", "A", 1, a)
+        self.base_score("f1", "B", 1, ["A1"], near_misses=["NM-1"], executor="exec-B")
+        summary = self.be.summarize_matrix(matrix_path, self.results,
+                                           fixtures_dir=self._fixtures_dir())
+        fp = summary["false_positive"]
+        self.assertIsNone(fp["known_near_miss_hits"])
+        self.assertFalse(fp["known_near_miss_measured"])
+        # A 臂 null 计 1 个未测量 run；B 臂是已测量的空命中，不计入
+        self.assertEqual(fp["known_near_miss_unmeasured_runs"], 1)
 
     def test_cli_matrix_reports_invalid_pairs_and_warnings(self):
         matrix = json.loads(json.dumps(self.matrix))

@@ -778,10 +778,15 @@ def _fp_numerator(score, adjudication):
 
 
 def _near_hit_count(score):
-    """该 run 命中的已知反例数；字段不存在时返回 None（未测量，不当 0）。"""
-    if "near_miss_hits" not in score:
+    """该 run 命中的已知反例数；拿不到就返回 None（未测量，不当 0）。
+
+    缺字段、显式 null、非数组形态一律算未测量：score 生成方写 null 表示
+    「这轮没统计」，与「统计过且零命中」（空数组）是两个事实。
+    """
+    value = score.get("near_miss_hits")
+    if not isinstance(value, (list, tuple)):
         return None
-    return len(score.get("near_miss_hits") or [])
+    return len(value)
 
 
 def _insufficient_count(adjudication):
@@ -1012,10 +1017,13 @@ def summarize_matrix(matrix_path, results_root, fixtures_dir=None):
     # 未测量的派生指标逐条列出，与 0 明确区分（首屏可据此解释分母为何缺项）。
     not_measured = []
     if near_miss_total and not near_miss_measured:
-        not_measured.append({
-            "field": "known_near_miss_hits",
-            "reason": f"{near_miss_unmeasured} 个 run 的 score.json 缺 near_miss_hits 字段，"
-                      "该指标无法统计"})
+        reason = (f"{near_miss_unmeasured} 个 run 的 score.json 缺 near_miss_hits 字段，"
+                  "该指标无法统计")
+        not_measured.append({"field": "known_near_miss_hits", "reason": reason})
+        # 比率由命中数派生：分子拿不到，比率必然也拿不到，一并列入，否则
+        # 读者只看到命中数缺项，不知道已知反例误报率同样无法计算。
+        not_measured.append({"field": "known_near_miss_rate",
+                             "reason": "由 known_near_miss_hits 派生，分子未测量"} )
     if not near_miss_total:
         not_measured.append({"field": "known_near_miss_rate",
                              "reason": "夹具未冻结已知反例（分母为 0），该比率不适用"})
