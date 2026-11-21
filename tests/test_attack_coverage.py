@@ -26,6 +26,11 @@ METHOD_FOR = {"positive": "equivalence", "boundary": "boundary", "exception": "f
               "data_consistency": "consistency_check", "regression": "regression_impact"}
 CHANNEL = "网页端 DOM 读回 + 接口响应双通道"
 
+# N7：结论达「通过」时残余风险声明必须是结构化声明；空 items 表示「无未破攻击面」。
+RESIDUAL_CLEAR = {"items": []}
+# N4：未提交 ATK 时给出解释理由（零登记不是问题，未解释才是）。
+NO_ATK_REASON = "本轮为只读界面回归，无前置攻击假设"
+
 
 def rec(i, path_type=None, surf=True, method=None, oracle="independent",
         mode="designed_probe", status="PASS"):
@@ -66,7 +71,8 @@ class AttackDensityGate(unittest.TestCase):
     def test_healthy_ledger_passes(self):
         records = [rec(i, "positive") for i in range(7)]
         records += [rec(i, "boundary") for i in range(3)]
-        result = ac.analyse(records, residual_note="未破：并发删除与跨租户读取")
+        result = ac.analyse(records, residual_note=RESIDUAL_CLEAR,
+                             atk_absent_reason=NO_ATK_REASON)
         self.assertEqual(result["attack_density"], 0.3)
         self.assertEqual(result["gaps"], [])
         self.assertEqual(result["verdict_ceiling"], "通过")
@@ -106,7 +112,8 @@ class AttackDensityGate(unittest.TestCase):
         records += [rec(i, "boundary") for i in range(4)]
         for r in records:
             r["desc"] = "边界值 异常 失败 重复提交"
-        result = ac.analyse(records, residual_note="未破：并发删除与跨租户读取")
+        result = ac.analyse(records, residual_note=RESIDUAL_CLEAR,
+                            atk_absent_reason=NO_ATK_REASON)
         self.assertEqual(result["gaps"], [])
         self.assertGreaterEqual(result["inferred_path_type"]["boundary"], 0)
 
@@ -133,7 +140,8 @@ class CliContract(unittest.TestCase):
         rows = [rec(i, "positive") for i in range(7)] + [rec(i, "exception") for i in range(3)]
         ledger.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         self.assertEqual(ac.main(["--ledger", str(ledger), "--enforce",
-                                  "--residual-note", "未破：并发删除"]), 0)
+                                  "--residual-note", '{"items": []}',
+                                  "--atk-absent-reason", NO_ATK_REASON]), 0)
 
     def test_accepts_csv_and_emits_reports(self):
         ledger = self.dir / "l.csv"
@@ -225,12 +233,19 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
 
     def test_residual_note_required_before_pass(self):
         records = [rec(i, "positive") for i in range(7)] + [rec(i, "boundary") for i in range(3)]
-        without = ac.analyse(records)
+        without = ac.analyse(records, atk_absent_reason=NO_ATK_REASON)
         self.assertIn("residual_note_missing", [g["code"] for g in without["gaps"]])
         self.assertEqual(without["verdict_ceiling"], "待核实")
-        with_note = ac.analyse(records, residual_note="未破：并发删除与跨租户读取")
-        self.assertEqual(with_note["gaps"], [])
-        self.assertEqual(with_note["verdict_ceiling"], "通过")
+        # N7：通过档只接受结构化声明；自由文本在无其他缺口时记缺口压待核实。
+        free_text = ac.analyse(records, residual_note="未破：并发删除与跨租户读取",
+                               atk_absent_reason=NO_ATK_REASON)
+        self.assertIn("residual_declaration_required_for_pass",
+                      [g["code"] for g in free_text["gaps"]])
+        self.assertEqual(free_text["verdict_ceiling"], "待核实")
+        structured = ac.analyse(records, residual_note=RESIDUAL_CLEAR,
+                               atk_absent_reason=NO_ATK_REASON)
+        self.assertEqual(structured["gaps"], [])
+        self.assertEqual(structured["verdict_ceiling"], "通过")
 
     def test_plan_cross_check_flags_unknown_surface(self):
         records = [rec(i, "boundary") for i in range(4)]
@@ -256,7 +271,11 @@ class DeclarationIsNotBehaviour(unittest.TestCase):
         self.assertEqual(result["amend_note"], "已纳入第 2 轮计划")
 
     def test_single_method_surface_is_disclosed_not_gated(self):
-        """方法多样性不再当配额：逼人拆碎去测没打算测的东西，只换来好看的分布。"""
+        """方法多样性整体仍只披露：配额能被标注操纵，逼人拆碎去测没打算测的东西。
+
+        N6 例外仅约束「高风险 + 全 held + 无复打/理由」的单一方法面，见
+        ReplayObligationTests；本夹具无 plan 风险定级，不进入该义务判定。
+        """
         records = [rec(i, "boundary") for i in range(25)]
         result = ac.analyse(records, residual_note="x")
         self.assertNotIn("method_low_diversity", [g["code"] for g in result["gaps"]])
@@ -320,14 +339,19 @@ class HypothesisLedger(unittest.TestCase):
         records = [rec(i, "boundary") for i in range(4)]
         records[0]["hypothesis"] = "并发建卷时卷名重复应拒绝"
         result = ac.analyse(records, plan_surfaces={"SURF-01"},
-                            plan_risks={"SURF-01": "high"}, residual_note="x")
+                            plan_risks={"SURF-01": "high"},
+                            residual_note={"items": [{"id": "SURF-01", "status": "unbroken"}]},
+                            atk_absent_reason=NO_ATK_REASON,
+                            replay_notes={"SURF-01": "复用 TC-1 的边界输入变体观察，见既有记录"})
         self.assertEqual(result["gaps"], [])
         self.assertEqual(result["verdict_ceiling"], "通过")
 
     def test_low_risk_surface_needs_no_hypothesis(self):
         records = [rec(i, "boundary") for i in range(4)]
         result = ac.analyse(records, plan_surfaces={"SURF-01"},
-                            plan_risks={"SURF-01": "low"}, residual_note="x")
+                            plan_risks={"SURF-01": "low"},
+                            residual_note=RESIDUAL_CLEAR,
+                            atk_absent_reason=NO_ATK_REASON)
         self.assertEqual(result["gaps"], [])
 
     def test_hypothesis_without_surface_is_a_gap(self):
@@ -368,7 +392,8 @@ class AtkTrackTests(unittest.TestCase):
         records = [rec(1, "boundary")]
         records[0]["hypothesis"] = "越界输入应被拒绝"
         records[0]["hypothesis_outcome"] = "held"
-        result = self.ac.analyse(records, residual_note="x", atk_entries=[self.atk(status="未执行")])
+        result = self.ac.analyse(records, residual_note=RESIDUAL_CLEAR,
+                                  atk_entries=[self.atk(status="未执行")])
         self.assertEqual(result["atk"]["unexecuted"], 1)
         self.assertNotIn("atk_hit_unreviewed", [g["code"] for g in result["gaps"]])
         self.assertEqual(result["verdict_ceiling"], "通过")
@@ -483,7 +508,7 @@ class AtkTrackTests(unittest.TestCase):
 
     def test_atk_sub_conclusion_matches_top_level(self):
         # 子结论与顶层结论必须一致：已闭环时顶层"通过"，atk 子结论不得仍是"待核实"。
-        result = self.ac.analyse([rec(1, "boundary")], residual_note="x",
+        result = self.ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR,
                                  atk_entries=[self.atk(status="命中", impact="数据")],
                                  reviews=[{"finding_id": "ATK-001", "verdict": "accepted",
                                            "tie_to_bug": "BUG-01"}])
@@ -556,6 +581,85 @@ class AtkCliTests(unittest.TestCase):
             bad_atk.write_text(json.dumps({"assumptions": "not-a-list"}), encoding="utf-8")
             self.assertEqual(self.ac.main(["--ledger", "/dev/null",
                                            "--atk", str(bad_atk)]), 2)
+
+
+class AtkAbsentReasonTests(unittest.TestCase):
+    """N4：零登记不是问题，未解释才是；三向双向验收。"""
+
+    def test_no_atk_no_reason_is_a_gap(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR)
+        self.assertIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
+
+    def test_no_atk_with_reason_is_notice_only(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR,
+                           atk_absent_reason="本轮为只读界面回归，无前置攻击假设")
+        self.assertNotIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
+        self.assertIn("atk_not_submitted", [n["code"] for n in result["notices"]])
+
+    def test_atk_provided_is_unaffected(self):
+        atk = [{"id": "ATK-001", "hypothesis": "重复提交应被拒绝",
+                "validation_path": "双人提交比对后台流水", "impact": "功能", "status": "未执行"}]
+        result = ac.analyse([rec(1, "boundary")], residual_note=RESIDUAL_CLEAR, atk_entries=atk)
+        self.assertNotIn("atk_absent_unexplained", [g["code"] for g in result["gaps"]])
+
+
+class HypothesisSharpnessTests(unittest.TestCase):
+    """N5：空话假设不计覆盖；锐利自然语言假设不得被误伤。"""
+
+    def test_vague_hypothesis_is_gap_and_not_counted_supported(self):
+        record = rec(1, "boundary")
+        record["hypothesis"] = "如果输入不对就会坏"
+        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR)
+        self.assertIn("hypothesis_vague", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["surface_coverage"]["SURF-01"]["supported"], 0)
+
+    def test_sharp_natural_language_is_not_flagged(self):
+        record = rec(1, "boundary")
+        record["hypothesis"] = "删除后条目应消失"
+        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR)
+        self.assertNotIn("hypothesis_vague", [g["code"] for g in result["gaps"]])
+
+    def test_numeric_hypothesis_is_sharp(self):
+        record = rec(1, "boundary")
+        record["hypothesis"] = "卷名 256 字符时保存应拒绝并保留输入"
+        result = ac.analyse([record], residual_note=RESIDUAL_CLEAR)
+        self.assertNotIn("hypothesis_vague", [g["code"] for g in result["gaps"]])
+
+
+class ReplayObligationTests(unittest.TestCase):
+    """N6：高风险面单一方法且结果全部 held，须换方法复打或提交点名不复打理由。"""
+
+    def _records(self, broken=False, second_method=False):
+        records = [rec(i, "boundary") for i in range(4)]
+        records[0]["hypothesis"] = "卷名 256 字符时保存应拒绝并保留输入"
+        if broken:
+            records[0]["hypothesis_outcome"] = "broken"
+        if second_method:
+            records[3]["method"] = "fault_injection"
+        return records
+
+    def _analyse(self, records, **kwargs):
+        return ac.analyse(
+            records, plan_surfaces={"SURF-01"}, plan_risks={"SURF-01": "high"},
+            residual_note={"items": [{"id": "SURF-01", "status": "unbroken"}]},
+            atk_absent_reason=NO_ATK_REASON, **kwargs)
+
+    def test_all_held_single_method_without_replay_is_gap(self):
+        result = self._analyse(self._records())
+        self.assertIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+
+    def test_replay_note_clears_gap(self):
+        result = self._analyse(self._records(),
+                               replay_notes={"SURF-01": "复用 TC-1 边界输入变体，见既有观察"})
+        self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+
+    def test_broken_surface_is_not_gated(self):
+        result = self._analyse(self._records(broken=True))
+        self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+
+    def test_second_method_probe_clears_gap(self):
+        result = self._analyse(self._records(second_method=True))
+        self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
 
 
 if __name__ == "__main__":

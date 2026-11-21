@@ -108,7 +108,8 @@ class M4DepthJudgements(unittest.TestCase):
                          [g["code"] for g in result["gaps"]])
 
     def test_high_risk_single_method_is_disclosed_with_retest_plan(self):
-        """高风险面方法单一：单独提示，并给出关联风险面/观察/可用范围的复测建议。"""
+        """高风险面方法单一：提示 + 复测建议。本夹具无任何可采信验证（supported=0），
+        由「假设未验证」既有缺口处理，不触发 N6 全 held 复打义务。"""
         records = [rec(i) for i in range(4)]
         result = ac.analyse(records, plan_surfaces={"SURF-01"},
                             plan_risks={"SURF-01": "high"}, residual_note="x")
@@ -150,7 +151,7 @@ class M4DepthJudgements(unittest.TestCase):
                          [n["code"] for n in result["notices"]])
 
     def test_single_method_repeat_is_notice_only(self):
-        """同方法重复仅提示，不压上限（既定口径：方法多样性不是配额）。"""
+        """同方法重复仅提示，不压上限（方法多样性不是配额；N6 全 held 高风险面除外）。"""
         records = [rec(i) for i in range(25)]
         result = ac.analyse(records, residual_note="x")
         self.assertIn("single_method_surface", [n["code"] for n in result["notices"]])
@@ -257,7 +258,7 @@ class M6AtkStagnation(unittest.TestCase):
 
     def test_stagnation_does_not_change_ceiling(self):
         """停滞只披露，不改变结论上限。"""
-        result = ac.analyse([rec(1)], residual_note="x",
+        result = ac.analyse([rec(1)], residual_note={"items": []},
                             atk_entries=[self.atk()],
                             prev_atk_entries=[self.atk()])
         self.assertEqual(result["verdict_ceiling"], "通过")

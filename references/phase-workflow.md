@@ -122,6 +122,7 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
 - **`path_type`、HTTP 方法或"未看到写操作"单独都不是只读凭据**——凭"看着像只读"放行，等于把先批后动变成先做后说。
 - 不传 `--declaration`（或声明里没有有效 `kind`）→ 从严按 `scope_change` 处理（保留旧行为，不放宽）。
 - 分类契约的**单一事实源是 `scripts/amendment_class.py`**：`phase_gate` 与 `execution_ledger` 共用同一个 `is_blocking()` 判定函数，两端各判一份必然漂移（分类口径不同 = 放行口径不同）。口径是「**类别决定需不需要先批，状态决定批了没有**」。
+- **只读修订 × 写台账交叉核对（N8）**：`readonly_lead` 修订可在 `linked_records` 显式登记关联的台账/写操作条目 ID；收尾复核时，仅对显式关联的条目核对写台账（`write_ops_ledger.py` 产物）中无 `caution`/`danger` 写记录。**默认不压档**：写台账未提供、或修订未显式关联条目时，只披露「未做机械对账」，不把结论压到待核实；时间窗/会话兜底关联仅作线索，不作压档依据。发现关联到写记录时，登记过程问题、压待核实并在首屏披露「只读申报与写记录不符」。
 
 未批准的范围变更在 `start` / `checkpoint` / `resume` / `check-verdict` 四处一致阻断；`approve-amendment` 批准后即放行（`resume` 也不例外——不得借跨会话绕过先批后动）。
 

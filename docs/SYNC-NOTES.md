@@ -740,6 +740,44 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 **边界（不宣称已解决的）**：`ui_metrics` 仍只判六类可量化项，不构成 WCAG 合规认证；图片/渐变/动效上的文字只能人工判；`state_matrix` 不排业务优先级；`copy_consistency` 判不了语义歧义；`assertion_mutation` 只证明抽样断言会响，不证明断言覆盖了该覆盖的东西。**A/B 两臂对照未跑，因此本轮不宣称"检出能力提升"**——只宣称"测量装置误报收敛、反激励拆除、新增 5 项可执行检测能力"。
 
+## v1.46.0（2026-11-21）：批判者口径加固——假设锐度、解释或复打、只读 × 写台账对账
+
+按《砺衡项目修改方案与执行计划-v3》落地。目的锚点：专家作为批判者/挑刺者，主动质疑需求、假设与实现，扩大覆盖、减少漏测、在自主测试中多发现 bug；全部新增检测服从「加检测不加锁」，如实登记不被惩罚。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| N3 | 基线口径修正：735 passed + 2 skipped（环境依赖）+ 230 subtests；v1.44.2 为 630 总（628 passed + 2 跳过）+ 226 subtests；passed 与 skipped 分账书写 | — |
+| N12 | `case_data.py` YAML 写入改为 `open(..., newline=)`，兼容 Python 3.9（旧 `Path.write_text(newline=)` 仅 3.10 支持） | 既有 CLI 链 |
+| N4 | 未提交 ATK 且无理由 → `atk_absent_unexplained` 压档；有非空理由只留痕；新增 `--atk-absent-reason` | 3 例三向（无 ATK 无理由 / 有理由 / 已提交不受影响） |
+| N5 | 假设锐度质检：空话、占位词不计入覆盖（`hypothesis_vague`），记录保留披露；合格信号含数值/长度、角色状态名、条件组合、对象 + 预期方向词 | 3 例双向（空话被拦、自然语言与数值假设放行） |
+| N6 | **政策反转**：高风险面单一方法且可采信结果全部 held，须换方法复打或提交 `--replay-note` 点名不复打理由，否则 `surface_unreplayed_unexplained`；已 broken 的面不触发；不是方法数量配额 | 4 例双向（无理由被拦 / 复打理由放行 / broken 不触发 / 第二方法探针放行） |
+| N7 | 通过档残余声明必须为结构化声明；仅自由文本 → `residual_declaration_required_for_pass`；待核实档保留文本入口 | 并入 M5 残余声明用例改写 |
+| N8 | `readonly_lead` × 写台账交叉核对：只对账显式 `linked_records`；关联到 `caution`/`danger` 写记录 → 过程问题 + 压待核实 + 首屏披露；写台账缺失或未显式关联只披露不压档；新增 `--write-ops-ledger` | 5 例三向（不符压档 / 无关联放行 / 缺台账只披露 / 未关联只披露 / 已批 scope_change 不受本项约束） |
+| N10 | 浏览器通道降级路由：DevTools 通道无 route/fulfill，需要黑盒注入时切 Playwright 或按缺口四分类登记「能力待探测，未实测」，不得虚构注入 | 文档 |
+
+### 准出记录
+
+- **全量回归**：`python -m pytest tests/ -q` → **750 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.45.0 基线 735 + 本轮新增 15 例）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过。
+- **政策反转显式登记**：N6 替代旧「高风险面单一方法只提示、不压上限」口径。旧测试 `test_single_method_surface_is_disclosed_not_gated`、`test_single_method_repeat_is_notice_only` 覆盖的是低风险/未验证/多方法场景，维持只披露；全 held 的高风险单一方法面走新「解释或复打」义务。
+- **文档回链**：`agents/web-acceptance-assurance.md`、`references/execution-management.md`、`references/phase-workflow.md`、`references/browser-connection.md` 口径已同步；孤儿引用扫描为 0。
+
+### 兼容性说明
+
+- 新增 CLI 参数全部可选；旧台账与旧产物可读；未提供写台账时对账项只披露，不改变既有结论。
+- 自由文本残余声明在「待核实」档仍可用；仅在无其他缺口、结论将达「通过」时要求结构化。
+- 历史报告与历史 SKILL 登记口径不重算。
+
+### 本版不宣称的能力
+
+- N1 冻结 A/B 运行矩阵未在本轮执行，不宣称检出能力提升；N2 真实需求样本待项目方提供脱敏素材。
+- N9 红队密封包时序核验、N11 第二会话独立复核暂缓，待 N1 数据显示误报/漏检仍是瓶颈后再评估。
+- 本轮未改变既有口径：`broken` 是产出不是违规、`not_verified` 保守登记不压档、计划外发现（`surfaces_beyond_plan`）计为产出、方法多样性整体仍只作披露。
+
+### 回退说明
+
+- 本版对应待打 tag `v1.46.0`，上一已验证基线为 `v1.45.0`。
+- 回退路径：暂停候选版本用于真实验收 → 切回 `v1.45.0` 对应提交并重新注册 → 按确认后的有效版本重新计算并登记两个结果。
+
 ## v1.45.0（2026-11-20）：砺衡项目修订方案 M1–M10 落地
 
 按《砺衡项目修改方案与执行计划（修订版）》（2026-11-20）执行，本版一次性落地
@@ -756,7 +794,7 @@ M1–M10 共十项改造，分批推进、每批单独准出：
 
 ### 准出记录
 
-- **全量回归**：`python -m pytest tests/ -q` → **737 passed, 230 subtests passed**（v1.44.2 为 691 + 230）。
+- **全量回归**：`python -m pytest tests/ -q` → **735 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.44.2 为 630 总：628 passed + 2 环境跳过，226 子测试）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过，计数以实际环境为准；总选用例数 737 = 735 passed + 2 skipped，passed 与 skipped 分账书写。
 - **变异验证**：本轮 34 处语义变异全部被对应断言精确捕获，无假阴性；其中 M7 首轮 2 处
   未捕获（分类判定存在死分支、`execution_ledger` 未真实加载分类模块）已修复后重做。
 - **引用回链**：全仓 `.md` 语料扫描，references 与新增脚本的孤儿引用数为 0。

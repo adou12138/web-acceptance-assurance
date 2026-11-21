@@ -263,6 +263,44 @@ def _suspicious_language(text):
     return None
 
 
+# —— 假设锐度质检（N5）——
+# 锐度判「这条预测能不能被执行出来核对」，不判措辞漂亮与否。
+# 合格信号满足其一即放行（正则从宽，宁漏勿误杀）：
+# 1) 数值/长度；2) 角色/状态名；3) 条件组合；4) 对象 + 预期方向词。
+_HYP_NUMERIC = re.compile(r"\d|字符|字数|长度|字节|KB|MB|GB")
+_HYP_ROLE_STATE = re.compile(r"角色|管理员|租户|用户|未登录|待审核|锁定|状态|权限|账号")
+_HYP_COMBO = re.compile(r"并发|同时|重复|连续|交叉|多次|组合|成对|批量")
+_HYP_DIRECTION = re.compile(r"拒绝|拦截|被拒|失败|消失|保留|一致|报错|提示|回滚|禁止|"
+                            r"限制|为空|越权|回显|丢弃|清空|断开|拒绝提交")
+_HYP_OBJECT = re.compile(r"条目|记录|名称|卷名|输入|数据|订单|用户|权限|页面|按钮|表单|"
+                         r"字段|接口|文件|消息|列表|会话|缓存|租户|角色|账号|购物车|库存|"
+                         r"余额|附件|标题|描述|链接|图片|金额|密码|验证码")
+
+
+def _hypothesis_vague_reason(text):
+    """假设不够锐利 → 返回原因；锐利 → None。
+
+    复用 case_data 的占位/非承诺词表；合法自然语言假设（「并发建卷时卷名重复应拒绝」）
+    必须通过——误伤如实登记的假设等于惩罚诚实自检。
+    """
+    from case_data import has_placeholder, is_noncommittal
+
+    value = str(text or "").strip()
+    if not value:
+        return "假设为空"
+    if has_placeholder(value):
+        return "含占位/待补充词，不是可核对的预测"
+    if is_noncommittal(value):
+        return "整句为非承诺空话（正常/成功/无异常等）"
+    if (_HYP_NUMERIC.search(value) or _HYP_ROLE_STATE.search(value)
+            or _HYP_COMBO.search(value)):
+        return None
+    # 对象 + 预期方向词：「删除后条目应消失」「越界输入应被拒绝」这类必须放行
+    if _HYP_DIRECTION.search(value) and _HYP_OBJECT.search(value):
+        return None
+    return "无可核对的取值/对象/状态，也没有明确预期方向"
+
+
 def _hypothesis_outcome(rec):
     """失效假设的结果判定。
 
@@ -626,7 +664,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
             residual_note=None, plan_surfaces=None, plan_risks=None,
             surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None,
-            atk_entries=None, reviews=None, prev_atk_entries=None):
+            atk_entries=None, reviews=None, prev_atk_entries=None,
+            atk_absent_reason=None, replay_notes=None):
 
     records = _normalize_events(records)
     total = len(records)
@@ -651,6 +690,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     hyp_no_result = 0
     hyp_no_result_ids = []
     hyp_without_surface = []
+    hyp_vague = []
     suspicious_wording = []
     per_surf = {}
 
@@ -708,7 +748,11 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         if wording:
             suspicious_wording.append((rec.get("id") or rec.get("case_id") or "?", wording))
         outcome = None
+        vague_reason = None
         if hypothesis:
+            vague_reason = _hypothesis_vague_reason(hypothesis)
+            if vague_reason:
+                hyp_vague.append((rec.get("id") or rec.get("case_id") or "?", vague_reason))
             if not surf:
                 hyp_without_surface.append(rec.get("id") or rec.get("case_id") or "?")
             hyp_records += 1
@@ -740,15 +784,16 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                 {"id": rec.get("id") or rec.get("case_id") or "?",
                  "path_type": ptype, "method": method,
                  "outcome": outcome if hypothesis else None,
-                 "hypothesis": bool(hypothesis)})
+                 "hypothesis": bool(hypothesis),
+                 "sharp": vague_reason is None if hypothesis else None})
             if hypothesis:
                 bucket["hypotheses"] += 1
                 bucket[outcome] += 1
                 if outcome == "broken":
                     bucket["broken_ids"].append(rec.get("id") or rec.get("case_id") or "?")
-                # 支持覆盖 = 有结果 + 独立判据 + 有证据。缺任一项都不算覆盖：
-                # "写了一句预测"不等于"这个面被打过"。
-                if (outcome in ("broken", "held", "blocked")
+                # 支持覆盖 = 有结果 + 独立判据 + 有证据 + 假设锐利。缺任一项都不算覆盖：
+                # "写了一句预测"不等于"这个面被打过"；空话假设不计覆盖但保留披露。
+                if (outcome in ("broken", "held", "blocked") and vague_reason is None
                         and source == "independent" and _oracle_unproven(rec) is None):
                     bucket["supported"] += 1
 
@@ -834,6 +879,11 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         gaps.append({"code": "hypothesis_without_surface",
                      "message": f"{len(hyp_without_surface)} 条失效假设未关联风险面："
                                 f"{hyp_without_surface[:5]}（假设必须挂到 surf_id 才能判覆盖）"})
+    if hyp_vague:
+        detail = "；".join(f"{rid}: {why}" for rid, why in hyp_vague[:5])
+        gaps.append({"code": "hypothesis_vague",
+                     "message": f"{len(hyp_vague)} 条假设不够锐利，不计入覆盖：{detail}"
+                                "（须含可核对的取值/对象/状态或明确预期方向；记录保留披露，不删除）"})
     if surf_bad_format:
         gaps.append({"code": "surf_format_invalid",
                      "message": f"surf_id 形态非法（需 SURF- 前缀 + 稳定标识）：{surf_bad_format[:5]}"})
@@ -848,11 +898,12 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     # —— 高风险面方法单一：与"整体方法多样性低"分开处理 ——
     # 整体多样性只是分布描述（可被凑）；但**某个高风险面**只用了一种方法，
     # 是这个面没被真正打透的信号——换个面换方法不算覆盖这个面。
-    # 因此按面判定，并给出可执行的复测建议（关联风险面、既有观察、可用范围）。
-    # **只作提示，不压上限**：方法多样性一旦压档就会逼人拆碎去测没打算测的东西
-    # （见 test_single_method_surface_is_disclosed_not_gated 的既定口径），
-    # 且"换手法"是使用方的选择而非本轮结论成立与否的前提。
-    # 复测建议是附加说明，不取代原提示与理由。
+    #
+    # N6 口径（政策反转，替代旧「单一方法只提示不压上限」）：高风险面记录 ≥3、
+    # 仅 1 种方法、可采信结果全部 held（无 broken）时，属「解释或复打」义务——
+    # 要么追加一条不同方法的探针（记录 hypothesis + 结果），要么提交点名该面的
+    # 不复打理由（--replay-note）。两者皆无才压上限；这不是方法多样性配额，
+    # 不要求凑够 N 种方法，只要求对「为什么不复打」给出可核对回应。
     single_method_high_risk = []
     for surf in sorted(required_surfaces):
         bucket = per_surf.get(surf)
@@ -860,15 +911,28 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             continue
         if len(bucket["methods"]) > 1:
             continue
+        if (plan_risks or {}).get(surf) != "high":
+            continue
         single_method_high_risk.append({
             "surface": surf,
             "method": sorted(bucket["methods"]),
             "records": bucket["records"],
             "hypotheses": bucket["hypotheses"],
             "supported": bucket["supported"],
+            "broken": bucket["broken"],
             "observations": bucket["observations"][:5],
             "existing_paths": sorted(bucket["paths"]),
         })
+    replay_notes = replay_notes or {}
+
+    def _needs_replay(item):
+        # 已 broken 的面不触发；supported==0 由「假设未验证」既有缺口处理，不重复压档。
+        bucket = per_surf[item["surface"]]
+        if bucket["broken"] > 0 or bucket["supported"] == 0:
+            return False
+        return not str(replay_notes.get(item["surface"]) or "").strip()
+
+    unreplayed_unexplained = [item for item in single_method_high_risk if _needs_replay(item)]
     if single_method_high_risk:
         detail = "；".join(
             f"{item['surface']}（{item['records']} 条记录仅用 {item['method']}，"
@@ -876,8 +940,13 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             for item in single_method_high_risk[:5])
         notices.append({"code": "high_risk_surface_single_method",
                         "message": f"{len(single_method_high_risk)} 个高风险风险面只用了单一方法：{detail}"
-                                   "（该面未被真正打透；建议换方法复打，见 retest_suggestions；"
-                                   "仅提示，不压结论上限）"})
+                                   "（该面未被真正打透；建议换方法复打，见 retest_suggestions）"})
+    if unreplayed_unexplained:
+        detail = "；".join(item["surface"] for item in unreplayed_unexplained[:6])
+        gaps.append({"code": "surface_unreplayed_unexplained",
+                     "message": f"{len(unreplayed_unexplained)} 个高风险面单一方法且结果全部 held，"
+                                f"既未换方法复打也未提交不复打理由：{detail}"
+                                "（须追加不同方法探针并记录假设/结果，或 --replay-note 点名该面并引用既有观察）"})
 
 
     if not gaps and not (isinstance(residual_note, str) and residual_note.strip()) \
@@ -897,9 +966,15 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                     "提供的 plan 风险面集合为空，等同未做交叉核对")
                                    + "：弱化调用，结论上限由门禁侧压待核实"})
     if atk_entries is None:
-        notices.append({"code": "atk_not_submitted",
-                        "message": "未提交 ATK 攻击假设登记（--atk）：本轮未登记攻击假设，"
-                                   "非违规但门禁侧须披露"})
+        absent_reason = str(atk_absent_reason or "").strip()
+        if absent_reason:
+            notices.append({"code": "atk_not_submitted",
+                            "message": f"未提交 ATK 攻击假设登记（--atk）：本轮未登记攻击假设，"
+                                       f"理由：{absent_reason}（非违规，披露备查）"})
+        else:
+            gaps.append({"code": "atk_absent_unexplained",
+                         "message": "未提交 ATK 攻击假设登记（--atk）且未说明理由："
+                                    "零登记本身不是问题，未解释才是；请补充 --atk-absent-reason"})
     residual_state = _residual_state(residual_note, plan_surfaces, atk_entries, per_surf)
     if residual_state in ("unstructured", "unresolved_ref"):
         notices.append({"code": "residual_note_unanchored",
@@ -986,6 +1061,14 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                             "message": "残余风险声明存在「尚未验证」的条目："
                                        + "、".join(declared_unverified[:6])
                                        + "（如实登记，不压结论上限）"})
+
+    # N7：结论将达「通过」时，残余风险声明必须是结构化声明（可逐条对账）。
+    # 仅自由文本且当前无其他缺口 → 记缺口；待核实档（已有其他缺口）保留文本入口，
+    # 不抬高诚实登记成本。
+    if residual_declaration["mode"] == "text" and not gaps:
+        gaps.append({"code": "residual_declaration_required_for_pass",
+                     "message": "结论将达「通过」但残余风险声明为自由文本：须改为结构化声明"
+                                "（--residual-declaration，逐条 {id,status} 对账已实现）"})
 
 
     # —— ATK 独立轨道：与需求 SURF 轨道分开判定 ——
@@ -1094,6 +1177,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "hypotheses": {"declared": hyp_records, "broken": hyp_broken,
                        "held": hyp_held, "blocked": hyp_blocked,
                        "no_result": hyp_no_result,
+                       "vague": len(hyp_vague),
+                       "vague_ids": [rid for rid, _ in hyp_vague[:6]],
                        "no_result_ids": hyp_no_result_ids[:6],
                        "break_rate": (round(hyp_broken / hyp_records, 4)
                                       if hyp_records else None)},
@@ -1201,6 +1286,11 @@ def main(argv=None):
                         help="上一可比批次的 ATK 登记快照；提供后披露跨轮持续未执行（atk_stagnant），"
                              "只提示不改上限")
     parser.add_argument("--reviews", help="候选复核 JSONL 路径；用于判断命中的 ATK 是否已裁定闭环")
+    parser.add_argument("--atk-absent-reason",
+                        help="未提交 --atk 时的解释理由；零登记不是问题，未解释才是")
+    parser.add_argument("--replay-note",
+                        help="不复打理由 JSON：{\"SURF-01\": \"…\"} 或 [{\"surface\",\"reason\"}]；"
+                             "点名风险面并引用既有观察，供 N6 单一方法高风险面对账")
     parser.add_argument("--density-threshold", type=float, default=DEFAULT_DENSITY_THRESHOLD)
     parser.add_argument("--independent-rate", type=float, default=DEFAULT_INDEPENDENT_RATE)
     parser.add_argument("--surf-linkage", type=float, default=DEFAULT_SURF_LINKAGE)
@@ -1224,6 +1314,15 @@ def main(argv=None):
         residual = args.residual_note
         if args.residual_declaration:
             residual = json.loads(Path(args.residual_declaration).read_text(encoding="utf-8-sig"))
+        replay_notes = None
+        if args.replay_note:
+            raw = json.loads(Path(args.replay_note).read_text(encoding="utf-8-sig"))
+            if isinstance(raw, dict):
+                replay_notes = {str(k): str(v) for k, v in raw.items()}
+            elif isinstance(raw, list):
+                replay_notes = {
+                    str(x.get("surface") or x.get("id") or ""): str(x.get("reason") or x.get("note") or "")
+                    for x in raw if isinstance(x, dict)}
         result = analyse(records, args.density_threshold, args.independent_rate,
                          residual_note=residual,
                          plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
@@ -1232,7 +1331,9 @@ def main(argv=None):
                          amend_note=args.amend_note,
                          atk_entries=atk_entries,
                          reviews=reviews,
-                         prev_atk_entries=_load_atk(args.atk_prev) if args.atk_prev else None)
+                         prev_atk_entries=_load_atk(args.atk_prev) if args.atk_prev else None,
+                         atk_absent_reason=args.atk_absent_reason,
+                         replay_notes=replay_notes)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         # 输入/解析错误以 2 退出——与包内其它脚本（adversarial_gate /
         # execution_ledger / challenge_summary / finding_summary）口径一致，

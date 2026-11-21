@@ -469,7 +469,8 @@ def main():
         output = Path(args.output)
         if not output.parent.is_dir():
             raise ValueError("output parent directory must exist")
-        output.write_text(yaml.dump(data, Dumper=Dumper, allow_unicode=True, sort_keys=False), encoding="utf-8", newline="\n")
+        with output.open("w", encoding="utf-8", newline="\n") as stream:
+            yaml.dump(data, stream, Dumper=Dumper, allow_unicode=True, sort_keys=False)
         print("YAML generated; validate both formats and diff before delivery")
         return 0
     except Exception as exc:
