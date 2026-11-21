@@ -148,6 +148,48 @@ class ClassificationContract(AmendmentBase):
         self.assertFalse(ok)
         self.assertIn("未知字段", message)
 
+    def test_credential_types_are_validated_not_just_truthiness(self):
+        """凭据的**类型与取值**要校验：真值判断会把「明确写着会发生变化」的申报判成只读。
+
+        `no_state_change: "false"` 在 `if not declaration.get(...)` 下是真值——一条
+        自己声明「会发生状态变化」的申报，就这样被判成只读观察并放行，正是本模块
+        存在的理由被反向利用。同样的坑还有 `allowed_actions: []`（没有任何已授权动作）
+        与 `scope: "   "`（范围空着）。
+        """
+        bad_overrides = (
+            {"no_state_change": "false"},
+            {"no_state_change": "no"},
+            {"no_state_change": "0"},
+            {"no_state_change": " "},
+            {"no_state_change": 0},
+            {"no_state_change": 1},
+            {"no_state_change": None},
+            {"allowed_actions": []},
+            {"allowed_actions": "view_list"},
+            {"allowed_actions": ["   "]},
+            {"scope": "   "},
+            {"scope": 123},
+            {"environment": ""},
+            {"role": ["editor"]},
+        )
+        for override in bad_overrides:
+            declaration = self.readonly_declaration(**override)
+            kind, reasons = self.ac.classify(declaration)
+            self.assertEqual(kind, "scope_change", f"{override} 应从严归 scope_change")
+            self.assertTrue(reasons)
+            self.assertTrue(self.ac.is_blocking({**declaration, "kind": kind,
+                                                "status": "awaiting_approval"}),
+                            f"{override} 应阻断阶段推进")
+
+    def test_readonly_record_with_bad_credentials_blocks_even_if_kind_says_readonly(self):
+        """记录里的 kind 可被改写：宣称只读但凭据不合格的记录仍须阻断。"""
+        record = {"kind": "readonly_lead", "status": "approved_readonly",
+                  "declaration": self.readonly_declaration(no_state_change="false")}
+        self.assertTrue(self.ac.is_blocking(record))
+        good = {"kind": "readonly_lead", "status": "approved_readonly",
+                "declaration": self.readonly_declaration()}
+        self.assertFalse(self.ac.is_blocking(good))
+
     def test_requires_agreement(self):
         self.assertFalse(self.ac.requires_approval("readonly_lead"))
         self.assertTrue(self.ac.requires_approval("scope_change"))
@@ -171,6 +213,25 @@ class ClassificationContract(AmendmentBase):
 
 class PhaseGateBehaviour(AmendmentBase):
     """phase_gate 侧：分类决定阻断与否。"""
+
+    def test_readonly_auto_approval_is_not_recorded_as_human_approval(self):
+        """只读登记的「可继续」不是人工放行：单独记 auto_approval，不占用 approval。
+
+        `approval` 的语义是"人确认过"。自动放行写进同一字段，审计就分不清哪些
+        走的是人工闸门、哪些是分类契约按凭据机械放行——而这两者的证明力不同。
+        """
+        state, _path = self.state()
+        self.pg.start(state, "plan", session="SESS-1")
+        self.pg.request_amendment(state, "plan", "agent-runner", "只读线索",
+                                  session="SESS-1",
+                                  declaration=self.readonly_declaration())
+        record = state["amendments"][0]
+        self.assertIsNone(record["approval"], "自动放行不得占用人工放行字段")
+        auto = record["auto_approval"]
+        self.assertTrue(auto["auto"])
+        self.assertEqual(auto["mode"], "readonly_lead")
+        self.assertEqual(auto["by"], "agent-runner")
+        self.assertIn("凭据", auto["basis"])
 
     def test_readonly_amendment_does_not_block_next_phase(self):
         """固定授权只读观察登记后可继续阶段推进（走到下一阶段真正开始）。"""

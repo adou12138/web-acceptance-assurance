@@ -560,6 +560,10 @@ def _attack_check(coverage):
             "density": coverage.get("attack_density"), "gaps": list(gaps),
             "plan_check_state": plan_state,
             "atk_checked": coverage.get("atk_checked"),
+            # 判据版本随结论一起冻结：阶段收尾快照要在几个月后还能说明
+            # "这个通过是哪一版判据判的"，否则复算差异无从归因。
+            "tool_version": coverage.get("tool_version"),
+            "schema": coverage.get("schema"),
             "reasons": reasons}
 
 
@@ -896,11 +900,16 @@ def request_amendment(state, phase, by, note, session=None, declaration=None):
               "classification_reasons": reasons,
               "approval": None}
     if readonly:
-        # 只读观察可继续：放行记录写明它依据什么放行，不能只留一句"已处理"。
-        record["approval"] = {"by": _text(by, "by"), "at": _now(),
-                              "mode": "readonly_lead",
-                              "note": "固定授权范围内的只读观察，凭据齐备，登记后放行",
-                              "reasons": reasons}
+        # 只读观察可继续，但这**不是人工放行**：单独记 auto_approval，不占用
+        # approval 字段——approval 的语义是"人确认过"，两者混同一字段会让审计
+        # 分不清哪些走的是人工闸门、哪些是分类契约按凭据机械放行。
+        # 这里的 by 是登记该线索的执行方（可以是智能体），不是放行人，
+        # 故不过 _approver()：没有人工放行发生，就不该留下人工放行的痕迹。
+        record["auto_approval"] = {"by": record["requested_by"], "at": _now(),
+                                   "mode": "readonly_lead", "auto": True,
+                                   "basis": "分类契约按凭据机械放行：scope/environment/role/"
+                                            "allowed_actions/no_state_change 齐备且类型合格",
+                                   "reasons": reasons}
     state["amendments"].append(record)
     _record(state, "amendment_request", phase,
             {"id": record["id"], "note": record["note"], "kind": kind,

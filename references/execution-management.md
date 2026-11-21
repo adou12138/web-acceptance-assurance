@@ -141,7 +141,14 @@ python -m unittest discover -s tests -v
 
 即仅有 `{"status": "pass"}` 或只有 `status`+空 `checks` 的最小载荷不足以解锁执行。校验通过后 `baseline.gate_precondition` 记录 `batches_case_count`、`gate_report_status` 与 `gate_report_case_count`。
 
-**不传** `--batches` / `--gate-report` 时**不拒绝建账**（退出码 0），但缺口逐项记入 `baseline.missing_inputs`（顶层，与 `gate_precondition` 分开——后者是门禁判定结果），并把 `summary` 的 `verdict_ceiling` 压"待核实"；`summary.missing_input_reasons` 给出逐项可读原因，报告须写明未做跳间校验。走三阶段流程时（提供 `--phase-state`），跳间校验与攻击覆盖由 `phase_gate` 承担，台账不重复计同一职责的缺失。
+**不传** `--batches` / `--gate-report` 时**不拒绝建账**（退出码 0），但缺口逐项记入 `baseline.missing_inputs`（顶层，与 `gate_precondition` 分开——后者是门禁判定结果），并把 `summary` 的 `verdict_ceiling` 压"待核实"；`summary.missing_input_reasons` 给出逐项可读原因，报告须写明未做跳间校验。
+
+缺口分两类（`_gate_input_gaps`，建账与收尾同一判据）：
+
+- `missing_inputs`——**无替代承担者**且未提供，压结论上限；
+- `delegated_inputs`——未单独提供，但职责已由三阶段闸门承担（走三阶段流程时的 `batches`/`gate_report`/`attack_coverage`），**不压上限**，但首屏与 `summary.delegated_input_reasons` 必须如实写"未单独提供、由 phase_gate 承担"，**不得概括成"均已提供"**。
+
+存量基线兼容：`baseline.gate_inputs_present` 是新增键，旧工作区没有它时按 `gate_precondition` 里已成立的判定结果回退推导（`batches_closed`→batches、`gate_report_status`→gate_report、`phase_state`、`attack_coverage_ceiling`/`attack_plan_check_state`→attack_coverage）——旧轮次既不会被误报"未提供"，也不会因版本升级被凭空抹平真实缺口；回退只认已写入的判定结果，字段缺失一律按未提供。
 
 **对抗门禁进门条件（必选）**：台账同时记录对抗结论并**机械压制结论上限**——`init` 未提供 `--adversarial-gate` 且未豁免时，`baseline.gate_precondition.adversarial_state="missing"` 并把 `adversarial_ceiling` 置“待核实”；提供 `--adversarial-waiver <理由>` 则记 `waived` 并留痕（仅限纯只读小任务）。传入 `--adversarial-gate`（`scripts/adversarial_gate.py` 的输出，门禁默认启用）时校验其 `verdict_ceiling`/`adversarial_enabled`/`reasons` 字段；若显示对抗未启用且无豁免，同样压"待核实"。`summary` 输出的 `verdict_ceiling` 由此机械派生（存在 FAIL → 不通过；存在 BLOCKED/NOT_RUN/SKIPPED 或未执行 → 待核实；再与对抗上限取更严者），不由人工宣称。
 

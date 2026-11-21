@@ -331,6 +331,83 @@ class M3MissingTraceAndRefresh(LedgerBase):
         self.assertNotIn("missing_inputs", baseline["gate_precondition"])
         self.assertIn("missing_inputs", baseline)
 
+    # —— 旧基线兼容：缺口判定必须是逐项事实，不是「有没有某个参数」的布尔 ——
+
+    @staticmethod
+    def _as_legacy(baseline):
+        """模拟 v1.44 建账的基线：没有 v1.45 新增的三个顶层键。"""
+        legacy = dict(baseline)
+        for key in ("gate_inputs_present", "missing_inputs", "delegated_inputs"):
+            legacy.pop(key, None)
+        return legacy
+
+    def _write_batches_and_report(self):
+        ids = [case["id"] for case in self.design["testcases"]]
+        batches = self.folder / "batches.json"
+        batches.write_text(json.dumps({"batches": [
+            {"unit_id": "U1", "status": "done", "gate": "pass", "case_ids": ids}]}),
+            encoding="utf-8")
+        report = self.folder / "gate-report.json"
+        report.write_text(json.dumps({
+            "status": "pass", "counts": {"testcases": len(ids)},
+            "checks": [{"id": "S0", "status": "passed"}]}), encoding="utf-8")
+        return batches, report
+
+    def test_legacy_baseline_keeps_gate_inputs_it_did_provide(self):
+        """旧基线确实提供过 batches / gate-report 时，不得因版本升级被误报「未提供」。
+
+        这两个参数在建账时校验合格，判定结果留在 gate_precondition 里
+        （batches_closed / gate_report_status）——那就是「提供过」的证据。
+        只因为旧版本没写 gate_inputs_present 就报缺口，是报告里写假事实。
+        """
+        batches, report = self._write_batches_and_report()
+        workspace, baseline = self.init_ledger(
+            "legacy-provided", batches=json.loads(batches.read_text(encoding="utf-8")),
+            gate_report=json.loads(report.read_text(encoding="utf-8")))
+        legacy = self._as_legacy(baseline)
+        (workspace / "baseline.json").write_text(
+            json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        summary = self.ledger.summarize(workspace, self.design, self.context, [])
+        self.assertNotIn("batches", summary["missing_inputs"])
+        self.assertNotIn("gate_report", summary["missing_inputs"])
+        check = next(c for c in summary["headline"]["required_checks"]
+                     if c["id"] == "gate_inputs")
+        self.assertNotIn("批次闭环校验", check["detail"],
+                         "未提供过的项才可写进 detail；提供过却写「未提供」是假事实")
+
+    def test_legacy_baseline_still_reports_real_gaps(self):
+        """旧基线确实没提供的项仍按缺口记，不得被「旧版本」当成免责理由。"""
+        workspace, baseline = self.init_ledger("legacy-missing-2")
+        legacy = self._as_legacy(baseline)
+        (workspace / "baseline.json").write_text(
+            json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        summary = self.ledger.summarize(workspace, self.design, self.context, [])
+        for name in ("phase_state", "batches", "gate_report", "attack_coverage"):
+            self.assertIn(name, summary["missing_inputs"])
+        self.assertEqual(summary["verdict_ceiling"], "待核实")
+
+    def test_phase_state_does_not_erase_unsupplied_inputs(self):
+        """提供 phase-state 只解释它承担的职责，不得把未单独提供的项写成「均已提供」。
+
+        原先的实现一旦看到 phase_state 就整体短路返回「无缺口」，首屏于是写
+        「适用且须提供的门禁证据均已提供」——而 batches/gate_report 根本没给过。
+        现在拆成两类：不压上限的 delegated（由闸门承担），与如实披露的说明文字。
+        """
+        state = self._three_phase_state()
+        workspace, baseline = self.init_ledger("delegated", adversarial_gate=self.adversarial,
+                                               phase_state=state)
+        self.assertEqual(baseline["missing_inputs"], [],
+                         "三阶段已承担这些职责，不得重复计缺口压上限")
+        self.assertIn("batches", baseline["delegated_inputs"])
+        self.assertIn("gate_report", baseline["delegated_inputs"])
+        summary = self.ledger.summarize(workspace, self.design, self.context, [],
+                                        phase_state=state)
+        check = next(c for c in summary["headline"]["required_checks"]
+                     if c["id"] == "gate_inputs")
+        self.assertNotIn("均已提供", check["detail"],
+                         "未单独提供的项必须披露，不能概括成「均已提供」")
+        self.assertIn("未单独提供", check["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

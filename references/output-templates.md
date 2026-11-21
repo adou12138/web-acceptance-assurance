@@ -66,12 +66,13 @@
 |---|---|---|
 | 技术结论上限 | `headline.verdict_ceiling` | 与台账 `verdict_ceiling` 同值，不得按印象改写 |
 | 完成范围 | `headline.completion_scope.text` | 写清计划数、已执行数与未执行/阻塞/跳过数 |
-| 必查项状态 | `headline.required_checks[]` | 逐项列出（label/status/detail），状态取值：通过 / 受限 / 缺失 / 未知 |
+| 必查项状态 | `headline.required_checks[]` | 逐项列出（label/status/detail），状态三取值：通过 / 受限 / 缺失（均由台账事实机械判定，不设"未知"；detail 里写明「未单独提供、由三阶段闸门承担」的条目属通过，但该说明须原样保留） |
 | 限档原因 | `headline.limitation_reasons[]` | 逐条列出 code 与说明，一条不许省 |
 
 - `headline.completion_scope.can_claim_readonly_complete` 为 true 时**方可**写「只读范围内已完成」；为 false 时不得写——授权限制不能替代未完成的必查项。
 - **摘要缺 `headline` 字段**（旧摘要）时，首屏须显式标注「台账摘要缺首屏事实字段，限制因素由报告渲染器推断」，并按渲染器推断口径给出；不得静默按推断口径出首屏。
 - 报告中另有各数据集门禁自身的判定（如「门禁自身结论上限」）。那是门禁单项结论，**不是**技术结论上限；两者冲突时以首屏为准，并写明差异原因。
+- **`headline.schema` 与渲染器要求不符**（旧版或更新版摘要）时，渲染器一律回退推断并在首屏标注版本不符，不按当前口径硬读旧字段——字段语义会随版本变，硬读会得出"看起来合规"的错结论。手写交付物同样不得引用版本不符的摘要数值。
 
 ## 1. 新需求分析
 

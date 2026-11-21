@@ -14,6 +14,12 @@
 判定只认**已登记事实**（申报字段本身），不认自然语言自述：
 `readonly_lead` 须同时具备 scope / environment / role / allowed_actions / no_state_change
 五项凭据；缺任何一项 → 归 `scope_change`（从严）。
+
+凭据校验判**类型与取值**，不只判真假。「有值」不等于「是有效值」：`no_state_change`
+写成字符串 `"false"`、`allowed_actions` 写成空数组、`scope` 填空白，在真值判断下
+都算"已填"，而它们恰恰表示"会发生状态变化 / 没有任何已授权动作 / 范围空着"。
+只做真假判断时，一条明确写着会发生状态变化的申报会被判成只读观察并放行——
+本模块存在的理由被反向利用。
 """
 
 # 修订分类枚举（唯一事实源；phase_gate 与 execution_ledger 都从这里取）
@@ -37,10 +43,50 @@ DECLARATION_FIELDS = ("kind", "scope", "environment", "role", "allowed_actions",
                       "no_state_change") + SCOPE_CHANGE_SIGNALS
 
 
+def _nonempty_text(value):
+    """非空白字符串。数字、布尔、数组、空白串都不算。"""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _actions_ok(value):
+    """非空字符串数组（至少一个非空白动作名）。空数组表示"没有已授权动作"。"""
+    return (isinstance(value, (list, tuple)) and bool(value)
+            and all(_nonempty_text(item) for item in value))
+
+
+def _type_label(value):
+    """把实际取值的形态写进原因里，便于申报方自查（不猜意图，只报形态）。"""
+    if value is None:
+        return "缺失"
+    if isinstance(value, bool):
+        return f"布尔 {value}"
+    if isinstance(value, str):
+        return f"字符串 {value!r}"
+    if isinstance(value, (list, tuple)):
+        return f"{type(value).__name__}（{len(value)} 项）"
+    return type(value).__name__
+
+
+def _readonly_credential_problems(declaration):
+    """逐项校验只读凭据的类型与取值，返回不合格原因列表（空列表 = 齐备）。"""
+    problems = []
+    for name in ("scope", "environment", "role"):
+        value = declaration.get(name)
+        if not _nonempty_text(value):
+            problems.append(f"{name} 须为非空字符串（当前 {_type_label(value)}）")
+    actions = declaration.get("allowed_actions")
+    if not _actions_ok(actions):
+        problems.append(f"allowed_actions 须为非空字符串数组（当前 {_type_label(actions)}）")
+    if declaration.get("no_state_change") is not True:
+        problems.append("no_state_change 须为布尔 true（当前 %s）"
+                        % _type_label(declaration.get("no_state_change")))
+    return problems
+
+
 def classify(declaration):
     """按登记事实判定修订分类 → (kind, reasons)。
 
-    从严规则：**先看有没有触发 scope_change 的信号**，再看只读凭据是否齐备。
+    从严规则：**先看有没有触发 scope_change 的信号**，再看只读凭据是否齐备且合格。
     顺序不能反——先判只读再判信号，会让"有写入信号但也填了只读字段"的申报蒙混过关。
 
     未能提供任何分类信息的申报 → scope_change（须先批），并给出缺项原因。
@@ -59,12 +105,13 @@ def classify(declaration):
     if hits:
         return "scope_change", [f"申报命中范围变更信号：{'、'.join(hits)}"]
 
-    # 2) 申报只读 → 核对只读凭据是否齐备
+    # 2) 申报只读 → 核对只读凭据是否齐备且类型取值合格
     if declared == "readonly_lead":
-        missing = [name for name in READONLY_LEAD_REQUIRED if not declaration.get(name)]
-        if missing:
+        problems = _readonly_credential_problems(declaration)
+        if problems:
             return "scope_change", [
-                f"申报 readonly_lead 但缺只读凭据：{'、'.join(missing)}（缺任一项从严归 scope_change）"]
+                "申报 readonly_lead 但只读凭据不合格：" + "；".join(problems)
+                + "（缺项或类型取值不符均从严归 scope_change）"]
         return "readonly_lead", []
 
     # 3) 申报 scope_change：直接成立，不额外要求字段
@@ -82,7 +129,10 @@ def is_blocking(record):
     口径：**类别决定"需不需要先批"，状态决定"批了没有"**。
 
     - `readonly_lead`（固定授权只读观察）凭据齐备即可继续，任何情况下都不阻断——
-      阻断它等于让"如实登记只读线索"比"先做后说"更糟；
+      阻断它等于让"如实登记只读线索"比"先做后说"更糟；但**凭据本身要复验**：
+      记录里的 `kind` 是可以被改写/手填的，若它宣称只读而 `declaration` 里的凭据
+      不合格（例如 `no_state_change` 写的是 `"false"`），说明这条记录不该被放行，
+      按须先批处理；
     - `scope_change` 只有在 `status == "awaiting_approval"`（尚未批准）时阻断，
       批准后不再阻断；
     - 历史状态文件里没有 `kind` 字段（登记于分类契约之前）→ 从严按 scope_change 处理。
@@ -96,6 +146,9 @@ def is_blocking(record):
         return False
     kind = str(record.get("kind") or "scope_change")
     if not requires_approval(kind):
+        declaration = record.get("declaration")
+        if isinstance(declaration, dict) and _readonly_credential_problems(declaration):
+            return True
         return False
     return record.get("status") == "awaiting_approval"
 

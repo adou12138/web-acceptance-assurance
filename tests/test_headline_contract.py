@@ -248,6 +248,27 @@ class ReportConsumesSameFacts(HeadlineBase):
         self.assertEqual(note, "")
         self.assertEqual(headline["verdict_ceiling"], "不通过")
 
+    def test_headline_schema_constant_is_shared(self):
+        """生产端与消费端的 schema 常量必须同值，否则每份新摘要都会被判"版本不符"。"""
+        self.assertEqual(self.render.HEADLINE_SCHEMA, self.ledger.HEADLINE_SCHEMA)
+
+    def test_headline_schema_mismatch_falls_back_with_notice(self):
+        """情形 6：schema 版本不符 → 回退推断并标注，不得按当前口径解读旧字段。
+
+        字段语义会随版本变（某个 status 可能从两态扩成三态）。拿旧 schema 的字段
+        按新口径渲染，会得出一个"看起来合规"的错结论——那正是首屏事实单一来源
+        要消除的漂移，只是换了个位置复发。
+        """
+        for schema in ("ledger-headline/0", "ledger-headline/2", None, ""):
+            payload = {"headline": {"schema": schema, "verdict_ceiling": "通过",
+                                    "completion_scope": {"text": "旧口径占位"}}}
+            path = self.folder / f"summary-{str(schema).replace('/', '-')}.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            headline, note = self.render.load_headline(str(path))
+            self.assertIsNone(headline, f"schema={schema!r} 不得被静默消费")
+            self.assertIn("版本不符", note)
+            self.assertIn(self.render.HEADLINE_SCHEMA, note)
+
     def test_report_first_screen_uses_summary_facts(self):
         """端到端：首屏展示的完成范围/必查项/限档原因均来自台账摘要。"""
         ledger = self.write_csv("ledger.csv", [self.csv_row("OBS-a")])

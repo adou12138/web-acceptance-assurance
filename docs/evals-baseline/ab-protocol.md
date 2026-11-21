@@ -30,6 +30,8 @@
 
 无效配对（夹具/协议指纹不同、预算不同、跨臂同一执行方、缺一侧 run）一律排除，原因逐条列在 `invalid_pairs`；**有效配对不足的夹具标为证据不足，不计入汇总分母**——拿一半运行算出来的均值描述的是那一半，不是这个夹具。
 
+派生指标同理**不许拿 0 顶替"没测"**。`summarize_matrix` 输出的 `known_near_miss_hits` / `known_near_miss_rate` / `insufficient_evidence` 在无法统计时给 `null`，并在 `false_positive.not_measured` 里逐项写明原因（如"某 run 的 score.json 缺 `near_miss_hits` 字段"、"N 个 run 缺 adjudication.json"）与 `*_measured`/`*_unmeasured_runs` 计数。**`0 / 40` 与 `null / 40` 含义相反**：前者是"已知反例零误报"，后者是"这一项没测"，任何人不得把后者读成前者。
+
 ## 独立裁定
 
 机械评分只认词元命中；未命中的发现可能是措辞差异、也可能是答案键漏了、也可能是无效发现——三选一属人工判断，工具不猜。用 `adjudicate` 子命令逐条裁定，取值 `valid` / `false_positive` / `insufficient_evidence`，每条写明理由与 `root_cause`（同根因的重复发现按根因归并）。

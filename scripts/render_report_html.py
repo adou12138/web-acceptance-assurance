@@ -34,6 +34,9 @@ STATUS_LABELS = {"NOT_RUN": ("t-gray", "未执行"), "PASS": ("t-green", "通过
                  "SKIPPED": ("t-gray", "跳过")}
 COVERAGE_LABELS = {"available": ("t-green", "已采"), "partial": ("t-amber", "部分"),
                    "missing": ("t-amber", "缺失"), "not-collected": ("t-gray", "未采")}
+# 与 execution_ledger.HEADLINE_SCHEMA 同值：schema 不一致即视为旧摘要，
+# 回退推断并标注，不静默按新口径解读旧字段（字段语义可能已变）。
+HEADLINE_SCHEMA = "ledger-headline/1"
 
 CSS = """
 *{box-sizing:border-box}
@@ -162,13 +165,18 @@ CHECK_STATUS_CLASS = {
 def load_headline(path):
     """读取台账摘要里的首屏事实。返回 (headline 或 None, 回退原因说明)。
 
-    三种情形必须可区分，报告里也要能看出来：
-    1. 提供了 summary 且含 headline → 消费同一份事实（正常路径）；
+    四种情形必须可区分，报告里也要能看出来：
+    1. 提供了 summary、含 headline 且 schema 与当前一致 → 消费同一份事实（正常路径）；
     2. 提供了 summary 但缺 headline 字段（旧摘要）→ 回退推断并**标注缺字段**；
-    3. 未提供 summary → 回退推断并**标注未提供台账摘要**。
+    3. 提供了 summary 但 headline.schema 与当前不符 → 回退推断并**标注版本不符**；
+    4. 未提供 summary → 回退推断并**标注未提供台账摘要**。
 
-    2 和 3 都必须显式说明，不能静默按渲染器自己的口径推断——否则报告首屏
+    2/3/4 都必须显式说明，不能静默按渲染器自己的口径解读——否则报告首屏
     看起来照样完整，读者却不知道限制因素是推断的。
+
+    第 3 种是本函数存在的关键理由：字段语义会随版本变（例如某个 status 从两态
+    扩成四态），拿旧 schema 的字段按新口径渲染，会得出一个"看起来合规"的错结论。
+    版本不符时宁可回退到台账原始记录，也不猜字段含义。
     """
     if not path:
         return None, "未提供台账摘要：首屏的完成范围与限档原因由报告渲染器按台账记录推断，非台账 summary 的口径"
@@ -182,6 +190,12 @@ def load_headline(path):
     if not isinstance(headline, dict):
         return None, ("台账摘要缺首屏事实字段（headline）："
                       "首屏限制因素由报告渲染器按台账记录推断，非台账 summary 的口径")
+    schema = str(headline.get("schema") or "").strip()
+    if schema != HEADLINE_SCHEMA:
+        shown = schema or "未标注"
+        return None, (f"台账摘要的首屏事实版本不符（摘要 {shown}，本渲染器要求 {HEADLINE_SCHEMA}）："
+                      "字段语义可能已变，首屏限制因素改由报告渲染器按台账记录推断，"
+                      "请用同一版本重新生成 summary 后再渲染首屏")
     return headline, ""
 
 

@@ -284,6 +284,37 @@ class M6AtkStagnation(unittest.TestCase):
         self.assertEqual(result["atk_stagnant_ids"], [])
 
 
+class ProductVersionStamp(unittest.TestCase):
+    """产物必须自带判据版本：同一台账跨版本可能得到不同上限，无版本即无法归因。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name)
+
+    def test_cli_output_carries_schema_and_tool_version(self):
+        """CLI 产出的 JSON 与 CSV 都要能回答「这条结论是哪一版判据判的」。"""
+        ledger = self.folder / "ledger.jsonl"
+        ledger.write_text("\n".join(json.dumps(with_hypothesis(rec(i), outcome="held"))
+                                    for i in range(1, 3)) + "\n", encoding="utf-8")
+        csv_path = self.folder / "out.csv"
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "attack_coverage.py"),
+             "--ledger", str(ledger), "--emit-json", str(self.folder / "out.json"),
+             "--emit-csv", str(csv_path)],
+            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        result = json.loads((self.folder / "out.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["schema"], ac.COVERAGE_SCHEMA)
+        self.assertEqual(result["tool_version"], ac.TOOL_VERSION)
+        self.assertIn("tool_version", csv_path.read_text(encoding="utf-8-sig"))
+
+    def test_tool_version_is_declared_as_criteria_version(self):
+        """版本号表达「判定规则变没变」，不是包版本：它必须与 schema 分开维护。"""
+        self.assertTrue(ac.TOOL_VERSION)
+        self.assertNotEqual(ac.TOOL_VERSION, ac.COVERAGE_SCHEMA)
+
+
 class CliContract(unittest.TestCase):
     """CLI 入口：新参数必须真的可用，不是死参数。"""
 

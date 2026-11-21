@@ -740,6 +740,46 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 **边界（不宣称已解决的）**：`ui_metrics` 仍只判六类可量化项，不构成 WCAG 合规认证；图片/渐变/动效上的文字只能人工判；`state_matrix` 不排业务优先级；`copy_consistency` 判不了语义歧义；`assertion_mutation` 只证明抽样断言会响，不证明断言覆盖了该覆盖的东西。**A/B 两臂对照未跑，因此本轮不宣称"检出能力提升"**——只宣称"测量装置误报收敛、反激励拆除、新增 5 项可执行检测能力"。
 
+## v1.45.1（2026-11-21）：v1.45.0 影响面审查缺陷修复
+
+对 v1.45.0（`fc3ad38`）做影响面审查后修复 8 项已证实问题。审查为包内自审，不替代真实需求实测；
+下列每条都附 E1 复现路径，修复后逐条复测。
+
+| ID | 严重度 | 问题 | 修复 |
+|---|---|---|---|
+| F1 | major | 缺口判定双向误判：旧基线（v1.44 建账、**确实提供过** `--batches`/`--gate-report`）被报"本轮未提供"（假事实）；反向提供 `--phase-state` 又把从未提供的项一并抹平 | `_gate_inputs_present` 对旧基线按 `gate_precondition` 已成立判定回退推导；`_gate_input_gaps` 把"未提供"拆成 `missing`（压上限）与 `delegated`（由三阶段闸门承担，不压上限但须披露）；取消 phase_state 整体短路 |
+| F2 | major | 修订分类可被字符串真值绕过：`no_state_change:"false"` 被判"凭据齐备"→ 只读放行 | 凭据校验判类型与取值：`no_state_change` 须 `is True`、`allowed_actions` 须非空字符串数组、`scope`/`environment`/`role` 须非空白字符串；`is_blocking` 对 `readonly_lead` 记录复验 declaration 凭据 |
+| F3 | normal | `headline.schema` 三处文档承诺"版本不同即回退并标注"，实现静默消费 | `render_report_html.load_headline` 校验 `HEADLINE_SCHEMA`，不符即回退并标注版本不符；新增常量一致性测试防两端漂移 |
+| F4 | major | A/B 汇总把"未测量"报成 0：`known_near_miss_hits` 硬编码 0、`known_near_miss_rate` 硬编码 `"NA"`、`insufficient_a/b` 从不产出 | `near_miss_hits`/`insufficient_evidence` 逐 run 真算，不可统计时给 `null` 并写 `not_measured` 原因与 `*_unmeasured_runs`；CSV 同步加 `near_miss_hits` 列（空 = 未测量） |
+| F5 | normal | 只读自动放行写入 `approval`，与人工放行混同字段 | 改记 `auto_approval`（`auto:true` + 判定依据），`approval` 留空 |
+| F6 | minor | SYNC-NOTES/提交信息写"未做跳间校验时拒绝建账"，实为留痕压上限（rc=0） | 三处措辞按实测改写；同时修正"仅披露"一栏误把 `missing_inputs` 当示例（它是压上限的缺口） |
+| F7 | minor | `required_checks.status` 文档声明四态、实现只产三态；`_headline_checks(read_only=)` 死参 | 文档改三态并说明"不设未知"的理由；删死参 |
+| F8 | minor | `attack_coverage` 判定口径收紧但产物无版本戳，跨版本重判无法归因 | 产物加 `schema=attack-coverage/1` + `tool_version=2`（判据口径版本）；`phase_gate` 收尾快照与台账前置条件记录该版本，首屏攻击覆盖项显示版本，缺失即写"跨版本重判差异无法归因" |
+
+### 准出记录
+
+- **全量回归**：`python -m pytest tests/ -q` → **750 passed, 230 subtests passed**（v1.45.0 为 737 + 230；新增 13 例）。
+- 新增回归：`test_gate_link_contract.py` +3（旧基线回退推导 / 旧基线真实缺口仍报 / 三阶段委派不写成"均已提供"）、
+  `test_amendment_class.py` +3（14 组类型绕过 / 记录 kind 被改写仍阻断 / auto_approval 不占 approval）、
+  `test_headline_contract.py` +2（schema 不符回退 / 两端常量同值）、
+  `test_attack_depth_contract.py` +2（产物版本戳 / 版本语义）、
+  `test_ab_matrix_contract.py` +3（已知反例真算 / 无裁定为 null / 缺字段整体不给数）。
+
+### 兼容性说明
+
+- **旧工作区可续测**：`baseline.json` 新增 `delegated_inputs`（顶层），旧基线缺失时按 `gate_precondition` 回退推导；
+  `gate_precondition` 结构不变，`schema_version` 仍为 `1.0`。
+- **产物字段**：`headline.required_checks[].status` 仍是三取值（此前文档误写四态，实现未变）；
+  `attack_coverage` 输出新增 `schema`/`tool_version`，其余键不变；`ab-matrix-summary` 中
+  `overall_rate`/`known_near_miss_rate`/`insufficient_evidence` 由 `"NA"` 改为 `null`（语义更明确：未测量）。
+- **判定口径变化**：`attack_coverage` 的 `tool_version` 由 1（v1.44.2 及更早）升为 2（v1.45.0 起）——
+  同一台账在两版下可能得到不同 `verdict_ceiling`，引用归档结论时须写明版本。
+
+### 本版不宣称的能力
+
+- 未执行真实网站测试（对象是专家包自身）；F4 的修复只保证"未测量不被显示为 0"，**不宣称 A/B 检出能力**。
+- 变异验证数字（v1.45.0 记录的"34 处语义变异全部捕获"）无法复核，本版未采信也未否定。
+
 ## v1.45.0（2026-11-20）：砺衡项目修订方案 M1–M10 落地
 
 按《砺衡项目修改方案与执行计划（修订版）》（2026-11-20）执行，本版一次性落地
@@ -747,7 +787,7 @@ M1–M10 共十项改造，分批推进、每批单独准出：
 
 | 批次 | 范围 | 核心变更 | 新增回归 |
 |---|---|---|---|
-| S1 | M1 / M12 / M2 / M3 | 门禁链接线闭环：建账→采集→收尾共用同一份产物契约；未做跳间校验时拒绝建账并压结论上限 | `test_gate_link_contract.py`（19 + 4 subtests） |
+| S1 | M1 / M12 / M2 / M3 | 门禁链接线闭环：建账→采集→收尾共用同一份产物契约；`--batches`/`--gate-report` 提供但不合格时拒绝建账（rc=2），未提供时不拒绝建账而是逐项留痕并把结论上限压「待核实」（rc=0） | `test_gate_link_contract.py`（19 + 4 subtests） |
 | S2 | M4 / M5 / M6 | 攻击面深度校验：结构校验、残余风险报告、跨轮提示与固定正反例 | `test_attack_depth_contract.py`（25） |
 | S3 | M7 | 修订申请分级：`readonly_lead`（凭据齐备可继续）与 `scope_change`（先批后动）二分，判定收敛到 `scripts/amendment_class.py` 单一事实源 | `test_amendment_class.py`（20） |
 | S3 | M8 | 首屏事实单一来源：台账摘要输出 `headline`，报告首屏与摘要消费同一份事实 | `test_headline_contract.py`（12） |
@@ -796,14 +836,15 @@ M1–M10 共十项改造，分批推进、每批单独准出：
 
 - **拦操作**：命令直接失败（退出码 2），不产生台账/工作区。
 - **限结论**：命令成功、产物照常写出，但 `summary.verdict_ceiling` 被机械压低。
-- **仅披露**：记入留痕字段（`missing_inputs` / `missing_input_reasons`），不影响上限。
+- **仅披露**：记入留痕字段（`delegated_inputs` / `missing_input_reasons` 等说明字段），不影响上限。
+  `missing_inputs` **不属**此类——它是压上限的缺口；由三阶段闸门承担而未单独提供的项记 `delegated_inputs`。
 
 **建账期（`init`）各输入的真实处置**
 
 | 输入 | 提供且不合规 | 未提供 | 分类 |
 |---|---|---|---|
-| `--batches` | 拒绝建台账（rc=2）：批次未 `done`、`gate` 非 `pass`/`waived`、批次未登记 `case_ids`、`case_ids` 与设计不一致 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |
-| `--gate-report` | 拒绝建台账（rc=2）：`status` 非 `pass`/`warning`、`checks` 缺失或为空、存在 `failed`、缺 `S0` 通过项、缺 `counts.testcases`、覆盖条数与设计不一致、`binding` 校验不过 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |
+| `--batches` | 拒绝建台账（rc=2）：批次未 `done`、`gate` 非 `pass`/`waived`、批次未登记 `case_ids`、`case_ids` 与设计不一致 | 记 `missing_inputs` 缺口 → 压「待核实」；走三阶段流程时转入 `delegated_inputs`（不压上限，首屏须披露"未单独提供、由闸门承担"） | 拦 / 限 |
+| `--gate-report` | 拒绝建台账（rc=2）：`status` 非 `pass`/`warning`、`checks` 缺失或为空、存在 `failed`、缺 `S0` 通过项、缺 `counts.testcases`、覆盖条数与设计不一致、`binding` 校验不过 | 同上 | 拦 / 限 |
 | `--adversarial-gate` | 提供但字段不合法（缺 `verdict_ceiling`/`adversarial_enabled`/`reasons`）→ 拒绝建台账 | `adversarial_state="missing"`，`adversarial_ceiling="待核实"`；有合资格 `--adversarial-waiver` 记 `waived` 但**上限仍为待核实** | 限 |
 | `--phase-state` | 阶段未走完放行流程（有未批准修订 / 路由误配未确认 / 同会话放行 / 交接未消费）→ `phase_ceiling="待核实"` | 记 `missing_inputs` 缺口 → 压「待核实」 | 限 |
 | `--attack-coverage` | 缺 `verdict_ceiling` 或 `gaps` → 拒绝建台账 | 记 `missing_inputs` 缺口 → 压「待核实」 | 拦 / 限 |

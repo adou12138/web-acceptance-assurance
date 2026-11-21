@@ -777,6 +777,28 @@ def _fp_numerator(score, adjudication):
         (adjudication or {}).get("false_positives_deduped") or 0)
 
 
+def _near_hit_count(score):
+    """该 run 命中的已知反例数；字段不存在时返回 None（未测量，不当 0）。"""
+    if "near_miss_hits" not in score:
+        return None
+    return len(score.get("near_miss_hits") or [])
+
+
+def _insufficient_count(adjudication):
+    """该 run 被裁定为「证据不足」的发现数；无裁定文件时返回 None（未测量，不当 0）。
+
+    未裁定 ≠ 裁定为 0：没有 adjudication.json 表示这一步没做，把它当成 0 会让
+    汇总表看起来"零条证据不足"，而实际是"从没测过"。
+    """
+    if not isinstance(adjudication, dict):
+        return None
+    counts = adjudication.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    value = counts.get("insufficient_evidence")
+    return int(value) if isinstance(value, int) else None
+
+
 def _load_adjudication(score_path):
     path = Path(score_path).with_name("adjudication.json")
     if not path.is_file():
@@ -848,6 +870,9 @@ def pair_fixture(matrix, fixture, results_root, answers_by_fixture, arm_a=None, 
             "delta_bm": _bm_count(score_b) - _bm_count(score_a),
             "fp_a": _fp_numerator(score_a, adj_a), "fp_b": _fp_numerator(score_b, adj_b),
             "delta_fp": _fp_numerator(score_b, adj_b) - _fp_numerator(score_a, adj_a),
+            "near_hits_a": _near_hit_count(score_a), "near_hits_b": _near_hit_count(score_b),
+            "insufficient_a": _insufficient_count(adj_a),
+            "insufficient_b": _insufficient_count(adj_b),
             "findings_a": _collect_findings_count(score_a),
             "findings_b": _collect_findings_count(score_b),
             "hits_a": sorted(_hit_set(score_a, answers)),
@@ -884,11 +909,24 @@ def pair_fixture(matrix, fixture, results_root, answers_by_fixture, arm_a=None, 
     # 部分配对无效时，若仍按剩下的一半算均值，那个均值描述的是"另一半运行"，
     # 不是这个夹具——把它当夹具级结论报出去就是在拿残缺数据充数。
     sufficient = bool(valid_pairs) and len(valid_pairs) == len(repeats) and not invalid
+    # 夹具级已知反例命中数：任一 run 未测量则该夹具不给数（None），不拿已测部分充数。
+    fixture_near_hits = 0
+    fixture_near_unmeasured = 0
+    for pair in pairs:
+        for key in ("near_hits_a", "near_hits_b"):
+            value = pair.get(key)
+            if value is None:
+                fixture_near_unmeasured += 1
+            else:
+                fixture_near_hits += int(value)
     return {
         "fixture": fixture,
         "fixture_sha256": fixture_info["sha256"],
         "answer_total": len(answers),
         "near_miss_total": fixture_info["near_misses"],
+        "near_miss_hits": (fixture_near_hits
+                           if pairs and fixture_near_unmeasured == 0 else None),
+        "near_miss_unmeasured_runs": fixture_near_unmeasured,
         "pairs": pairs,
         "valid_pairs": len(valid_pairs),
         "planned_pairs": len(repeats),
@@ -933,20 +971,60 @@ def summarize_matrix(matrix_path, results_root, fixtures_dir=None):
     fp_deltas = [f["mean_delta_fp"] for f in valid_fixtures if f.get("mean_delta_fp") is not None]
     mean_fp_delta = (sum(fp_deltas) / len(fp_deltas)) if fp_deltas else None
 
-    # 已知反例误报率：被错报的已知反例数 / 冻结的可评估反例数
+    # 已知反例误报率：被错报的已知反例数 / 冻结的可评估反例数。
+    # 口径纪律：命中数从每个 run 的 score.json 真算；拿不到就写 None（未测量），
+    # 绝不用 0 顶替——0 会被读成"已知反例零误报"，那是把"没测"报成"最好成绩"。
     near_miss_hits = 0
     near_miss_total = 0
+    near_miss_unmeasured = 0
+    near_miss_runs = 0
     for fixture in per_fixture:
         near_miss_total += int(fixture.get("near_miss_total") or 0)
+        for pair in fixture.get("pairs") or []:
+            for key in ("near_hits_a", "near_hits_b"):
+                near_miss_runs += 1
+                value = pair.get(key)
+                if value is None:
+                    near_miss_unmeasured += 1
+                else:
+                    near_miss_hits += int(value)
+    near_miss_measured = near_miss_runs > 0 and near_miss_unmeasured == 0
     # 整体误报率：独立裁定的误报数 / 已裁定的去重提交发现数
     fp_total = 0
     findings_total = 0
     insufficient = 0
+    insufficient_measured_runs = 0
+    insufficient_unmeasured_runs = 0
     for fixture in per_fixture:
         for pair in fixture.get("pairs") or []:
             fp_total += pair["fp_a"] + pair["fp_b"]
             findings_total += pair["findings_a"] + pair["findings_b"]
-            insufficient += pair.get("insufficient_a", 0) + pair.get("insufficient_b", 0)
+            for key in ("insufficient_a", "insufficient_b"):
+                value = pair.get(key)
+                if value is None:
+                    insufficient_unmeasured_runs += 1
+                else:
+                    insufficient_measured_runs += 1
+                    insufficient += int(value)
+    insufficient_measured = (insufficient_measured_runs > 0
+                             and insufficient_unmeasured_runs == 0)
+
+    # 未测量的派生指标逐条列出，与 0 明确区分（首屏可据此解释分母为何缺项）。
+    not_measured = []
+    if near_miss_total and not near_miss_measured:
+        not_measured.append({
+            "field": "known_near_miss_hits",
+            "reason": f"{near_miss_unmeasured} 个 run 的 score.json 缺 near_miss_hits 字段，"
+                      "该指标无法统计"})
+    if not near_miss_total:
+        not_measured.append({"field": "known_near_miss_rate",
+                             "reason": "夹具未冻结已知反例（分母为 0），该比率不适用"})
+    if not insufficient_measured:
+        not_measured.append({
+            "field": "insufficient_evidence",
+            "reason": (f"{insufficient_unmeasured_runs} 个 run 缺 adjudication.json（未做人工裁定），"
+                       "证据不足数无法统计" if insufficient_unmeasured_runs
+                       else "无有效配对，证据不足数无法统计")})
 
     warnings = []
     invalid_pairs = []
@@ -1012,13 +1090,20 @@ def summarize_matrix(matrix_path, results_root, fixtures_dir=None):
             "mean_delta": mean_fp_delta,
             "false_positives": fp_total,
             "submitted_findings": findings_total,
-            "overall_rate": (round(fp_total / findings_total, 4) if findings_total else "NA"),
-            "known_near_miss_rate": "NA",
+            "overall_rate": (round(fp_total / findings_total, 4) if findings_total else None),
+            "known_near_miss_rate": (round(near_miss_hits / near_miss_total, 4)
+                                     if near_miss_measured and near_miss_total else None),
             "known_near_miss_denominator": near_miss_total,
-            "known_near_miss_hits": near_miss_hits,
-            "insufficient_evidence": insufficient,
+            "known_near_miss_hits": near_miss_hits if near_miss_measured else None,
+            "known_near_miss_measured": near_miss_measured,
+            "known_near_miss_unmeasured_runs": near_miss_unmeasured,
+            "insufficient_evidence": insufficient if insufficient_measured else None,
+            "insufficient_measured": insufficient_measured,
+            "insufficient_unmeasured_runs": insufficient_unmeasured_runs,
+            "not_measured": not_measured,
             "denominator_note": "机械部分未做根因去重（无法从 score.json 还原），"
-                                "人工裁定部分按 root_cause 归并",
+                                "人工裁定部分按 root_cause 归并；"
+                                "取值为 null 表示该项未测量，不是 0",
         },
         "invalid_pairs": invalid_pairs,
         "newly_missed_blocker": newly_missed_blocker,
@@ -1032,15 +1117,21 @@ def summarize_matrix(matrix_path, results_root, fixtures_dir=None):
 
 
 def matrix_to_csv(summary):
-    """把汇总转成可复算 CSV（UTF-8 BOM）：一行一个夹具一列一项事实。"""
-    lines = ["fixture,answer_total,near_miss_total,pairs,valid_pairs,"
+    """把汇总转成可复算 CSV（UTF-8 BOM）：一行一个夹具一列一项事实。
+
+    `near_miss_hits` 为空表示该项未测量（某 run 的 score.json 缺该字段），
+    不是 0——CSV 里也不给"看起来零误报"的机会。
+    """
+    lines = ["fixture,answer_total,near_miss_total,near_miss_hits,pairs,valid_pairs,"
              "mean_delta_bm,mean_delta_fp,newly_detected,common,only_a,missed_both"]
     for fixture in summary.get("per_fixture") or []:
         detail = fixture.get("detail") or {}
+        near_hits = fixture.get("near_miss_hits")
         lines.append(",".join([
             str(fixture.get("fixture")),
             str(fixture.get("answer_total", "")),
             str(fixture.get("near_miss_total", "")),
+            ("" if near_hits is None else str(near_hits)),
             str(len(fixture.get("pairs") or [])),
             str(fixture.get("valid_pairs", 0)),
             ("" if fixture.get("mean_delta_bm") is None else str(fixture["mean_delta_bm"])),

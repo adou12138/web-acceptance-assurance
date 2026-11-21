@@ -226,19 +226,21 @@ def _adversarial_precondition(adversarial_gate, waiver=None, read_only=False, ca
     return info
 
 
-def _applicable_missing(gate_inputs):
-    """返回本轮**适用**且尚未提供的门禁证据项。
+_GATE_INPUTS_ORDER = ("phase_state", "batches", "gate_report", "attack_coverage")
 
-    只记「未提供」这一事实，不代替上游产物做合格性判断：建账记初始状态，
-    收尾复核同轮最终产物，缺项在收尾时披露。
 
-    适用性判据（机械，不看理由文本）：
+def _gate_input_gaps(gate_inputs):
+    """把「未提供」拆成两类：压上限的缺口，与已由三阶段闸门承担的委派项。
 
-    - **走了三阶段流程**（本轮提供了 phase_state）：阶段完整性、跳间校验、
-      攻击覆盖三项职责都由 phase_gate 承担——它的 submit 强制校验评审/用例/
-      对抗 plan 三件交接产物，execute 阶段收尾强制交攻击覆盖结论。此时台账
-      再索要 --batches/--gate-report/--attack-coverage 就是**同一职责计两次
-      缺失**，会把合法三阶段流程误压成待核实。三项均不计缺口。
+    返回 `{"missing": [...], "delegated": [...]}`。两者都记「未提供」这一事实，
+    区别只在**是否有替代承担者**：
+
+    - **走了三阶段流程**（本轮提供了 phase_state）：阶段完整性、跳间校验、攻击
+      覆盖三项职责都由 phase_gate 承担——它的 submit 强制校验评审/用例/对抗 plan
+      三件交接产物，execute 阶段收尾强制交攻击覆盖结论。此时台账再索要
+      --batches/--gate-report/--attack-coverage 就是**同一职责计两次缺失**，会把
+      合法三阶段流程误压成待核实。这三项列入 `delegated`：不作为缺口压上限，
+      但必须在首屏如实披露「未单独提供、由闸门承担」，不得写成「均已提供」。
     - **旧工作流**（未提供 phase_state）：三阶段闸门未走，按专家入口契约须压
       待核实；跳间校验与攻击覆盖的适用入口只有 --batches/--gate-report/
       --attack-coverage，缺任一即记缺口。
@@ -247,13 +249,39 @@ def _applicable_missing(gate_inputs):
     （adversarial_state / adversarial_reasons），此处重复计会让同一个缺口
     出现两套原因码。
     """
-    if gate_inputs.get("phase_state"):
-        return []
-    missing = []
-    for name in ("phase_state", "batches", "gate_report", "attack_coverage"):
-        if not gate_inputs.get(name):
+    phase_ran = bool(gate_inputs.get("phase_state"))
+    missing, delegated = [], []
+    for name in _GATE_INPUTS_ORDER:
+        if gate_inputs.get(name):
+            continue
+        if phase_ran and name != "phase_state":
+            delegated.append(name)
+        else:
             missing.append(name)
-    return missing
+    return {"missing": missing, "delegated": delegated}
+
+
+def _gate_inputs_present(baseline):
+    """本轮各项门禁证据是否**提供过**（提供 ≠ 合格，合格由 gate_precondition 判）。
+
+    新基线直接读 `gate_inputs_present`。该键是 v1.45.0 新增，旧基线没有——此时
+    按 `gate_precondition` 里已成立的判定结果回退推导：那里留着「提供过且合格」
+    的证据（batches_closed / gate_report_status / phase_state / attack 结论）。
+    回退只认已写入的判定结果，不做推断：字段缺失一律按未提供，宁可报缺口也
+    不臆造"提供过"。这样旧轮次既不会因版本升级被误报缺证据，也不会因升级被
+    凭空抹平真实缺口。
+    """
+    recorded = baseline.get("gate_inputs_present")
+    if isinstance(recorded, dict):
+        return {name: bool(recorded.get(name)) for name in _GATE_INPUTS_ORDER}
+    gate = baseline.get("gate_precondition") or {}
+    return {
+        "phase_state": gate.get("phase_state") in {"complete", "incomplete"},
+        "batches": gate.get("batches_closed") is True,
+        "gate_report": gate.get("gate_report_status") in {"pass", "warning"},
+        "attack_coverage": (gate.get("attack_coverage_ceiling") is not None
+                            or gate.get("attack_plan_check_state") is not None),
+    }
 
 
 # 缺失输入的中文说明（收尾披露用）。对抗门禁缺失另有 _adversarial_precondition
@@ -407,6 +435,13 @@ def _attack_precondition(attack_coverage):
             "结论上限压待核实" % plan_state]
     if "atk_checked" in attack_coverage:
         info["attack_atk_checked"] = bool(attack_coverage.get("atk_checked"))
+    # 判据版本留痕：同一份台账在不同判据版本下可能得到不同上限（v1.44 判通过与
+    # v1.45 判待核实就属此类）。归档与复盘要能回答"这条结论是哪一版判的"，
+    # 所以把产出方自带的版本原样记进前置条件，缺失记 None 而不是猜一个。
+    version = attack_coverage.get("tool_version")
+    info["attack_tool_version"] = str(version) if version is not None else None
+    schema = attack_coverage.get("schema")
+    info["attack_schema"] = str(schema) if schema is not None else None
     return info
 
 
@@ -477,12 +512,14 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
                            "batches": batches is not None,
                            "gate_report": gate_report is not None,
                            "attack_coverage": attack_coverage is not None}
-    missing_inputs = _applicable_missing(gate_inputs_present)
+    gaps = _gate_input_gaps(gate_inputs_present)
+    missing_inputs = gaps["missing"]
+    delegated_inputs = gaps["delegated"]
     workspace = Path(workspace)
     if not workspace.parent.is_dir():
         raise ValueError("workspace parent must already exist")
     workspace.mkdir(exist_ok=False)
-    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition, "gate_inputs_present": gate_inputs_present, "missing_inputs": missing_inputs}
+    baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition, "gate_inputs_present": gate_inputs_present, "missing_inputs": missing_inputs, "delegated_inputs": delegated_inputs}
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
@@ -751,6 +788,8 @@ def _verdict_ceiling(baseline, counts, executed, final_precondition=None):
     # 建账时缺失的可选输入：收尾复核后仍未补齐的，留痕并压上限。
     # 与对抗门禁缺失同口径——弱化调用不得自证通过。
     # 只压到「待核实」，不放松已算出的更严结论（上面已取过更严者）。
+    # 由三阶段闸门承担的委派项（delegated_inputs）不在此列：它的职责已有承担者，
+    # 重复压上限会让「走了完整流程」比「只做一半」更差。
     missing = final_precondition.get("missing_inputs",
                                      baseline.get("missing_inputs") or [])
     if missing:
@@ -759,15 +798,18 @@ def _verdict_ceiling(baseline, counts, executed, final_precondition=None):
 
 
 def _headline_checks(baseline, final_precondition, counts, evidence_issues,
-                     flaky_cases, missing_inputs, read_only):
+                     flaky_cases, missing_inputs, delegated_inputs=()):
     """逐项必查项状态。返回 [{id, label, status, detail}]。
 
-    status 四取值：`ok`（该项无缺口且未压上限）/ `limited`（该项把上限压到待核实）/
-    `missing`（证据根本没提供）/ `unknown`（无法判定，如实标注而不猜）。
+    status 三取值：`ok`（该项无缺口且未压上限）/ `limited`（该项把上限压到待核实）/
+    `missing`（证据根本没提供）。三态都由台账事实机械判定，不存在"无法判定"——
+    所以不设 `unknown`；渲染器对未知 status 仍有兜底显示，那是防外部数据，不是本项产物。
 
-    判定口径与 `_applicable_missing`、`_verdict_ceiling` 同一套：走三阶段流程时
+    判定口径与 `_gate_input_gaps`、`_verdict_ceiling` 同一套：走三阶段流程时
     攻击覆盖由 phase_gate 在 execute 收尾强制校验，台账不再重复索要——
     否则同一职责计两次缺失，既误压上限，也让首屏出现与实际不符的"缺攻击覆盖"。
+    此时未单独提供的项列入 delegated_inputs，如实写「未单独提供、由闸门承担」，
+    不得写成「均已提供」。
     """
     gate = (baseline.get("gate_precondition") or {})
     checks = []
@@ -810,16 +852,20 @@ def _headline_checks(baseline, final_precondition, counts, evidence_issues,
     # 3) 攻击面覆盖：走三阶段时由 phase_gate 承担，不重复计缺失
     attack_ceiling = final_precondition.get("attack_coverage_ceiling",
                                             gate.get("attack_coverage_ceiling"))
-    phase_complete = phase_state == "complete"
+    attack_version = final_precondition.get("attack_tool_version",
+                                            gate.get("attack_tool_version"))
     if attack_ceiling:
+        version_text = (f"判据版本 v{attack_version}" if attack_version
+                        else "判据版本未标注：跨版本重判差异无法归因")
         checks.append({"id": "attack_coverage", "label": "攻击面覆盖",
                        "status": "ok" if attack_ceiling == "通过" else "limited",
-                       "detail": (f"攻击覆盖结论上限 {attack_ceiling}")
+                       "detail": (f"攻击覆盖结论上限 {attack_ceiling}（{version_text}）")
                                 + ("；" + "；".join(final_precondition.get("attack_reasons") or [])
                                    if final_precondition.get("attack_reasons") else "")})
-    elif phase_complete:
+    elif "attack_coverage" in delegated_inputs:
         checks.append({"id": "attack_coverage", "label": "攻击面覆盖", "status": "ok",
-                       "detail": "由三阶段闸门在 execute 收尾强制校验（台账不重复索要）"})
+                       "detail": "未单独提供攻击覆盖结论：由三阶段闸门在 execute 收尾强制校验"
+                                 "（台账不重复索要；阶段是否走完见三阶段闸门项）"})
     else:
         checks.append({"id": "attack_coverage", "label": "攻击面覆盖", "status": "missing",
                        "detail": "未提供攻击覆盖结论：无法区分「用例铺得全」与「攻击面打得深」"})
@@ -839,9 +885,20 @@ def _headline_checks(baseline, final_precondition, counts, evidence_issues,
 
     # 5) 门禁输入齐备性
     if missing_inputs:
+        detail = "本轮未提供：" + "、".join(
+            _MISSING_INPUT_LABELS.get(name, name) for name in missing_inputs)
+        if delegated_inputs:
+            detail += "；另由三阶段闸门承担（未单独提供）：" + "、".join(
+                _MISSING_INPUT_LABELS.get(name, name) for name in delegated_inputs)
         checks.append({"id": "gate_inputs", "label": "门禁输入齐备性", "status": "missing",
-                       "detail": "本轮未提供：" + "、".join(
-                           _MISSING_INPUT_LABELS.get(name, name) for name in missing_inputs)})
+                       "detail": detail})
+    elif delegated_inputs:
+        # 不压上限（职责已由 phase_gate 承担），但不得写「均已提供」——那是假事实。
+        checks.append({"id": "gate_inputs", "label": "门禁输入齐备性", "status": "ok",
+                       "detail": "三阶段闸门承担跳间校验与攻击覆盖；未单独提供："
+                                 + "、".join(_MISSING_INPUT_LABELS.get(name, name)
+                                            for name in delegated_inputs)
+                                 + "（由 phase_gate 在 submit/execute 收尾强制校验，不重复索要）"})
     else:
         checks.append({"id": "gate_inputs", "label": "门禁输入齐备性", "status": "ok",
                        "detail": "适用且须提供的门禁证据均已提供"})
@@ -849,7 +906,8 @@ def _headline_checks(baseline, final_precondition, counts, evidence_issues,
 
 
 def _build_headline(baseline, counts, executed, cases, final_precondition, ceiling,
-                    evidence_issues, flaky_cases, context, missing_inputs):
+                    evidence_issues, flaky_cases, context, missing_inputs,
+                    delegated_inputs=()):
     """首屏事实（单一来源）：完成范围、必查项状态、限档原因。
 
     为什么要有这一份：报告渲染器（render_report_html.py）与交付模板
@@ -862,7 +920,7 @@ def _build_headline(baseline, counts, executed, cases, final_precondition, ceili
     """
     read_only = context.get("dependency_mode") in {"replay", "mock"}
     checks = _headline_checks(baseline, final_precondition, counts, evidence_issues,
-                              flaky_cases, missing_inputs, read_only)
+                              flaky_cases, missing_inputs, delegated_inputs)
     planned = len(cases)
     not_run = counts.get("NOT_RUN", 0)
     blocked = counts.get("BLOCKED", 0)
@@ -953,13 +1011,16 @@ def _final_precondition(baseline, phase_state=None, attack_coverage=None,
     if attack_coverage is not None:
         out.update(_attack_precondition(attack_coverage))
     # 缺口按同一适用性判据重算：建账时未提供、收尾仍未提供的才算缺口。
-    present = dict(baseline.get("gate_inputs_present") or {})
+    # present 先按基线记录（旧基线回退推导），再用本轮实际传入的产物覆盖——
+    # 收尾补交的证据要能消掉自己的临时缺口，也不能被无关参数一笔抹平。
+    present = _gate_inputs_present(baseline)
     if phase_state is not None:
         present["phase_state"] = True
     if attack_coverage is not None:
         present["attack_coverage"] = True
-    missing = _applicable_missing(present)
-    out["missing_inputs"] = missing
+    gaps = _gate_input_gaps(present)
+    out["missing_inputs"] = gaps["missing"]
+    out["delegated_inputs"] = gaps["delegated"]
     return out
 
 
@@ -1035,16 +1096,21 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
         case_count=len(cases))
     missing_inputs = final_precondition.get("missing_inputs",
                                             baseline.get("missing_inputs") or [])
+    delegated_inputs = final_precondition.get("delegated_inputs",
+                                               baseline.get("delegated_inputs") or [])
     missing_reasons = [
         "未做%s：可选门禁输入缺失，结论上限压待核实"
         % _MISSING_INPUT_LABELS.get(name, name) for name in missing_inputs]
+    delegated_reasons = [
+        "%s 未单独提供，其职责由三阶段闸门承担（未重复索要，不压上限）"
+        % _MISSING_INPUT_LABELS.get(name, name) for name in delegated_inputs]
     # 结论上限只由 _verdict_ceiling 算一次；headline 消费这个值，不重算——
     # 首屏写的上限与台账上限必须是同一个值。
     verdict_ceiling = _verdict_ceiling(baseline, counts, executed, final_precondition)
     headline = _build_headline(baseline, counts, executed, cases, final_precondition,
                                 verdict_ceiling, evidence_issues, flaky_cases,
-                                context, missing_inputs)
-    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "missing_inputs": missing_inputs, "missing_input_reasons": missing_reasons, "final_precondition": final_precondition, "headline": headline, "verdict_ceiling": verdict_ceiling, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
+                                context, missing_inputs, delegated_inputs)
+    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "missing_inputs": missing_inputs, "missing_input_reasons": missing_reasons, "delegated_inputs": delegated_inputs, "delegated_input_reasons": delegated_reasons, "final_precondition": final_precondition, "headline": headline, "verdict_ceiling": verdict_ceiling, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
 
 
 def _load(path):

@@ -117,7 +117,9 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
 #  "role":"editor","allowed_actions":["view_list","read_dom"],"no_state_change":true}
 ```
 
-- `readonly_lead` 须同时具备 `scope` / `environment` / `role` / `allowed_actions` / `no_state_change` 五项凭据，**缺任一项从严归 `scope_change`**。
+- `readonly_lead` 须同时具备 `scope` / `environment` / `role` / `allowed_actions` / `no_state_change` 五项凭据，**缺任一项或类型取值不合格均从严归 `scope_change`**。凭据校验判类型与取值，不只判真假：`no_state_change` 必须是布尔 `true`；`allowed_actions` 必须是非空字符串数组；`scope`/`environment`/`role` 必须是非空白字符串。写成 `"false"` / `[]` / `"   "` 在真值判断下都算"已填"，而它们恰恰表示"会发生状态变化 / 没有任何已授权动作 / 范围空着"——只判真假会把一条明确写着会变化的申报放行。
+- `is_blocking()` 对 `readonly_lead` 记录还会复验 `declaration` 里的凭据：记录里的 `kind` 可被改写，宣称只读但凭据不合格的记录仍按须先批处理。
+- 只读登记的"可继续"**不是人工放行**：记录在 `auto_approval`（含 `auto: true` 与判定依据），`approval` 字段留空——后者只记人工放行的 `by`/`at`/`note`，两者混同会让审计分不清哪些结论走的是人工闸门。
 - 申报命中 `writes` / `role_change` / `environment_change` / `over_budget` / `unknown_attributes` / `incomplete_evidence` 任一信号 → 直接归 `scope_change`，**即使只读凭据齐备**。
 - **`path_type`、HTTP 方法或"未看到写操作"单独都不是只读凭据**——凭"看着像只读"放行，等于把先批后动变成先做后说。
 - 不传 `--declaration`（或声明里没有有效 `kind`）→ 从严按 `scope_change` 处理（保留旧行为，不放宽）。

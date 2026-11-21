@@ -53,6 +53,14 @@ import re
 import sys
 from pathlib import Path
 
+# 产物版本戳：归档复算时要能回答「这条结论是哪个判据版本判的」。
+# v1.45 把「假设缺结果」从"不算未打破"收紧为缺口，同一份台账在旧版判「通过」、
+# 新版判「待核实」——没有版本戳就无法区分"当时就是这么判的"与"新版本重判的"。
+COVERAGE_SCHEMA = "attack-coverage/1"
+# 判据口径版本：任何影响 verdict_ceiling / gaps / notices 的改动都要 +1。
+# 只改输出字段（不影响判定）不 bump——版本号表达的是"判定规则变没变"。
+TOOL_VERSION = "2"
+
 # 路径类型：positive 表示"确认功能可用"，其余全部是攻击维度（非正向）。
 ATTACK_PATH_TYPES = (
     "boundary",          # 边界/极值/超长/空值
@@ -1071,6 +1079,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                        "下一轮该风险面不会有假设，发现会被丢掉"})
 
     return {
+        "schema": COVERAGE_SCHEMA,
+        "tool_version": TOOL_VERSION,
         "total": total,
         "path_type": {**path_counts, "unknown": path_unknown},
         "path_type_groups": {name: sum(path_counts[k] for k in keys)
@@ -1132,8 +1142,10 @@ def _emit_csv(result, path):
             rows.append({"section": key, "metric": name, "value": value})
     for name in ("total", "attack_density", "density_threshold", "surf_linked",
                  "surf_linkage_rate", "method_missing", "method_diversity",
-                 "probes_total", "surfaces_beyond_plan", "verdict_ceiling"):
-        rows.append({"section": "summary", "metric": name, "value": result[name]})
+                 "probes_total", "surfaces_beyond_plan", "verdict_ceiling",
+                 "tool_version"):
+        # 版本键用 get：产物一旦缺该键（旧版结果被复用），CSV 应留空而不是整条崩掉。
+        rows.append({"section": "summary", "metric": name, "value": result.get(name, "")})
     for name, value in result["hypotheses"].items():
         rows.append({"section": "hypothesis", "metric": name, "value": value})
     for name, value in result["path_type_groups"].items():

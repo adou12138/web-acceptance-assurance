@@ -276,6 +276,87 @@ class MatrixSummaryContract(MatrixBase):
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
         return proc, out_csv
 
+    def _fixtures_dir(self):
+        """本地合成夹具目录：答案键与已知反例条数可精确控制。"""
+        path = self.folder / "fixtures"
+        if not path.exists():
+            path.mkdir()
+            for name, severity, near_count in (
+                    ("f1", self.severity, 2), ("f2", self.severity2, 1)):
+                payload = {
+                    "hidden_answers": [{"id": aid, "severity": sev}
+                                       for aid, sev in severity.items()],
+                    "legit_near_misses": [{"id": f"NM-{i}", "category": "c"}
+                                          for i in range(1, near_count + 1)],
+                }
+                (path / f"{name}.json").write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _single_fixture_matrix(self):
+        """只含 f1 的矩阵：避免未产出结果的 f2 干扰分母断言。"""
+        matrix = json.loads(json.dumps(self.matrix))
+        matrix["fixtures"] = ["f1"]
+        matrix["repeats"] = 1
+        matrix["runs"] = [
+            {"fixture": "f1", "arm": "A", "repeat": 1, "run_id": "f1-A-1"},
+            {"fixture": "f1", "arm": "B", "repeat": 1, "run_id": "f1-B-1"},
+        ]
+        return self.write_matrix(matrix)
+
+    def test_known_near_miss_hits_are_counted_not_zero_placeholder(self):
+        """已知反例命中数必须真算；夹具里有反例却报 0，等于把「未测量」报成最好成绩。
+
+        输出形态 `0 / 40` 会被任何读者读成「已知反例零误报」。要么给真值，
+        要么给 null + 未测量说明——不允许拿常量 0 顶替。
+        """
+        matrix_path = self._single_fixture_matrix()
+        self.base_score("f1", "A", 1, [], near_misses=[], executor="exec-A")
+        self.base_score("f1", "B", 1, ["A1"], near_misses=["NM-1", "NM-2"],
+                        executor="exec-B")
+        summary = self.be.summarize_matrix(matrix_path, self.results,
+                                           fixtures_dir=self._fixtures_dir())
+        fp = summary["false_positive"]
+        self.assertEqual(fp["known_near_miss_denominator"], 2,
+                         "分母取夹具冻结的已知反例数")
+        self.assertEqual(fp["known_near_miss_hits"], 2, "分子取 score.json 的实际命中数")
+        self.assertEqual(fp["known_near_miss_rate"], 1.0)
+        self.assertTrue(fp["known_near_miss_measured"])
+        self.assertNotIn("known_near_miss_hits",
+                         [item["field"] for item in fp["not_measured"]])
+
+    def test_insufficient_evidence_is_null_when_adjudication_missing(self):
+        """没有裁定文件时，证据不足数必须是 null（未测量），不能是 0。"""
+        matrix_path = self._single_fixture_matrix()
+        self.base_score("f1", "A", 1, [])
+        self.base_score("f1", "B", 1, ["A1"])
+        summary = self.be.summarize_matrix(matrix_path, self.results,
+                                           fixtures_dir=self._fixtures_dir())
+        fp = summary["false_positive"]
+        self.assertIsNone(fp["insufficient_evidence"])
+        self.assertFalse(fp["insufficient_measured"])
+        self.assertGreater(fp["insufficient_unmeasured_runs"], 0)
+        self.assertIn("insufficient_evidence",
+                      [item["field"] for item in fp["not_measured"]])
+
+    def test_score_without_near_miss_field_marks_not_measured(self):
+        """某个 score.json 缺 near_miss_hits 字段时，整体不给数，而不是按已测部分求和。"""
+        matrix_path = self._single_fixture_matrix()
+        a = score_payload("f1-A-1", "sha-f1", self.protocol_sha, [], self.severity,
+                          executor="exec-A")
+        a.pop("near_miss_hits")
+        self.write_score("f1", "A", 1, a)
+        self.base_score("f1", "B", 1, ["A1"], near_misses=["NM-1"], executor="exec-B")
+        summary = self.be.summarize_matrix(matrix_path, self.results,
+                                           fixtures_dir=self._fixtures_dir())
+        fp = summary["false_positive"]
+        self.assertIsNone(fp["known_near_miss_hits"])
+        self.assertIsNone(fp["known_near_miss_rate"])
+        self.assertFalse(fp["known_near_miss_measured"])
+        self.assertEqual(fp["known_near_miss_denominator"], 2)
+        self.assertIn("known_near_miss_hits",
+                      [item["field"] for item in fp["not_measured"]])
+
     def test_cli_matrix_reports_invalid_pairs_and_warnings(self):
         matrix = json.loads(json.dumps(self.matrix))
         matrix["fixtures"] = ["01-boundary-form"]
