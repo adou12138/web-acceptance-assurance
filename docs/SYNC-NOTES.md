@@ -760,6 +760,7 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 - **全量回归**：`python -m pytest tests/ -q` → **755 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.45.0 基线 735 + 本轮新增 20 例）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过。
 - **二轮审核修正（以项目目的为准绳的四条）**：① N7 判定移到 ATK 轨道之后，消除「同时报结论将达通过 + ATK 未闭环」的自相矛盾误罚；② 笼统假设但结果 broken 只披露不压档（打破即产出，不因措辞笼统扣分）；③ `--atk` 传空数组等同零登记，须附理由，堵住「空文件免解释且标为已核对」的旁路；④ 高风险面判定补回 `critical`（旧版按 high/critical 取面，只判 high 会把更严的面整段漏出义务与建议）。另修 `case_data` 裸 import 为按文件路径加载，避免门禁按路径加载本脚本时导入失败。
 - **政策反转显式登记**：N6 替代旧「高风险面单一方法只提示、不压上限」口径。旧测试 `test_single_method_surface_is_disclosed_not_gated`、`test_single_method_repeat_is_notice_only` 覆盖的是低风险/未验证/多方法场景，维持只披露；全 held 的高风险单一方法面走新「解释或复打」义务。
+- **三轮复核修正（风险枚举统一）**：风险分级全项目统一为 `high/medium/low`（上游对抗 plan 契约 `adversarial_data.RISKS`、对抗门禁、探索清单、报告渲染均只认 `high`）。回退 `attack_coverage` 旧版遗留的 `critical` 死分支：`required_surfaces` 与 N6 义务、复测建议只取 `risk=high`；`critical` 不再被当作高风险面。历史条目 N6 与二轮修正④保留当时记录，口径以本条为准。新增防回归用例 `test_critical_is_not_treated_as_high_risk`。
 - **文档回链**：`agents/web-acceptance-assurance.md`、`references/execution-management.md`、`references/phase-workflow.md`、`references/browser-connection.md` 口径已同步；孤儿引用扫描为 0。
 
 ### 兼容性说明

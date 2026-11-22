@@ -25,7 +25,7 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 使用绝对路径或以专家包根为当前目录；输出父目录必须存在，拒绝覆盖。退出码0仅表示校验/导出完成，2表示数据或工具错误，不是网站质量门禁。
 
-摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录或**覆盖过薄**（同一视角的 `(page_url, state)` 单元少于 2 个）、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）、`failed_items`非空或必选质量属性未闭合时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。
+摘要另含`gate`执行门禁：`ready_pending`为仍可执行的NOT_RUN项数，`ready_high_risk`其中高风险数，`missing_views`为界面样式、交互易用性、基础无障碍、功能、性能中**没有 PASS/FAIL 实测记录**的视角，`failed_items`为状态为 FAIL 的条目，`verdict_ceiling`为当前允许的最高技术结论。`ready_pending>0`、有视角无实测记录或**覆盖过薄**（同一视角的 `(page_url, state)` 单元少于 2 个）、清单中没有任何已记录控件遍历条目（`traversal_recorded`为假，ID 前缀 `EXP-TRAV-` 且状态非 NOT_RUN）、`failed_items`非空或必选质量属性未闭合时上限为“待核实”，报告不得写“通过”；存在 FAIL 时须按缺陷必选性与闭环状态判为“不通过”或“待核实”。`traversal_pending`单列仍为 NOT_RUN 的遍历条目数。`views`保留全部记录，`executed_views`只含 PASS/FAIL，`skipped_views`只含 BLOCKED/SKIPPED——后两者**不计覆盖**，但须留痕并写明缺口。门禁只约束结论上限，不代替缺陷、断言与证据判定。探索门禁不掌握缺陷闭环信息，对 FAIL 条目只机械压到「待核实」；是否判「不通过」由裁决阶段按缺陷必选性、证据与闭环状态独立判定，不得因结论停在「待核实」就默认未闭环的 FAIL 可以放行。
 
 ### 必选质量属性逐类裁定（`attribute_rulings`）
 

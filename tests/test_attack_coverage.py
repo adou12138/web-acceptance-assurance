@@ -703,16 +703,17 @@ class ReplayObligationTests(unittest.TestCase):
         result = self._analyse(self._records(second_method=True))
         self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
 
-    def test_critical_surface_carries_the_same_obligation(self):
-        """critical 比 high 更严：只判 high 会把 critical 面整段漏出义务与建议范围。"""
+    def test_critical_is_not_treated_as_high_risk(self):
+        """风险枚举全项目统一为 high/medium/low：critical 不是合法高风险档位，
+        不进 N6 单一方法义务，也不进高风险复测建议（防枚举回退到 high/critical 双档）。"""
         result = ac.analyse(
             self._records(), plan_surfaces={"SURF-01"},
             plan_risks={"SURF-01": "critical"},
             residual_note={"items": [{"id": "SURF-01", "status": "unbroken"}]},
             atk_absent_reason=NO_ATK_REASON)
-        self.assertIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
-        self.assertEqual(result["high_risk_single_method_surfaces"], ["SURF-01"])
-        self.assertEqual(result["retest_suggestions"][0]["risk"], "critical")
+        self.assertNotIn("surface_unreplayed_unexplained", [g["code"] for g in result["gaps"]])
+        self.assertEqual(result["high_risk_single_method_surfaces"], [])
+        self.assertEqual(result["retest_suggestions"], [])
 
 
 if __name__ == "__main__":

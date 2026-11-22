@@ -880,7 +880,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                 "结论全靠自证或未声明，无法排除同源假绿"})
     # —— 失效假设：替代"配额"的核心判据 ——
     required_surfaces = {s for s, risk in (plan_risks or {}).items()
-                         if str(risk).strip().lower() in ("high", "critical")}
+                         if str(risk).strip().lower() == "high"}
     # 覆盖 = 有结果 + 独立判据 + 有证据的假设。只写了一句预测不算覆盖——
     # 缺结果、缺独立通道、缺证据任一都撑不起"这个面被打过"。
     covered = {s for s, b in per_surf.items() if b["supported"] > 0}
@@ -940,9 +940,9 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     # 要么追加一条不同方法的探针（记录 hypothesis + 结果），要么提交点名该面的
     # 不复打理由（--replay-note）。两者皆无才压上限；这不是方法多样性配额，
     # 不要求凑够 N 种方法，只要求对「为什么不复打」给出可核对回应。
-    # 两件事分开：**建议**与**披露**覆盖全部高风险面（含 critical，比 high 更严，
-    # 漏掉它等于只拦次严重的面），**义务**同样落在这些面上（N6）。
-    # 未定级面不在 required_surfaces 内，由 single_method_surface 泛提示另作披露。
+    # 建议、披露与义务都落在高风险面（risk=high，枚举与对抗 plan / 探索清单一致：
+    # high/medium/low）。未定级面不在 required_surfaces 内，由 single_method_surface
+    # 泛提示另作披露。
     single_method_all = []
     for surf in sorted(required_surfaces):
         bucket = per_surf.get(surf)
@@ -961,10 +961,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             "observations": bucket["observations"][:5],
             "existing_paths": sorted(bucket["paths"]),
         })
-    # high 与 critical 都算高风险面：旧版按 required_surfaces（high/critical）取面，
-    # 只判 "high" 会把 critical 面整段漏出义务与建议范围。
-    single_method_high_risk = [
-        i for i in single_method_all if i["risk"] in ("high", "critical")]
+    # required_surfaces 已只取 risk=high；medium/low/未定级不进单一方法义务判定。
+    single_method_high_risk = single_method_all
     replay_notes = replay_notes or {}
 
     def _needs_replay(item):
@@ -1171,11 +1169,10 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
     for item in single_method_all:
         used_methods = set(item["method"])
         used_paths = set(item["existing_paths"])
-        label = "关键" if item["risk"] == "critical" else "高"
         retest_suggestions.append({
             "surface": item["surface"],
             "risk": item["risk"],
-            "reason": f"{label}风险面仅用单一方法，未被真正打透",
+            "reason": "高风险面仅用单一方法，未被真正打透",
             "observations": item["observations"],
             "used_methods": sorted(used_methods),
             "used_paths": sorted(used_paths),
