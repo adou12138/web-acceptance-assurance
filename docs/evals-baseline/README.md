@@ -57,7 +57,7 @@ python scripts/blind_eval.py score --run runs/01-A --fixture detection-fixtures/
 python scripts/blind_eval.py compare --a runs/01-A/score.json --b runs/02-B/score.json
 ```
 
-要点：`detection-fixtures/*.json` **含答案**，只能留在评测者手里；执行方只拿 `prepare` 产物。计分不读自报数字，分支分母只能来自答案键，证据路径必须真实存在。
+要点：`detection-fixtures/*.json` **含答案**，只能留在评测者手里；执行方只拿 `prepare` 产物。计分不读自报数字，分支分母只能来自答案键，证据路径必须真实存在。随包（插件/技能包/仓库副本）对外分发时必须排除答案夹具目录，对外归档只用 `--sanitized` 去敏件，详见 `detection-protocol.md` 的「随包分发隔离」。
 
 ## 冻结的运行矩阵（`run-matrix.json`）
 

@@ -42,8 +42,8 @@ ORACLE_SOURCES = {"REQ", "AC", "contract", "invariant", "req_issue"}
 PROBE_TYPES = {"challenge", "fault_injection", "timing", "permission",
                "visual_walkthrough", "copy_audit", "heuristic_review",
                "consistency", "regression"}
-# 方法库与坑点模板的稳定 ID（与 references/probe-playbook.md 同步）
-PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 21)}
+# 方法库与坑点模板的稳定 ID（与 references/probe-playbook.md 同步；模板编号以文档 A 节为准）
+PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 25)}
 METHOD_IDS = {"equivalence", "boundary", "decision_table", "state_transition", "combinatorial",
               "differential", "metamorphic", "fault_injection", "concurrency", "rollback",
               "visual_walkthrough", "copy_audit", "heuristic_review", "consistency_check",
@@ -178,7 +178,7 @@ def validate(plan, material_path=None, cases_json_path=None):
                 raise ValueError(f"{name}.method: 必须为方法库稳定 ID {sorted(METHOD_IDS)} 之一")
         if "playbook_ref" in item:
             if item["playbook_ref"] not in PLAYBOOK_TEMPLATES:
-                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P20 之一")
+                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P24 之一")
         methods_used.add(item.get("method"))
         templates_used.add(item.get("playbook_ref"))
 

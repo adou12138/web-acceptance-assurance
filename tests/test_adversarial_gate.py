@@ -452,3 +452,25 @@ class ScenarioGapTests(unittest.TestCase):
                                     scenarios=partial)
         self.assertEqual(result["verdict_ceiling"], "待核实")
         self.assertTrue(any("未被任何场景覆盖" in r for r in result["reasons"]))
+
+
+class CeilingSignalTests(unittest.TestCase):
+    """档位必须来自结构化 flag，不能靠扫描 reason 文案里的「待核实/不通过」反推。
+
+    文案改写（去掉档位字样）不应影响上限；守卫源码防止回退到字符串扫描。
+    """
+
+    def setUp(self):
+        self.gate = load("adv_gate_ceiling", "scripts/adversarial_gate.py")
+
+    def test_ceiling_not_derived_from_reason_string_scan(self):
+        source = (ROOT / "scripts" / "adversarial_gate.py").read_text(encoding="utf-8")
+        self.assertNotIn('"不通过" in reason', source)
+        self.assertNotIn('"待核实" in reason', source)
+
+    def test_unclosed_blocker_flag_suppresses_ceiling(self):
+        review = {"finding_id": "FIND-01", "verdict": "accepted", "severity": "blocker",
+                  "tie_to_bug": None}
+        result = self.gate.evaluate(build_plan(), [executed_event()], [review], "通过",
+                                    scenarios=build_scenarios())
+        self.assertEqual(result["verdict_ceiling"], "不通过")
