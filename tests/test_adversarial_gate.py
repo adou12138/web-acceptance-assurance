@@ -474,3 +474,69 @@ class CeilingSignalTests(unittest.TestCase):
         result = self.gate.evaluate(build_plan(), [executed_event()], [review], "通过",
                                     scenarios=build_scenarios())
         self.assertEqual(result["verdict_ceiling"], "不通过")
+
+    def test_single_method_across_high_risk_surfaces_lowers_ceiling(self):
+        # 多样性缺口（方法单一）同样必须登记待核实 flag：3 个高风险面、三条义务
+        # 都已执行且有事件佐证、场景覆盖三面，唯一缺口是方法种类不足——上限仍须压待核实。
+        plan = {
+            "schema_version": "1.0",
+            "plan_id": "ADVPLAN-DIV-01",
+            "source_fingerprints": {"material": "a" * 64, "cases_json": "b" * 64},
+            "surfaces": [
+                {"id": "SURF-01", "entry": "导出", "role": "编辑者", "state": "已加载",
+                 "data": "3 行", "dependencies": "导出服务", "failure_hypothesis": "静默失败", "risk": "high"},
+                {"id": "SURF-02", "entry": "审批", "role": "审批人", "state": "待审批",
+                 "data": "1 单", "dependencies": "审批服务", "failure_hypothesis": "状态残留", "risk": "high"},
+                {"id": "SURF-03", "entry": "列表", "role": "查看者", "state": "已加载",
+                 "data": "10 行", "dependencies": "列表服务", "failure_hypothesis": "陈旧值", "risk": "high"},
+            ],
+            "oracles": [{"id": "ORC-01", "source": "REQ", "observation_entry": "任务读回",
+                          "applicable_condition": "可用"}],
+            "obligations": [
+                {"id": "ADV-01", "surface_ref": "SURF-01", "oracle_ref": "ORC-01",
+                 "probe_type": "challenge", "budget": "1 次", "status": "executed",
+                 "method": "boundary", "playbook_ref": "P6"},
+                {"id": "ADV-02", "surface_ref": "SURF-02", "oracle_ref": "ORC-01",
+                 "probe_type": "challenge", "budget": "1 次", "status": "executed",
+                 "method": "boundary", "playbook_ref": "P7"},
+                {"id": "ADV-03", "surface_ref": "SURF-03", "oracle_ref": "ORC-01",
+                 "probe_type": "challenge", "budget": "1 次", "status": "executed",
+                 "method": "boundary", "playbook_ref": "P8"},
+            ],
+        }
+        events = [
+            {"event_id": "EVT-01", "type": "challenge", "probe_ref": "ADV-01",
+             "observation": "已挑战", "evidence_paths": ["e1.json"]},
+            {"event_id": "EVT-02", "type": "challenge", "probe_ref": "ADV-02",
+             "observation": "已挑战", "evidence_paths": ["e2.json"]},
+            {"event_id": "EVT-03", "type": "challenge", "probe_ref": "ADV-03",
+             "observation": "已挑战", "evidence_paths": ["e3.json"]},
+        ]
+        scenarios = [{"id": "SCN-ADV-01", "name": "三面组合失效", "kind": "cross_module",
+                      "surfaces": ["SURF-01", "SURF-02", "SURF-03"],
+                      "sequence": ["加载", "切换", "触发"], "expected_basis": "REQ-01"}]
+        result = self.gate.evaluate(plan, events, [], "通过", scenarios=scenarios)
+        self.assertEqual(result["verdict_ceiling"], "待核实")
+        self.assertTrue(any("方法过于单一" in r for r in result["reasons"]))
+
+    def test_every_gating_reason_carries_matching_flag(self):
+        # 不变量：evaluate 内每条带明确档位字样的压档 reason，必须登记同档位 flag；
+        # 防止以后新增压档规则时只写 reason、漏加 flag 导致上限静默变松。
+        source = (ROOT / "scripts" / "adversarial_gate.py").read_text(encoding="utf-8")
+        lines = source.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith("def evaluate("))
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("def ")),
+                   len(lines))
+        block = lines[start:end]
+        reason_wait = sum(1 for line in block
+                          if "结论上限为待核实" in line and not line.strip().startswith("#"))
+        flag_wait = sum(1 for line in block if 'ceiling_flags.append("待核实")' in line)
+        reason_fail = sum(1 for line in block
+                           if "结论上限为不通过" in line and not line.strip().startswith("#"))
+        flag_fail = sum(1 for line in block if 'ceiling_flags.append("不通过")' in line)
+        # 抽样 reason 由 extend 引入，其 flag 按 status==gap 登记，故待核实 flag 数 >= append 数
+        self.assertGreaterEqual(flag_wait, reason_wait)
+        self.assertEqual(flag_fail, reason_fail)
+        if any("reasons.extend(sampling_reasons)" in line for line in block):
+            self.assertTrue(any('sampling["status"] == "gap"' in line for line in block))
+            self.assertGreaterEqual(flag_wait, 1)

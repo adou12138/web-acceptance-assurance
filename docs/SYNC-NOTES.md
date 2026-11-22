@@ -747,13 +747,14 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 | 条目 | 变更 | 回归 |
 |---|---|---|
 | F1 | 挑刺模板枚举与模板库漂移修复：`adversarial_data.PLAYBOOK_TEMPLATES` 由 P1~P20 扩到 P1~P24，schema `pattern` 与描述同步到 P21~P24。此前状态组合/控件遍历/文案一致性/断言杀伤四类高价值探针诚实引用 P21+ 会被校验拒绝，规避方式只剩删掉模板引用，导致探针失去溯源、方法多样性失真——属惩罚诚实登记的制度性缺陷，方向与目的相反 | 3 例：P21~P24 合法通过、P25 拒绝、代码枚举与 probe-playbook.md A 节编号双向一致守卫 |
-| P2 | 历史运行产物移出版本库：`git rm --cached` 400 份 evidence JSON 与 3 份 issues/observations CSV、`api_test_report_full.json`；磁盘文件保留，依赖既有 `.gitignore` 规则不再入库。测试与脚本对这些历史产物路径零引用，清理不破坏运行期输出 | 测试零引用核验；ignore 三条规则 `check-ignore` 均命中 |
+| P2 | 历史运行产物移出版本库：`git rm --cached` 400 份 evidence JSON 与 3 份 issues/observations CSV、`api_test_report_full.json`；磁盘文件保留，依赖既有 `.gitignore` 规则（`api_test_out/` 目录 + 两份 CSV + `*_report_full.json` 共四条）不再入库。测试与脚本对这些历史产物路径零引用，清理不破坏运行期输出 | 测试零引用核验；四条 ignore 规则 `check-ignore` 均命中 |
 | P3 | 盲测答案键分发边界：`detection-protocol.md` 补「随包分发隔离」条款，`evals-baseline/README.md` 同步指引——答案夹具属评测者侧受限资料，插件/技能包/仓库副本对外分发时必须排除答案目录，执行方只拿 `prepare` 产物，对外归档只用 `--sanitized` 去敏件；答案夹具本身不移除 | 文档 |
-| 低优先 | 对抗门禁档位判定去 reason 字符串扫描：压档规则改为同时记录结构化档位 flag（待核实/不通过），上限取 flag 最严值；不再靠扫描 reason 文案里的「待核实/不通过」字样反推。文案改写不会再误改上限 | 2 例：源码守卫（禁止回退到 `in reason` 扫描）、未闭环 blocker 仍压不通过 |
+| 低优先 | 对抗门禁档位判定去 reason 字符串扫描：压档规则改为同时记录结构化档位 flag（待核实/不通过），上限取 flag 最严值；不再靠扫描 reason 文案里的「待核实/不通过」字样反推。文案改写不会再误改上限 | 4 例：源码守卫（禁止回退到 `in reason` 扫描）、未闭环 blocker 压不通过、三高风险面单一方法压待核实、压档 reason 与 flag 一一对应不变量守卫 |
 
 ### 准出记录
 
-- **全量回归**：`python -m pytest tests/ -q` → **762 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.46.0 基线 757 + 本轮新增 5 例）；`compileall scripts` 通过。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查。
+- **全量回归**：`python -m pytest tests/ -q` → **764 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.46.0 基线 757 + 本轮新增 7 例）；`compileall scripts` 通过。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查。
+- **二轮加固（审核观察项 O1/O3）**：补多样性（方法单一）压档行为用例与「每条带档位字样的压档 reason 必须登记同档位 flag」不变量守卫，防以后新增压档规则漏标 flag 导致上限静默变松；同步修正 P2 行 ignore 规则条数表述（目录 + 两 CSV + report_full JSON 共四条）。
 - **口径不变项**：通过 < 待核实 < 不通过 的最严档位顺序不变；豁免不上抬结论上限（最高待核实）；`broken` 是产出不是违规；`not_verified` 保守登记不压档；计划外发现计为产出；方法多样性整体仍只作披露。
 - **本轮不改项**：台账 FAIL 未闭环粒度（观察项 D）为既有分层口径，保留；正式 A/B 盲测仍缺受控可运行被测应用与独立执行方，不在本轮修复范围。
 
