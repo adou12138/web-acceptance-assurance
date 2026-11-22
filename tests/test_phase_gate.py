@@ -172,6 +172,14 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.assertFalse(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "不通过")
 
+    def test_explore_fail_ceiling_propagates_not_downgraded_to_pending(self):
+        """探索清单上游判「不通过」时，档位同样保留，不被恒压成待核实。"""
+        self.finish_all()
+        self.state["phases"]["execute"]["exploration"]["ceiling"] = "不通过"
+        check = self.check()
+        self.assertFalse(check["verdict_allowed"])
+        self.assertEqual(check["phase_ceiling"], "不通过")
+
     def test_sessions_record_actual_models(self):
         self.finish_all()
         models = {item["id"]: item["model_name"] for item in self.state["sessions"]}
