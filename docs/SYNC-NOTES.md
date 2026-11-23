@@ -1356,3 +1356,17 @@ ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证�
 - 全量：`pytest tests/ -q` → **805 passed, 230 subtests passed**（v1.47.0 为 798 + 230）。
 - 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2。
 - 本版**不宣称**：跨域 iframe 的探索清单同源限制仍未放宽；`mandatory_attributes` 与 `thin_views` 并存的原始 gate 输出未改口径（报告层已消歧，门禁算法按 v1.47.0 复审决定暂缓）。
+
+## v1.47.2（2026-11-23）：跨域清单契约与多份分域 gate 补登记
+
+按 2026-11-23 问卷星星仔全能力实测后的两项遗留整改落地（v1.47.1 交付说明标「未做/待授权」，本轮用户授权两件都做并发版）。只放宽清单可表达范围与补登记通道，**不改任何判定口径、不新增测试配额**。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| G1 跨域清单契约 | `scripts/exploration_state.py`：`context` 增可选 `allowed_origins`（纯 origin 数组，无路径/查询/片段/凭据）；`page_url` 与 `target_url` 或任一同源即通过。缺省行为完全不变。`export_csv` 不把该字段展开进 CSV 行（否则 DictWriter 多余字段报错），JSON 摘要保留供审阅识别跨域清单 | `CrossOriginContractTests` 10 项（旧清单零回归、跨域放行、纯 origin 校验、门禁不放宽、CSV 不展开） |
+| G2 多份分域 gate | `scripts/phase_gate.py`：`--exploration`（complete/revise）接受 JSON 数组一次登记多份分域清单。合并取最严 ceiling、合并缺口、任一份缺控件遍历即整体缺；外层 `source`/`label` 透传进 `sources` 与缺口标签供追溯；单份调用方零回归 | `MultiExplorationGateTests` 10 项（含反后门：任一份非通过不得解锁；revise 不得洗白通过） |
+| G3 契约文档 | `references/exploration-runtime.md` 字段表与同源规则同步；`references/phase-workflow.md` 写明多分域 gate 合并口径与补登不改阶段状态 | `test_reference_links` 等既有文档校验 |
+
+- 全量：`pytest tests/ -q` → **825 passed, 243 subtests passed**（v1.47.1 为 805 + 230，新增 20 项）。
+- 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2。
+- **本版不宣称**：跨域放宽只让跨域清单能表达并通过字段校验，不改变门禁算法（缺视角/FAIL/缺遍历仍压待核实）；待核实不会被补登洗成通过。本项目实测把两份分域 gate 补登后，execute 探索字段从 missing 变 provided，但整体结论仍为待核实（同会话放行 + 四视角实测缺口）。

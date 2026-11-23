@@ -465,19 +465,76 @@ def _read_json_file(path, label):
     return json.loads(target.read_text(encoding="utf-8-sig"))
 
 
-def _read_exploration_arg(path):
+def _read_exploration_arg(path, multi=False):
     """读取探索清单参数。
 
     兼容两种输入：exploration_state.summarize() 的**整份报告**（自动取 gate 字段），
-    以及直接传 gate 摘要本身。上游换用哪种都不必改命令。
+    以及直接传 gate 摘要本身。上游换用哪种都不必改命令。multi=True 时额外接受
+    JSON 数组（每份可以是整份报告或 gate 摘要），用于跨域场景的多份分域清单——
+    被测对象域与独立核验域各有自己的 target_url，无法用单份清单表达。
     """
     raw = _read_json_arg(path)
+    if isinstance(raw, list) and multi:
+        values = []
+        for index, item in enumerate(raw):
+            label = None
+            if isinstance(item, dict) and "gate" in item:
+                label = item.get("source") or item.get("label")
+                item = item["gate"]
+            if label is not None and isinstance(item, dict):
+                item = dict(item, _source_label=str(label))
+            values.append(item)
+        return values
     if isinstance(raw, dict) and "gate" in raw:
         return raw["gate"]
     return raw
 
 
 def _exploration_check(gate):
+    """探索清单检查入口：单份 gate 走既有判定，多份逐份判定后合并。
+
+    跨域场景（Agent 在 A 域、独立核验页在 B 域）无法用一份同源清单表达，按域拆成
+    多份后必须一起登记。合并口径：取最严 ceiling、合并缺口、任何一份缺控件遍历都
+    算整体缺——绝不因为"其中一份通过"就解锁验收。每份来源原样带出供追溯。
+    """
+    if isinstance(gate, list):
+        if not gate:
+            raise ValueError("exploration gate 数组不能为空")
+        labels = [item.get("_source_label") if isinstance(item, dict) else None for item in gate]
+        checked = [_exploration_check_one(
+            {k: v for k, v in item.items() if k != "_source_label"} if isinstance(item, dict) else item)
+            for item in gate]
+        ceiling = "通过"
+        for item in checked:
+            ceiling = _strictest(ceiling, item["ceiling"])
+        gaps, reasons, sources = [], [], []
+        for index, item in enumerate(checked):
+            label = labels[index]
+            tag = f"[{index + 1}{':' + label if label else ''}]"
+            for gap in item["gaps"]:
+                gaps.append(f"{tag} {gap}")
+            reasons.extend(f"{tag} {reason}" for reason in item["reasons"])
+            source = {"index": index + 1, "ceiling": item["ceiling"],
+                      "gaps": item["gaps"], "message": item.get("message")}
+            if label:
+                source["source"] = label
+            sources.append(source)
+        if ceiling != "通过" and not gaps:
+            gaps.append("多份探索清单均未给出可核对缺口")
+        return {"state": "provided", "ceiling": ceiling,
+                "traversal_recorded": all(item["traversal_recorded"] for item in checked),
+                "mandatory_attributes": {}, "gaps": gaps,
+                "message": "多份分域探索清单合并判定：" + "；".join(
+                    f"[{i + 1}{':' + labels[i] if labels[i] else ''}]{item['ceiling']}"
+                    for i, item in enumerate(checked)),
+                "reasons": [] if ceiling == "通过" else
+                           [f"多份探索清单不达标（{ceiling}）：{'；'.join(gaps)}"],
+                "sources": sources}
+
+    return _exploration_check_one(gate)
+
+
+def _exploration_check_one(gate):
     """执行阶段收尾时的探索清单检查（scripts/exploration_state.py 的 gate 摘要）。
 
     存在目的：SKILL 与 exploration-runtime.md 把「从未生成 exploration.json 的批次不得
@@ -1372,6 +1429,7 @@ def main(argv=None):
                    help="attack_coverage.py 结论输出；execute 阶段收尾必填，缺失则结论上限压待核实")
     p.add_argument("--exploration",
                    help="exploration_state.summarize() 输出的 gate 字段（或整份报告，自动取 gate）；"
+                        "可传 JSON 数组登记多份分域清单（取最严 ceiling、缺口合并）；"
                         "execute 阶段收尾提供，缺失则告警并压结论上限")
     p.add_argument("--artifact", action="append", dest="artifacts", default=None,
                    help="本阶段产物路径，可重复；登记后交接包「本阶段产物」才列得出来")
@@ -1388,7 +1446,8 @@ def main(argv=None):
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
     p.add_argument("--attack-coverage", help="补正用的 attack_coverage.py 结论")
-    p.add_argument("--exploration", help="补正用的 exploration gate（或整份报告，自动取 gate）")
+    p.add_argument("--exploration", help="补正用的 exploration gate（或整份报告，自动取 gate）；"
+                   "可用 JSON 数组一次补登多份分域清单（取最严 ceiling、缺口合并）")
     p.add_argument("--allow-relax", action="store_true",
                    help="允许把未通过结论升级为「通过」。默认禁止；仅在补齐探针后重跑门禁"
                         "确实得「通过」时使用，note 须写明依据——history 的 transitions 字段留痕")
@@ -1473,14 +1532,14 @@ def main(argv=None):
         elif args.command == "complete":
             complete(state, args.phase, args.note, args.session,
                      _read_json_arg(args.attack_coverage),
-                     exploration=_read_exploration_arg(args.exploration),
+                     exploration=_read_exploration_arg(args.exploration, multi=True),
                      artifacts=args.artifacts,
                      assumptions=args.assumptions,
                      regression=args.regression)
         elif args.command == "revise":
             revise(state, args.phase,
                    attack_coverage=_read_json_arg(args.attack_coverage),
-                   exploration=_read_exploration_arg(args.exploration),
+                   exploration=_read_exploration_arg(args.exploration, multi=True),
                    note=args.note, session=args.session,
                    allow_relax=args.allow_relax)
         elif args.command == "amend":

@@ -56,13 +56,13 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 `cells` 取 1~2 的整数；不写则默认 2。
 
-根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`。每个item必填：
+根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`，可选`allowed_origins`（纯origin数组，无路径/查询/片段/凭据）：被测对象跨域嵌入时（如 Agent 会话在 A 域、独立核验页在 B 域），把额外允许的域写进来，`page_url` 与 `target_url` 或任一同源即通过；缺省时仍锁 `target_url` 同源，旧清单行为不变。该字段只放宽清单可表达范围，不改变门禁算法，且随 JSON 摘要带出供审阅识别跨域清单（CSV 视图不展开）。每个item必填：
 
 | 字段 | 约束 |
 |---|---|
 | id | 清单内唯一稳定ID，字符集为字母数字及`_.:-`，首字符字母数字 |
 | requirement_ids | 非空且无重复ID数组；只校验格式，不加载外部REQ目录验证存在性 |
-| page_url | 无凭据的绝对http/https，与target_url同协议、主机和有效端口 |
+| page_url | 无凭据的绝对http/https，与target_url（或context.allowed_origins任一项）同协议、主机和有效端口 |
 | role / viewport / state / action | 非空字符串，写真实角色、视口、状态及拟做/已做动作 |
 | risk | high / medium / low；具体风险依据记录在场景/manifest |
 | status | NOT_RUN / PASS / FAIL / BLOCKED / SKIPPED |

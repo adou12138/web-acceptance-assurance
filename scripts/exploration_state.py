@@ -14,8 +14,12 @@ API：summarize(data) 严格校验并返回派生摘要；export_csv(data, outpu
  全局唯一；数组不能重复。引用只校验形状，未加载外部需求/用例目录，不证明其存在。
 属性允许 functional/visual/usability/accessibility/performance/security/reliability/
 compatibility/content。其中 security/compatibility/content 为必选质量属性，被阻塞/未执行会压低结论上限。
-URL 限无用户信息的绝对 http/https，page_url 与 target_url 同源
-（协议、主机、有效端口）。不解析跳转、不执行 action、不验证浏览器最终访问地址。
+URL 限无用户信息的绝对 http/https。page_url 默认须与 target_url 同源（协议、主机、
+有效端口）；被测对象跨域嵌入时，context 可选 allowed_origins 声明额外允许的 origin
+（无路径/查询/片段/凭据的 http/https），page_url 与其中任一同源即通过。跨域声明只放宽
+清单可表达的范围，不改变门禁算法：缺视角、FAIL、无控件遍历仍压结论上限。allowed_origins
+随 context 原样带进 JSON 摘要（不展开到 CSV 行），便于审阅时识别跨域清单。
+不解析跳转、不执行 action、不验证浏览器最终访问地址。
 
 PASS/FAIL 必须有非空观察和绝对存在的本地证据文件；每次派生时重新读取并计算
 SHA-256，只记录当前内容指纹，不声称判断内容真实性或发现历史篡改。BLOCKED/
@@ -333,10 +337,25 @@ def summarize(data):
                 raise ValueError(f"{name}.cells: 必须为 1~{MIN_VIEW_CELLS} 的整数（缩小覆盖下限须留痕）")
             _text(scope["reason"], name + ".reason")
     context = data["context"]
-    _object(context, {"target_url", "application_version", "environment"}, set(), "context")
-    for key in context:
+    _object(context, {"target_url", "application_version", "environment"},
+            {"allowed_origins"}, "context")
+    for key in ("target_url", "application_version", "environment"):
         _text(context[key], "context." + key)
     origin = _origin(context["target_url"], "context.target_url")
+    # 跨域清单：allowed_origins 里的每项必须是"纯 origin"（无路径/查询/片段/凭据），
+    # 否则一条带路径的 URL 会把看似"同源"实则不同页面的记录混进同一清单，放宽变成漏报。
+    allowed_origins = set()
+    if "allowed_origins" in context:
+        values = context["allowed_origins"]
+        if not isinstance(values, list):
+            raise ValueError("context.allowed_origins: 必须为数组")
+        for index, value in enumerate(values):
+            name = f"context.allowed_origins[{index}]"
+            parsed = _origin(value, name)
+            parts = urlsplit(value)
+            if parts.path not in ("", "/") or parts.query or parts.fragment:
+                raise ValueError(f"{name}: 只允许纯 origin（不得含路径、查询或片段）")
+            allowed_origins.add(parsed)
     if not isinstance(data["items"], list):
         raise ValueError("items: 必须为数组")
     rows, seen = [], set()
@@ -356,8 +375,9 @@ def summarize(data):
             _text(item[key], name + "." + key)
         if item["risk"] not in RISKS or item["status"] not in STATUSES:
             raise ValueError(f"{name}: 无效的风险或状态")
-        if _origin(item["page_url"], name + ".page_url") != origin:
-            raise ValueError(f"{name}.page_url: 必须与 target_url 同源")
+        page_origin = _origin(item["page_url"], name + ".page_url")
+        if page_origin != origin and page_origin not in allowed_origins:
+            raise ValueError(f"{name}.page_url: 必须与 target_url 或 context.allowed_origins 同源")
         for key in ("observation", "blocked_reason"):
             _text(item[key], name + "." + key, False)
         if "falsify_action" in item:
@@ -418,12 +438,15 @@ def export_csv(data, output):
         raise ValueError("输出必须为 CSV，父目录必须已存在")
     fields = ["view", "id", "requirement_ids", "case_id", "target_url", "application_version", "environment", "page_url", "role", "viewport", "state", "action", "risk", "status", "attributes", "observation", "evidence_paths", "evidence", "blocked_reason", "side_effect_pending"]
     indexed = {row["id"]: row for row in report["items"]}
+    # allowed_origins 属于清单 context，不是逐项列；展开进 CSV 会让 DictWriter 因多余
+    # 字段报错。JSON 摘要仍保留它供审阅识别跨域清单，CSV 视图按固定列输出。
+    csv_context = {k: v for k, v in report["context"].items() if k != "allowed_origins"}
     with output.open("x", encoding="utf-8-sig", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for view, ids in report["views"].items():
             for ident in ids:
-                row = dict(indexed[ident], view=view, **report["context"])
+                row = dict(indexed[ident], view=view, **csv_context)
                 for key in ("requirement_ids", "attributes", "evidence_paths", "evidence", "side_effect_pending"):
                     row[key] = json.dumps(row[key], ensure_ascii=False, allow_nan=False)
                 for key, value in row.items():
