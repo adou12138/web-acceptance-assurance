@@ -76,8 +76,17 @@ SCOPE = "仅清单进度与人工下一步候选；不判定业务或总体门�
 def _object(value, required, optional, name):
     if not isinstance(value, dict):
         raise ValueError(f"{name}: 必须为对象")
-    if set(value) - required - optional or required - set(value):
-        raise ValueError(f"{name}: 缺少必填字段或包含未知字段")
+    missing = sorted(required - set(value))
+    unknown = sorted(set(value) - required - optional)
+    if missing or unknown:
+        # 缺字段与多余字段必须分别点名：合并成一句「缺少必填字段或包含未知字段」时，
+        # 执行者无法判断该补哪个字段，只能回头读源码定位（实测阻塞点）。
+        parts = []
+        if missing:
+            parts.append(f"缺字段 {missing}")
+        if unknown:
+            parts.append(f"未知字段 {unknown}")
+        raise ValueError(f"{name}: " + "；".join(parts))
 
 
 def _text(value, name, nonempty=True):

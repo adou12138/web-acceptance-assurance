@@ -74,6 +74,25 @@
 - 报告中另有各数据集门禁自身的判定（如「门禁自身结论上限」）。那是门禁单项结论，**不是**技术结论上限；两者冲突时以首屏为准，并写明差异原因。
 - **`headline.schema` 与渲染器要求不符**（旧版或更新版摘要）时，渲染器一律回退推断并在首屏标注版本不符，不按当前口径硬读旧字段——字段语义会随版本变，硬读会得出"看起来合规"的错结论。手写交付物同样不得引用版本不符的摘要数值。
 
+## 0.4 产物与消费脚本对照
+
+同一流程阶段的"结论"有多份产物，字段集互不兼容；写错文件往往不报错，只会静默产出空结果。落盘前按下表确认目标文件与消费方。
+
+| 阶段 | 产物文件 | 字段集要点 | 消费方 |
+|---|---|---|---|
+| 采集 | `collection.jsonl` / 台账 `events.jsonl` | 只写观察，禁止判定字段 | `phase_gate.py scan-collection`、`attack_coverage.py --ledger` |
+| 对抗计划 | `adversarial-plan.json` | `SURF-` 风险面与 `hypothesis` | `attack_coverage.py --plan` |
+| 攻击覆盖结论 | `attack-coverage.json` | `verdict_ceiling` / `gaps` / `notices` | `phase_gate.py complete --attack-coverage` |
+| 残余风险声明 | `residual-declaration.json` | `items:[{id,status}]`，status∈unbroken/broken/not_verified | `attack_coverage.py --residual-declaration` |
+| 探索清单 | `exploration.json` | `schema_version` / `context` / `items[]` / `attribute_rulings` | `exploration_state.py`、`phase_gate.py complete --exploration` |
+| 探索门禁结论 | 探索清单输出的整份报告（含顶层 `gate`） | `gate.verdict_ceiling` / `missing_views` / `thin_views` / `view_cells` | `phase_gate.py complete --exploration`、`render_report_html.py --dataset` |
+| 裁决条目 | `findings.jsonl` | `classification` / `evidence_grade` / `page_observed` / `observed_*` | `phase_gate.py check-adjudication` |
+| 候选复核记录 | `reviews.jsonl` | `finding_id` / `verdict`（accepted/rejected/unresolved），须配 `--events` | `finding_summary.py --reviews` |
+| 风险假设清算 | `assumptions.json` | `reviewed` / `items[].result`∈confirmed/refuted/open | `phase_gate.py check-verdict --assumptions` |
+| 回归影响面 | `regression.json` | `changed_areas` / `candidates[].basis` / `no_impact_reason` | `phase_gate.py check-verdict --regression` |
+
+`findings.jsonl`（裁决结论）与 `reviews.jsonl`（候选复核记录）字段集不同：前者供 `check-adjudication` 做诚实性校验，后者供 `finding_summary.py` 聚类。用错文件不会报错，只会聚出 0 簇。
+
 ## 1. 新需求分析
 
 | REQ ID | 来源 | 新增/修改点 | 旧行为→新行为 | 角色/入口/开关 | 业务规则 | 影响模块 | 确认状态/歧义 |

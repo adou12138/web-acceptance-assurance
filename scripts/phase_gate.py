@@ -455,6 +455,16 @@ def _read_json_arg(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _read_json_file(path, label):
+    """读取须登记的 JSON 产物；文件不存在或不是绝对路径时直接拒绝。"""
+    text = _text(path, label)
+    target = Path(text)
+    if not target.is_absolute() or not target.is_file():
+        raise ValueError(f"{label} 产物不存在或不是绝对路径：{text}"
+                         "（只认真实文件，占位路径不算已登记）")
+    return json.loads(target.read_text(encoding="utf-8-sig"))
+
+
 def _read_exploration_arg(path):
     """读取探索清单参数。
 
@@ -625,7 +635,7 @@ def revise(state, phase, attack_coverage=None, exploration=None, note=None, sess
 
 
 def complete(state, phase, note=None, session=None, attack_coverage=None,
-             exploration=None, artifacts=None):
+             exploration=None, artifacts=None, assumptions=None, regression=None):
     session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "in_progress":
@@ -642,6 +652,22 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
                                 ("--exploration", exploration)) if v is not None]
         raise ValueError(f"{' / '.join(extra)} 只对 execute 阶段生效（当前 phase={phase}）："
                          "这两个结论是执行期的机械检查，check_verdict 只读 execute")
+    # 裁决前置的两份清单：允许在 execute 收尾时提前登记，让「终检会索要什么」在检查点
+    # 就可见。此前只有 check_verdict 才索要，执行期结束毫无提示，被迫在下一会话补登
+    # ——与「每阶段停会话换模型」直接冲突。登记只做结构校验，不替代终检的独立判断：
+    # 终检仍以自身入参为准，登记过不代表假设已证伪、影响面已评估。
+    for name, raw, checker in (("assumptions", assumptions, _assumption_reasons),
+                               ("regression", regression, _regression_reasons)):
+        if raw is None:
+            continue
+        if phase == "plan":
+            raise ValueError(f"{name} 只对 execute/adjudicate 阶段生效"
+                             "（裁决前置清单须在执行产出后登记）")
+        payload = _read_json_file(raw, name)
+        problems = checker(payload, structure_only=True)
+        if problems:
+            raise ValueError(f"{name} 结构不合规，未登记：{problems[0]}")
+        entry[name] = {"registered": True, "path": str(Path(raw).resolve()), "at": _now()}
     # 产物归属：此前 complete 不接受 --artifact，plan.artifacts 恒为 []，交接包「本阶段
     # 产物」输出「（未登记产物路径）」——交接包让下一会话看不到上一阶段交了什么；而
     # submit 下一阶段时登记的文件被记到下一阶段名下，产物跨阶段串账。
@@ -663,6 +689,24 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
     _record(state, "complete", phase, {"note": note, "session": session,
                                        "artifacts": len(artifacts or [])})
     return state
+
+
+def _pending_verdict_inputs(state):
+    """裁决终检将索要、但尚未登记的前置清单。
+
+    这两份清单此前只在 check_verdict 才被索要，执行期结束没有任何提示，补登只能
+    发生在下一会话——与「每阶段停会话换模型」直接冲突。交接包显式列出它们，让下
+    一会话在开工前就知道要交什么；登记与否不影响终检的独立判定。
+    """
+    labels = (("assumptions", "风险假设清算（check-verdict --assumptions）"),
+              ("regression", "回归影响面结论（check-verdict --regression）"))
+    pending = []
+    for name, label in labels:
+        registered = any((state["phases"][phase].get(name) or {}).get("registered")
+                         for phase in PHASES)
+        if not registered:
+            pending.append(label)
+    return pending
 
 
 def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=None):
@@ -712,6 +756,7 @@ def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=Non
                           "model_hint": ROUTING[nxt]["model_hint"]} if nxt else None),
         "artifacts": entry.get("artifacts") or [],
         "extra_artifacts": artifacts,
+        "pending_inputs": _pending_verdict_inputs(state),
         "note": (note.strip() if isinstance(note, str) and note.strip() else None),
         "created_at": _now(),
         "resume_command": (f"python scripts/phase_gate.py resume {phase}-state --phase {nxt} "
@@ -756,6 +801,11 @@ def _render_handoff_md(handoff):
     lines += ["## 本阶段产物", ""]
     items = (handoff.get("artifacts") or []) + (handoff.get("extra_artifacts") or [])
     lines += [f"- `{item}`" for item in items] or ["- （未登记产物路径）"]
+    pending_inputs = handoff.get("pending_inputs") or []
+    if pending_inputs:
+        lines += ["", "## 下一阶段需提交的前置清单", "",
+                  "裁决终检会索要以下输入，本阶段尚未登记；下一会话须先补齐再给技术结论：", ""]
+        lines += [f"- {item}" for item in pending_inputs]
     if handoff.get("note"):
         lines += ["", "## 交接说明", "", handoff["note"]]
     lines += [
@@ -963,14 +1013,19 @@ def _routing_warnings(state):
     return warnings
 
 
-def _assumption_reasons(payload):
+def _assumption_reasons(payload, structure_only=False):
     """风险假设清算：假设必须逐条给出证伪动作与结果，未证伪的必须留成显式风险。
 
     只有需求可疑点有机械门禁是不够的——「应该没问题」「暂不涉及」这类判断如果不需要
     落成可证伪条目，就会一直停在文字里，既不验证也不登记缺口。空清单允许，但必须
     显式声明 reviewed=true，避免"没写"与"没有"被混为一谈。
+
+    structure_only=True 时只校验结构（字段齐备、result 取值合法），不因 result=open
+    报错——那是「假设尚未证伪」的内容状态，允许提前登记，但会压结论上限。
     """
     if payload is None:
+        if structure_only:
+            return []
         return ["未提供风险假设清算（check-verdict --assumptions）："
                 "无法区分「本来没有假设」与「没审」"]
     if not isinstance(payload, dict):
@@ -992,18 +1047,25 @@ def _assumption_reasons(payload):
             continue
         result = item["result"]
         if result == "open":
+            if structure_only:
+                continue
             reasons.append(f"风险假设 {item['id']} 仍未证伪（result=open）：{item['assumption']}")
         elif result not in {"confirmed", "refuted"}:
             reasons.append(f"风险假设 {item['id']} 的 result 必须为 confirmed/refuted/open")
     return reasons
 
 
-def _regression_reasons(payload):
+def _regression_reasons(payload, structure_only=False):
     """回归影响面：有变更就得有回归候选，或者写明为什么认为无影响。
 
     变更 → 依赖 → 旅程 → 用例这条链此前只存在于文档：不生成回归清单也能拿到"通过"。
+
+    structure_only=True 时只校验结构（候选带依据），不因"有变更面却无候选"报错——
+    那是内容缺口，允许提前登记，但会在裁决终检压结论上限。
     """
     if payload is None:
+        if structure_only:
+            return []
         return ["未提供回归影响面结论（check-verdict --regression）："
                 "「本次改动是否破坏旧功能」没有机械要求"]
     if not isinstance(payload, dict):
@@ -1014,14 +1076,19 @@ def _regression_reasons(payload):
         raise ValueError("regression 的 changed_areas/candidates 必须为数组")
     reason = str(payload.get("no_impact_reason") or "").strip()
     if changed and not candidates and not reason:
+        if structure_only:
+            return []
         return [f"声明了 {len(changed)} 个变更面但回归候选为空，且未写 no_impact_reason："
                 "影响面未被评估"]
     if changed and candidates:
         empty_basis = [str(c.get("id") or "?") for c in candidates
                        if not isinstance(c, dict) or not str(c.get("basis") or "").strip()]
         if empty_basis:
+            # 候选缺依据是结构问题：两种口径下都阻断登记
             return [f"回归候选缺依据（basis，指向依赖/旅程来源）：{empty_basis[:5]}"]
     if not changed and not reason:
+        if structure_only:
+            return []
         return ["未声明变更面（changed_areas 空）且未写 no_impact_reason"]
     return []
 
@@ -1308,6 +1375,11 @@ def main(argv=None):
                         "execute 阶段收尾提供，缺失则告警并压结论上限")
     p.add_argument("--artifact", action="append", dest="artifacts", default=None,
                    help="本阶段产物路径，可重复；登记后交接包「本阶段产物」才列得出来")
+    p.add_argument("--assumptions",
+                   help="风险假设清算 JSON 路径；execute/adjudicate 阶段可提前登记，"
+                        "让裁决终检的前置要求在检查点就可见（登记不等于已证伪）")
+    p.add_argument("--regression",
+                   help="回归影响面结论 JSON 路径；同上（登记不等于已评估）")
 
     p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）")
     p.add_argument("state")
@@ -1402,7 +1474,9 @@ def main(argv=None):
             complete(state, args.phase, args.note, args.session,
                      _read_json_arg(args.attack_coverage),
                      exploration=_read_exploration_arg(args.exploration),
-                     artifacts=args.artifacts)
+                     artifacts=args.artifacts,
+                     assumptions=args.assumptions,
+                     regression=args.regression)
         elif args.command == "revise":
             revise(state, args.phase,
                    attack_coverage=_read_json_arg(args.attack_coverage),

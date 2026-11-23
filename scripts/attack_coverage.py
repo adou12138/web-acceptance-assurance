@@ -996,7 +996,9 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         gaps.append({"code": "surface_unreplayed_unexplained",
                      "message": f"{len(unreplayed_unexplained)} 个高风险面单一方法且结果全部 held，"
                                 f"既未换方法复打也未提交不复打理由：{detail}"
-                                "（须追加不同方法探针并记录假设/结果，或 --replay-note 点名该面并引用既有观察）"})
+                                "（须追加不同方法探针并记录假设/结果，或 --replay-note 点名该面并引用既有观察）"
+                                "；--replay-note 传的是 JSON 文件路径，不是文本，"
+                                "文件内容形如 {\"SURF-01\": \"不复打理由\"}"})
 
 
     if not gaps and not (isinstance(residual_note, str) and residual_note.strip()) \

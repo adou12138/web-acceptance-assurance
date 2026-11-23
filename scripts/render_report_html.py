@@ -227,6 +227,18 @@ def build(args):
     if per_dataset_missing:
         common = set.intersection(*per_dataset_missing) if len(per_dataset_missing) > 1 else per_dataset_missing[0]
         missing_views = [view for view in VIEWS if view in common]
+    # 覆盖偏薄的视角：有台账记录但页面×状态单元不足，报告必须区分「有记录」与
+    # 「已按下限覆盖」——两者混为一谈会把「清点过控件」表述成「已验收该视角」。
+    per_dataset_thin = [set(item["gate"]["gate"].get("thin_views") or []) for item in loaded]
+    thin_views = []
+    if per_dataset_thin:
+        common_thin = (set.intersection(*per_dataset_thin)
+                       if len(per_dataset_thin) > 1 else per_dataset_thin[0])
+        thin_views = [view for view in VIEWS if view in common_thin]
+    view_cells = {}
+    for item in loaded:
+        for view, cells in (item["gate"]["gate"].get("view_cells") or {}).items():
+            view_cells.setdefault(view, set()).update(cells)
     ceilings = []
     for item in loaded:
         ceiling = item["gate"]["gate"].get("verdict_ceiling")
@@ -340,18 +352,24 @@ def build(args):
 
     add("<h2>二、五视角覆盖与门禁</h2><div class='card'>")
     add("<p class='sub'>同一记录可同时属于多个视角，因此各视角数量之和大于候选总数，这是设计如此，不是重复计数。</p>")
-    add("<table><tr><th>视角</th><th style='width:90px'>本轮条目</th><th>状态</th></tr>")
+    add("<table><tr><th>视角</th><th style='width:90px'>本轮条目</th>"
+        "<th style='width:130px'>页面×状态单元</th><th>状态</th></tr>")
     for view in VIEWS:
         count = view_counts.get(view, 0)
+        cells = len(view_cells.get(view) or ())
         if count:
-            state = "<span class='tag t-blue'>有台账记录</span>"
+            if view in thin_views:
+                state = "<span class='tag t-amber'>记录偏薄</span>"
+            else:
+                state = "<span class='tag t-blue'>有台账记录</span>"
         elif view in missing_views:
             state = "<span class='tag t-red'>本轮无记录</span>"
         else:
             state = "<span class='tag t-gray'>未纳入本次范围</span>"
-        add(f"<tr><td>{esc(view)}</td><td>{count}</td><td>{state}</td></tr>")
+        add(f"<tr><td>{esc(view)}</td><td>{count}</td><td>{cells}</td><td>{state}</td></tr>")
     add("</table>")
-    add("<div class='note'>门禁规则：可执行候选未清空、或必查视角无记录时，技术结论上限只能是「待核实」。</div>")
+    add("<div class='note'>门禁规则：可执行候选未清空、或必查视角无记录时，技术结论上限只能是「待核实」；"
+        "「记录偏薄」表示该视角有台账记录但页面×状态单元不足，相关结论不得按「已验收」表述。</div>")
     add("<h3>各数据集的门禁结果</h3><table><tr><th>数据集</th><th>候选数</th><th>待执行</th>"
         "<th>高风险待执行</th><th>缺失视角</th><th>门禁自身结论上限</th></tr>")
     for item in loaded:
@@ -439,6 +457,9 @@ def build(args):
     add("<h2>八、未测项与边界</h2><div class='card'><ul>")
     if missing_views:
         add(f"<li>以下视角本轮无台账记录：{esc('、'.join(missing_views))}，相关结论一概不成立。</li>")
+    if thin_views:
+        add(f"<li>以下视角有台账记录但覆盖偏薄（页面×状态单元不足）：{esc('、'.join(thin_views))}，"
+            "不得表述为「已验收」，只能表述为「有记录、深度不足」。</li>")
     if pending:
         add(f"<li>{pending} 项记录仍为未执行，候选未经交互复核前不能认定为缺陷。</li>")
     for entry in not_available:
@@ -463,7 +484,9 @@ def main(argv=None):
     parser.add_argument("--title", default="网站验收测试报告")
     parser.add_argument("--subject", default="")
     parser.add_argument("--dataset", action="append", default=[],
-                        help="标注::台账CSV::门禁JSON，可多次")
+                        help="标注::台账CSV::门禁JSON，可多次；门禁JSON须为探索清单门禁"
+                             "（exploration_state.py 输出的整份报告，或含顶层 gate 字段的 JSON），"
+                             "攻击覆盖结论等其它门禁产物不适用")
     parser.add_argument("--screenshot", action="append", default=[],
                         help="图片路径::标题::说明，可多次；图片以base64内联")
     parser.add_argument("--performance", action="append", default=[], help="性能摘要JSON，可多次")

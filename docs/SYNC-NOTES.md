@@ -1324,3 +1324,21 @@ ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证�
 - cache 同步：`cache/my-experts/web-acceptance-assurance/1.46.2/` 新建；
   `1.45.1/` 下 4 个启用态 `SKILL.md` 改名 `.disabled`
   （`test_skill_registration` 旧缓存禁用规则）。
+
+## v1.47.0（2026-11-23）：实测整改——Agent 专项路由、字段诊断、视角深度口径、裁决前置登记
+
+按 2026-11-23 问卷星星仔全能力测试后的专家包自审结论落地。目的锚点不变：专家作为批判者/挑刺者自主全面测试，扩大覆盖、减少漏测、如实登记不被惩罚。本版**不新增测试配额**，只修两类问题：让该测的被测到（知识路由、要求可见性），以及让按文档写的第一次就能过（字段诊断、参数措辞）。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| E07 Agent 专项路由 | `agents/web-acceptance-assurance.md` 入口判路表新增「被测对象本身是对话式 Agent / AI 助手」一行；「参考规范读取契约」把 `skills/case-generator/references/methodology/ai_feature_testing.md` 第 8 节列为该类对象的必读项（静默消息丢失双层核对、流式完成判定、同通道互证三层证据、审批与澄清驱动纪律、专属载体、不顺从自述）；`references/route-prompts.json` 增 R10 路由回归样本 | 新增 `tests/test_v147_route_and_gates.py::TestAgentSubjectRouting` 3 项 |
+| E01 字段诊断可定位 | `scripts/exploration_state.py` `_object()` 把「缺少必填字段或包含未知字段」拆成「缺字段 [...]」与「未知字段 [...]」两段并点名具体字段 | `TestFieldDiagnostics` 3 项 |
+| E03 视角深度口径 | `scripts/render_report_html.py` 消费门禁 `thin_views` 与 `view_cells`：视角表新增「页面×状态单元」列，覆盖偏薄的视角标「记录偏薄」而非「有台账记录」，未测项小节同步披露 | `TestDepthWording::test_report_marks_thin_views` |
+| E05 提示语形态 | `scripts/attack_coverage.py` `surface_unreplayed_unexplained` 缺口提示补「--replay-note 传的是 JSON 文件路径，不是文本」及文件形态 | `TestDepthWording::test_replay_note_hint_states_file_path` |
+| E06 help 措辞 | `scripts/render_report_html.py` `--dataset` help 明确门禁参数须为探索清单门禁（整份报告或含顶层 `gate` 的 JSON），并写明其它门禁产物不适用 | `TestDepthWording::test_render_help_states_gate_source` |
+| E08 产物契约对照表 | `references/output-templates.md` 新增「0.4 产物与消费脚本对照」，列明各阶段产物文件、字段集要点与消费方；主提示词指向该表 | `TestArtifactContractTable` 3 项 |
+| E04 裁决前置登记 | `scripts/phase_gate.py`：`complete` 新增 `--assumptions` / `--regression`（execute/adjudicate 阶段可提前登记，只做结构校验）；交接包新增「下一阶段需提交的前置清单」，未登记即列出；`_assumption_reasons` / `_regression_reasons` 增加 `structure_only` 口径，使 `result=open` 可登记但**不豁免终检**（登记过 ≠ 已证伪） | `TestVerdictInputRegistration` 6 项 |
+
+- 全量：`pytest tests/ -q` → **798 passed, 230 subtests passed**（v1.46.2 为 780 + 230）。
+- 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2——本版未改任何判定口径，只改诊断与呈现。
+- 本版**不宣称**：跨域 iframe 场景的探索清单同源限制未放宽（本版以分域清单 + 跨域证据关联表落地，契约未改）；界面样式/易用性/无障碍的量化检查能力未新增；A/B 检出能力未评测。

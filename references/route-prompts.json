@@ -73,6 +73,14 @@
       "expected_skill": "pipeline",
       "expected_path": "api-test（接口用例）+ main（页面五视角走查）；两者产物分别交付、不合并",
       "notes": "混合线索；验证边界互斥句生效（api 不吞需求级用例、主体不接接口契约）"
+    },
+    {
+      "id": "R10",
+      "category": "对话式 Agent 能力测试",
+      "prompt": "这个 AI 助手会自己调接口改数据，帮我测它的能力边界和异常行为",
+      "expected_skill": "main",
+      "expected_path": "主体工作流：先读 ai_feature_testing.md 第 8 节 → 能力清单 → 台账与报告",
+      "notes": "被测对象本身是 Agent/助手；须走能力清单、三层独立验证、审批驱动纪律与异常串双层核对"
     }
   ]
 }
