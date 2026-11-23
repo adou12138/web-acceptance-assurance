@@ -503,6 +503,11 @@ def _read_exploration_arg(path, multi=False):
         return values
     if isinstance(raw, dict) and "gate" in raw:
         gate = raw["gate"]
+        if gate is None or gate == {}:
+            # 与数组混入 None 同一口径：显式报错，不静默降级成"未提供"——
+            # 否则用户以为登记了清单，实际登记成 missing，只在 ceiling 上体现。
+            raise ValueError("探索清单文件的 gate 字段为空/None：未生成的清单不要登记；"
+                             "单个文件请传 summarize 输出的 gate 摘要或完整报告")
         label = raw.get("source") or raw.get("label")
         if label is not None and isinstance(gate, dict):
             gate = dict(gate, _source_label=str(label))
@@ -562,6 +567,8 @@ def _exploration_check(gate):
         gaps, sources = [], []
         # mandatory_attributes 逐键合并取最严：任一份对某属性未闭合，合并后仍视为未闭合；
         # 两份都已闭合但取值不一致时取 covered（not_applicable 是豁免，covered 是已测，取严）。
+        # 多个"未闭合"取值之间不定义先后（blocked/unresolved 都算未闭合），合并值取先遇到的
+        # 未闭合态即可——判定不受影响，因为每份的未闭合项都已逐份列入 gaps。
         closed = ("covered", "not_applicable")
         merged_attrs = {}
         for item in checked:
@@ -569,7 +576,7 @@ def _exploration_check(gate):
                 existing = merged_attrs.get(key)
                 if existing is None:
                     merged_attrs[key] = val
-                elif val not in closed:
+                elif existing in closed and val not in closed:
                     merged_attrs[key] = val
                 elif existing in closed and val == "covered":
                     merged_attrs[key] = "covered"
@@ -617,6 +624,9 @@ def _exploration_check_one(gate):
                                         "未经机械检查，已测类结论上限压待核实"]}
     if not isinstance(gate, dict):
         raise ValueError("exploration gate 必须为对象（exploration_state.summarize() 的 gate 字段）")
+    if not gate:
+        raise ValueError("exploration gate 为空对象：未生成清单不要登记，"
+                         "单个文件请传 summarize 输出的 gate 摘要或完整报告")
     ceiling = gate.get("verdict_ceiling")
     if ceiling is None and "verdict_ceiling" not in gate \
             and "schema_version" in gate and "items" in gate:

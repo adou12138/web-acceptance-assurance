@@ -314,6 +314,36 @@ class MultiExplorationGateTests(unittest.TestCase):
         self.assertIn("原始探索清单", message)
         self.assertIn("summarize", message)
 
+    def test_read_args_empty_gate_field_rejected_not_silently_missing(self):
+        """审核发现：单份文件 {"gate": None} 曾静默降级为"未提供"（state=missing），
+        用户以为登记了清单。与数组混 None 同口径：显式报错。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            for payload in [{"gate": None}, {"gate": {}}]:
+                path = Path(tmp) / "empty_gate.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(payload=payload), self.assertRaises(ValueError) as ctx:
+                    self.pg._read_exploration_args([str(path)])
+                self.assertIn("为空", str(ctx.exception))
+
+    def test_empty_object_gate_rejected_with_clear_error(self):
+        """审核发现：空对象文件 {} 仍报误导的 verdict_ceiling 非法。"""
+        with self.assertRaises(ValueError) as ctx:
+            self.pg._exploration_check({})
+        self.assertIn("为空对象", str(ctx.exception))
+
+    def test_mandatory_attributes_two_open_states_are_order_stable(self):
+        """多个未闭合态之间不定义先后：取先遇到者，结果不随顺序抖动；判定不受影响。"""
+        a = dict(self.gate_pass, mandatory_attributes={"security": "blocked"})
+        b = dict(self.gate_pass, mandatory_attributes={"security": "unresolved"})
+        forward = self.pg._exploration_check([a, b])["mandatory_attributes"]["security"]
+        backward = self.pg._exploration_check([b, a])["mandatory_attributes"]["security"]
+        self.assertEqual(forward, "blocked")
+        self.assertEqual(backward, "unresolved")
+        # 两种顺序都判未闭合（都在 gaps 里逐份列出）
+        for gates in ([a, b], [b, a]):
+            result = self.pg._exploration_check(gates)
+            self.assertTrue(any("security" in gap for gap in result["gaps"]))
+
     def test_read_args_summarize_reports_end_to_end(self):
         """CLI append 的完整数据链：两份 summarize 完整报告 → 两个 gate → 合并取最严。"""
         tool = _load("exploration_state_e2e", "exploration_state.py")

@@ -1400,3 +1400,18 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 - 全量：`pytest tests/ -q` → **830 passed, 239 subtests**（v1.47.3 条目记录的 829 passed 系 cache 未同步态下的数字，当时含 1 个 cache 态失败；同步后实际 830，本版以同步后全量为准）。
 - 端到端验证（真实项目副本）：CLI `revise` 双 `--exploration` 传 summarize 报告 → ceiling=待核实、sources=2（标签透传）、gaps=7；会话校验对无权会话正确拦截。
+
+## v1.47.5（2026-11-23）：v1.47.3/1.47.4 完整审核补漏
+
+按用户要求对该轮修改做完整审核（不依赖自述，从 diff 与行为实测重推）。回退与合并逻辑本身正确，但发现三处行为缺陷与两处记录错误：
+
+| 条目 | 发现（实测） | 修复 | 回归 |
+|---|---|---|---|
+| 单份 gate 字段为空 | `{"gate": null}` 文件静默降级为 state=missing——用户以为登记了清单，实际登记成「未提供」，与数组混 None 显式报错的口径不一致 | `_read_exploration_arg` 单 dict 分支显式报错 | `test_read_args_empty_gate_field_rejected_not_silently_missing` |
+| 空对象 gate | 空文件 `{}` 仍报误导的「verdict_ceiling 非法 got None」（v1.47.4 只识别原始清单形态） | `_exploration_check_one` 增空对象检测，报「gate 为空对象」并指路 summarize | `test_empty_object_gate_rejected_with_clear_error` |
+| 未闭合态合并顺序抖动 | `blocked + unresolved` 正反序得不同值（虽都判未闭合、判定不受影响） | 改「先到者胜」的稳定合并，注释写明多个未闭合态之间不定义先后 | `test_mandatory_attributes_two_open_states_are_order_stable` |
+| 测试数字记录错误 | v1.47.3 记 829、v1.47.4 记 830，均为 cache 未同步态下跑出的数字（含 1 failed） | 同步 cache 后全量真值 **831 passed / 239 subtests**，交付说明两处一并更正 | — |
+| cache 污染 | `cp -r` 把 `.pytest_cache` 带进 cache 1.47.4（源目录该目录未被 git 跟踪） | 已清理；后续同步排除 | — |
+
+- 审核另做实证（结论：不需要改）：回退彻底（原始清单含 allowed_origins → 未知字段拒绝；export_csv 内部先 summarize 故同样拒绝）；mandatory_attributes 三态冲突逐项正确；reasons 由 gaps 合成且非通过时必有；全仓 allowed_origins 残留仅历史记录与测试；调用方仅 phase_gate 内部两处；本项目 6 份 exploration 产物无该字段（可复现）；报告与 check-verdict（reasons=2）一致。
+- 全量：**834 passed, 241 subtests**（先同步 cache 再实测；v1.47.4 真值为 831 passed / 239 subtests，本版新增 3 测试 + 2 subtests）。
