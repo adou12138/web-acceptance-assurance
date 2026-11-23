@@ -49,8 +49,9 @@ PHASES = ("plan", "execute", "adjudicate")
 NEXT_PHASE = {"plan": "execute", "execute": "adjudicate", "adjudicate": None}
 PHASE_LABELS = {"plan": "规划与用例生成", "execute": "批量执行与状态采集",
                 "adjudicate": "结果裁决与缺陷分类"}
-# 结论上限的合法取值。三种都要认：attack_coverage 会产出「不通过」，exploration 目前
-# 只产出前两种，但把「不通过」拒之门外只会在上游改用时报一句误导性的「缺字段」。
+# 结论上限的合法取值。三种都要认：对抗门禁可产出「不通过」；attack_coverage 与
+# exploration 目前只产出「通过 / 待核实」，但把「不通过」拒之门外只会在上游改用时
+# 报一句误导性的「缺字段」。
 CEILINGS = ("通过", "待核实", "不通过")
 
 
@@ -1071,12 +1072,18 @@ def check_verdict(state, assumptions=None, regression=None):
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
         reasons.append("存在未确认的模型路由误配：阶段质量前提不成立，结论上限压待核实")
+    # 未放行时至少压到「待核实」；若上游已算出更严的「不通过」，不得降级成待核实。
+    ceiling = "待核实"
+    if attack.get("ceiling") in CEILINGS:
+        ceiling = _strictest(ceiling, attack["ceiling"])
+    if explor.get("ceiling") in CEILINGS:
+        ceiling = _strictest(ceiling, explor["ceiling"])
     allowed = not reasons
     return {
         "schema": "phase-verdict-check/1",
         "task": state.get("task"),
         "verdict_allowed": allowed,
-        "phase_ceiling": None if allowed else "待核实",
+        "phase_ceiling": None if allowed else ceiling,
         "reasons": reasons,
         "warnings": warnings,
         "phases": {phase: {"label": PHASE_LABELS[phase],

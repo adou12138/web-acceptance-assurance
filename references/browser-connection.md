@@ -14,6 +14,13 @@
 
 **默认 Chrome DevTools MCP**；用户明确要求，或既有多轮资产已按 Playwright 记录 `ref` 时才切 Playwright。切换必须在报告中留痕，并重取该通道快照——两套的 `uid`/`ref` 互不相通。
 
+**注入类挑战的通道降级路由**（与 `assertion-challenges.md` 能力表一致）：需要做请求拦截/路由替换（`page.route` + `route.fulfill` 注入已知故障）时，先探测当次通道能力——Chrome DevTools MCP 只有观测类工具（`list_network_requests`/`get_network_request`），**无 route/fulfill 能力，不能完成注入**。此时两条出路：
+
+1. 切到 Playwright MCP 执行注入挑战（切换留痕、重取快照）；
+2. 当次无法切换时，把该项按缺口四分类登记，标注「能力待探测，未实测」并附恢复条件，**不得虚构注入结果**，也不得用观测类工具回看的网络记录冒充注入证据。
+
+通道能力会随环境变化：以上结论基于 2026-11-19 实测，每次执行前仍须实测当次通道，历史结论不作保证。
+
 ## 二、连接与登录态
 
 | 连法 | 配置要点 | 适用 |

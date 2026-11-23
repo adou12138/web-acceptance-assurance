@@ -130,6 +130,37 @@ class AdversarialDataTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.tool.load(path)
 
+    def test_playbook_templates_p21_to_p24_accepted(self):
+        # P21~P24（状态组合/控件遍历/文案一致性/断言杀伤）是模板库在册模板，
+        # 诚实引用不得被枚举拒绝（此前枚举停在 P20，这四类探针无法合法登记）。
+        for template in ("P21", "P22", "P23", "P24"):
+            plan = build_plan(obligations=[
+                {"id": "ADV-01", "surface_ref": "SURF-01", "oracle_ref": "ORC-01",
+                 "probe_type": "challenge", "budget": "1 次挑战", "status": "planned",
+                 "playbook_ref": template},
+            ])
+            self.tool.validate(plan)
+
+    def test_unknown_playbook_template_rejected(self):
+        plan = build_plan(obligations=[
+            {"id": "ADV-01", "surface_ref": "SURF-01", "oracle_ref": "ORC-01",
+             "probe_type": "challenge", "budget": "1 次挑战", "status": "planned",
+             "playbook_ref": "P25"},
+        ])
+        with self.assertRaises(ValueError):
+            self.tool.validate(plan)
+
+    def test_playbook_templates_sync_with_playbook_doc(self):
+        # 文档 A 节列出的模板编号必须与代码枚举双向一致：加新模板时同步枚举，
+        # 防止模板库扩了、枚举没跟上导致诚实引用被拒。
+        doc = (ROOT / "references" / "probe-playbook.md").read_text(encoding="utf-8")
+        doc_templates = {
+            token for line in doc.splitlines()
+            if (token := line.strip().removeprefix("|").strip().split("|")[0].strip())
+            and token.startswith("P") and token[1:].isdigit()
+        }
+        self.assertEqual(self.tool.PLAYBOOK_TEMPLATES, doc_templates)
+
 
 if __name__ == "__main__":
     unittest.main()

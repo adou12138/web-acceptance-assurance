@@ -24,6 +24,8 @@ python scripts/blind_eval.py verify --run runs/01-A --fixture <同一夹具>
 
 `run.json` 记录 `fixture_sha256`、`protocol_sha256`、预算与 `executor_saw_answers=false`。执行方必须保持该字段为 false；改成 true 的运行不得计入盲测（计分直接拒绝）。
 
+**随包分发隔离**：`detection-fixtures/*.json` 是评测者侧受限资料（明文答案、匹配规则、合法反例）。把本包/仓库副本以插件、技能包、压缩包或目录形式发给执行方或使用者时，答案夹具目录必须一并排除，不得随包；执行方侧只能收到 `prepare` 生成的运行目录，对外归档只取 `--sanitized` 去敏件。含答案的完整件仅限评测者本机受限区留存。
+
 ## 二、运行治理（让"A/B 对比"真的可比）
 
 1. **同题面、同预算、同工具**：两组只允许版本不同；预算写进 `run.json`，超预算的结论单列。

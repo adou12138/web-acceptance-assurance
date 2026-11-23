@@ -489,6 +489,64 @@ def _phase_precondition(phase_state):
             "phase_reasons": reasons}
 
 
+def _write_entry_refs(entry):
+    """写台账条目的可关联引用集合（条目 ID 与显式关联字段）。"""
+    refs = {str(entry.get("id") or "")}
+    for key in ("linked_records", "linked_tc", "linked_ac", "case_id", "attempt_id"):
+        value = entry.get(key)
+        if isinstance(value, list):
+            refs.update(str(x) for x in value)
+        elif value:
+            refs.add(str(value))
+    refs.discard("")
+    return refs
+
+
+def _readonly_write_crosscheck(phase_state, write_ops_ledger):
+    """只读修订 × 写台账交叉核对（N8）。
+
+    只对**显式提供了 `linked_records`** 的 `approved_readonly` 修订做机械对账：
+    关联到写台账中 caution/danger 级别的写记录 → 压待核实并首屏披露。
+
+    不罚诚实：写台账缺失、或修订未显式关联条目 → 只披露「未做机械对账」，
+    不压上限。时间窗/会话兜底关联仅作线索，不作为压档依据。
+    """
+    out = {"state": "not_checked", "mismatches": [], "not_linked": [], "notice": None}
+    if not isinstance(phase_state, dict):
+        return out
+    readonly = [a for a in (phase_state.get("amendments") or [])
+                if isinstance(a, dict) and a.get("kind") == "readonly_lead"
+                and a.get("status") == "approved_readonly"]
+    if not readonly:
+        return out
+    if write_ops_ledger is None:
+        out["state"] = "not_checked"
+        out["notice"] = "存在 approved_readonly 修订，但未提供写操作台账，未做机械对账（只披露不压档）"
+        return out
+    entries = [e for e in (write_ops_ledger.get("entries") or []) if isinstance(e, dict)]
+    entry_refs = [(e, _write_entry_refs(e)) for e in entries]
+    not_linked, mismatches = [], []
+    for am in readonly:
+        links = {str(x) for x in (am.get("linked_records") or [])}
+        if not links:
+            not_linked.append(str(am.get("id") or "?"))
+            continue
+        for entry, refs in entry_refs:
+            if refs & links and str(entry.get("safetyLevel") or "") in ("caution", "danger"):
+                mismatches.append({"amendment": str(am.get("id") or "?"),
+                                   "write_entry": str(entry.get("id") or "?"),
+                                   "safetyLevel": str(entry.get("safetyLevel"))})
+    out["not_linked"] = not_linked
+    out["mismatches"] = mismatches
+    if mismatches:
+        out["state"] = "mismatch"
+    elif not_linked:
+        out["state"] = "not_linked"
+    else:
+        out["state"] = "ok"
+    return out
+
+
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
                adversarial_gate=None, adversarial_waiver=None, phase_state=None,
                attack_coverage=None):
@@ -785,6 +843,10 @@ def _verdict_ceiling(baseline, counts, executed, final_precondition=None):
                                             gate.get("attack_coverage_ceiling"))
     if attack_ceiling:
         ceiling = _strictest(ceiling, attack_ceiling)
+    readonly_write_ceiling = final_precondition.get("readonly_write_ceiling",
+                                                     gate.get("readonly_write_ceiling"))
+    if readonly_write_ceiling:
+        ceiling = _strictest(ceiling, readonly_write_ceiling)
     # 建账时缺失的可选输入：收尾复核后仍未补齐的，留痕并压上限。
     # 与对抗门禁缺失同口径——弱化调用不得自证通过。
     # 只压到「待核实」，不放松已算出的更严结论（上面已取过更严者）。
@@ -869,6 +931,24 @@ def _headline_checks(baseline, final_precondition, counts, evidence_issues,
     else:
         checks.append({"id": "attack_coverage", "label": "攻击面覆盖", "status": "missing",
                        "detail": "未提供攻击覆盖结论：无法区分「用例铺得全」与「攻击面打得深」"})
+
+    # 3b) 只读修订 × 写台账交叉核对（N8）：只披露显式关联的对账结果
+    rw_check = final_precondition.get("readonly_write_check") or {}
+    if rw_check.get("state") == "mismatch":
+        detail = "；".join(
+            f"{m['amendment']} 关联写记录 {m['write_entry']}（{m['safetyLevel']}）"
+            for m in rw_check.get("mismatches") or [])
+        checks.append({"id": "readonly_write", "label": "只读申报核对", "status": "limited",
+                       "detail": "只读申报与写记录不符：" + detail})
+    elif rw_check.get("state") == "not_linked":
+        checks.append({"id": "readonly_write", "label": "只读申报核对", "status": "missing",
+                       "detail": "只读修订未显式关联写记录，未做机械对账"})
+    elif rw_check.get("notice"):
+        checks.append({"id": "readonly_write", "label": "只读申报核对", "status": "missing",
+                       "detail": rw_check["notice"]})
+    elif rw_check.get("state") == "ok":
+        checks.append({"id": "readonly_write", "label": "只读申报核对", "status": "ok",
+                       "detail": "只读申报关联记录在写台账中无 caution/danger 写操作"})
 
     # 4) 证据链完整性
     if evidence_issues:
@@ -991,7 +1071,8 @@ def _build_headline(baseline, counts, executed, cases, final_precondition, ceili
 
 
 def _final_precondition(baseline, phase_state=None, attack_coverage=None,
-                        adversarial_gate=None, read_only=False, case_count=None):
+                        adversarial_gate=None, read_only=False, case_count=None,
+                        write_ops_ledger=None):
     """收尾复核：读取同轮最终产物，重算各门禁的结论上限。
 
     只重算「本轮最终产物覆盖的类别」，未提供的类别沿用建账时状态。
@@ -1010,6 +1091,10 @@ def _final_precondition(baseline, phase_state=None, attack_coverage=None,
         out.update(_phase_precondition(phase_state))
     if attack_coverage is not None:
         out.update(_attack_precondition(attack_coverage))
+    readonly_write = _readonly_write_crosscheck(phase_state, write_ops_ledger)
+    out["readonly_write_check"] = readonly_write
+    if readonly_write["state"] == "mismatch":
+        out["readonly_write_ceiling"] = "待核实"
     # 缺口按同一适用性判据重算：建账时未提供、收尾仍未提供的才算缺口。
     # present 先按基线记录（旧基线回退推导），再用本轮实际传入的产物覆盖——
     # 收尾补交的证据要能消掉自己的临时缺口，也不能被无关参数一笔抹平。
@@ -1025,7 +1110,7 @@ def _final_precondition(baseline, phase_state=None, attack_coverage=None,
 
 
 def summarize(workspace, design, context, bugs=None, phase_state=None,
-              attack_coverage=None, adversarial_gate=None):
+              attack_coverage=None, adversarial_gate=None, write_ops_ledger=None):
     baseline, cases, warnings, same = _compatible(workspace, design, context)
     bugs = _bugs(bugs)
     events = read_events(workspace)
@@ -1093,7 +1178,7 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
         baseline, phase_state=phase_state, attack_coverage=attack_coverage,
         adversarial_gate=adversarial_gate,
         read_only=context.get("dependency_mode") in {"replay", "mock"},
-        case_count=len(cases))
+        case_count=len(cases), write_ops_ledger=write_ops_ledger)
     missing_inputs = final_precondition.get("missing_inputs",
                                             baseline.get("missing_inputs") or [])
     delegated_inputs = final_precondition.get("delegated_inputs",
@@ -1147,6 +1232,8 @@ def main():
             part.add_argument("--phase-state", help="收尾复核用：同轮最终的 phase_gate.py 状态文件")
             part.add_argument("--attack-coverage", help="收尾复核用：同轮最终的 attack_coverage.py 结论输出")
             part.add_argument("--adversarial-gate", help="收尾复核用：同轮最终的 adversarial_gate.py 结论输出")
+            part.add_argument("--write-ops-ledger",
+                              help="写操作台账（figma write_ops_ledger.py 产物）；可选，仅对显式关联的只读修订对账")
     args = parser.parse_args()
     try:
         design, context = _load(args.design), _load(args.context)
@@ -1167,7 +1254,8 @@ def main():
             result = summarize(args.workspace, design, context, _load(args.bugs) if args.bugs else None,
                                phase_state=_load(args.phase_state) if args.phase_state else None,
                                attack_coverage=_load(args.attack_coverage) if args.attack_coverage else None,
-                               adversarial_gate=_load(args.adversarial_gate) if args.adversarial_gate else None)
+                               adversarial_gate=_load(args.adversarial_gate) if args.adversarial_gate else None,
+                               write_ops_ledger=_load(args.write_ops_ledger) if args.write_ops_ledger else None)
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0
     except Exception as exc:

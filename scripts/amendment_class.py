@@ -39,8 +39,10 @@ SCOPE_CHANGE_SIGNALS = (
 )
 
 # 分类契约的字段名（申报记录里用这些键）
+# `linked_records` 是可选关联字段（关联台账/写操作条目 ID 列表），不是只读凭据本身；
+# 只用于 N8 收尾对账，缺省不阻断、不压档。
 DECLARATION_FIELDS = ("kind", "scope", "environment", "role", "allowed_actions",
-                      "no_state_change") + SCOPE_CHANGE_SIGNALS
+                      "no_state_change", "linked_records") + SCOPE_CHANGE_SIGNALS
 
 
 def _nonempty_text(value):

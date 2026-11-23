@@ -493,5 +493,92 @@ class AdversarialGateDisabledTests(unittest.TestCase):
         self.assertNotIn("结论上限待核实", joined)
 
 
+class ReadonlyWriteCrosscheckTests(unittest.TestCase):
+    """N8：只读修订 × 写台账交叉核对——只压显式关联且确实不符的情形。"""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("execution_ledger_n8", SCRIPT)
+        self.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tool)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name)
+        self.workspace = self.folder / "run"
+        self.design = json.loads((ROOT / "examples" / "cases-example.json").read_text(encoding="utf-8"))
+        self.context = {"target_url": "https://example.invalid/test", "environment": "test",
+                        "application_version": "build-1", "feature_flags": {"rename": True},
+                        "role_scope": ["editor"], "dependency_mode": "sandbox"}
+        self.evidence = self.folder / "observations.txt"
+        self.evidence.write_text("Teaching fixture, not actual Web evidence", encoding="utf-8")
+        self.tool.initialize(self.workspace, self.design, self.context, "ROUND-N8", [])
+
+    def _phase_state(self, amendments):
+        return {"phases": {p: {"status": "done"} for p in ("plan", "execute", "adjudicate")},
+                "amendments": amendments}
+
+    def _readonly(self, linked=None, ident="AM-1"):
+        record = {"id": ident, "kind": "readonly_lead", "status": "approved_readonly",
+                  "scope": "查看已授权项目的列表页", "environment": "test", "role": "editor",
+                  "allowed_actions": ["view_list"], "no_state_change": True}
+        if linked is not None:
+            record["linked_records"] = linked
+        return record
+
+    def _ledger(self, entries):
+        return {"entries": entries}
+
+    def _report(self, amendments, ledger):
+        return self.tool.summarize(self.workspace, self.design, self.context,
+                                   phase_state=self._phase_state(amendments),
+                                   write_ops_ledger=ledger)
+
+    def test_linked_caution_write_lowers_ceiling_and_discloses(self):
+        ledger = self._ledger([{"id": "WO-0001", "safetyLevel": "caution",
+                                "action": "修改库存", "target": "订单 O-1", "reversible": True,
+                                "cleanup": {"method": "manual", "target": "订单 O-1"}}])
+        report = self._report([self._readonly(["WO-0001"])], ledger)
+        check = report["final_precondition"]["readonly_write_check"]
+        self.assertEqual(check["state"], "mismatch")
+        self.assertEqual(check["mismatches"][0]["write_entry"], "WO-0001")
+        self.assertEqual(report["final_precondition"]["readonly_write_ceiling"], "待核实")
+        rw_check = next(c for c in report["headline"]["required_checks"] if c["id"] == "readonly_write")
+        self.assertIn("只读申报与写记录不符", rw_check["detail"])
+
+    def test_unrelated_write_entry_is_not_mismatch(self):
+        ledger = self._ledger([{"id": "WO-0002", "safetyLevel": "caution",
+                                "action": "修改库存", "target": "订单 O-2", "reversible": True,
+                                "cleanup": {"method": "manual", "target": "订单 O-2"}}])
+        report = self._report([self._readonly(["WO-0001"])], ledger)
+        check = report["final_precondition"]["readonly_write_check"]
+        self.assertEqual(check["state"], "ok")
+        self.assertNotIn("readonly_write_ceiling", report["final_precondition"])
+
+    def test_missing_ledger_discloses_only_without_lowering(self):
+        report = self._report([self._readonly(["WO-0001"])], None)
+        check = report["final_precondition"]["readonly_write_check"]
+        self.assertEqual(check["state"], "not_checked")
+        self.assertIsNotNone(check["notice"])
+        self.assertNotIn("readonly_write_ceiling", report["final_precondition"])
+
+    def test_unlinked_amendment_discloses_only(self):
+        ledger = self._ledger([{"id": "WO-0001", "safetyLevel": "caution",
+                                "action": "修改库存", "target": "订单 O-1", "reversible": True,
+                                "cleanup": {"method": "manual", "target": "订单 O-1"}}])
+        report = self._report([self._readonly(None)], ledger)
+        check = report["final_precondition"]["readonly_write_check"]
+        self.assertEqual(check["state"], "not_linked")
+        self.assertNotIn("readonly_write_ceiling", report["final_precondition"])
+
+    def test_approved_scope_change_is_not_subject_to_readonly_check(self):
+        amendment = {"id": "AM-2", "kind": "scope_change", "status": "approved",
+                     "linked_records": ["WO-0001"]}
+        ledger = self._ledger([{"id": "WO-0001", "safetyLevel": "danger",
+                                "action": "删除数据", "target": "订单 O-1", "reversible": False}])
+        report = self._report([amendment], ledger)
+        check = report["final_precondition"]["readonly_write_check"]
+        self.assertEqual(check["state"], "not_checked")
+        self.assertNotIn("readonly_write_ceiling", report["final_precondition"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -217,6 +217,7 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
     抽中未登记且无豁免说明时压上限"待核实"；门禁关闭时抽样只作披露。
     """
     reasons, notes = [], []
+    ceiling_flags = []  # 各规则产生的结论上限档位（结构化），不靠扫 reason 文案反推
     waiver_granted = False
     surfaces = (plan or {}).get("surfaces") or []
     obligations = (plan or {}).get("obligations") or []
@@ -245,6 +246,8 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
         sampling_reasons = []
     else:
         reasons.extend(sampling_reasons)
+        if sampling["status"] == "gap":
+            ceiling_flags.append("待核实")
     if exempted_items:
         notes.append("登记豁免（不压上限，理由进交付物）：" + "；".join(
             f"{item['id']}：{item['reason']}" for item in exempted_items))
@@ -323,6 +326,7 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
     if uncovered:
         reasons.append("必选高风险风险面无对应已执行探针：" + "、".join(sorted(uncovered))
                        + "；结论上限为待核实（风险面不可用单条 PASS 抵消）")
+        ceiling_flags.append("待核实")
 
     # 方法/模板覆盖面：计划层面就要有依据，不靠执行期才发现“只用了 challenge”
     plan_gaps = [gap for gap in plan_coverage_gaps(plan or {})
@@ -331,6 +335,7 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
     if method_gaps:
         reasons.append("探针未注明方法/挑刺模板：" + "；".join(method_gaps[:6])
                        + "；结论上限为待核实（无法核对方法与模板是否有效使用）")
+        ceiling_flags.append("待核实")
 
     # 多样性缺口：方法单一/模板过窄同样视为未达成“全面”
     diversity_gaps = [gap for gap in plan_gaps
@@ -338,18 +343,21 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
     if diversity_gaps:
         reasons.append("方法/模板多样性不足：" + "；".join(diversity_gaps)
                        + "；结论上限为待核实（多样化方法未实际使用）")
+        ceiling_flags.append("待核实")
 
     # 场景缺口：目标要求场景设计，零场景或只有单点不算全面
     sc_gaps = plan_scenario_gaps(plan or {}, scenarios)
     if sc_gaps:
         reasons.append("对抗场景缺口：" + "；".join(sc_gaps)
                        + "；结论上限为待核实（组合/序列场景未设计）")
+        ceiling_flags.append("待核实")
 
     unresolved = [r.get("finding_id") for r in reviews
                   if r.get("verdict") == "unresolved"]
     if unresolved:
         reasons.append("存在未裁定候选：" + "、".join(sorted(str(x) for x in unresolved))
                        + "；不计有效缺陷也不计误报，结论上限为待核实")
+        ceiling_flags.append("待核实")
 
     unclosed_blocker = [r.get("finding_id") for r in reviews
                         if r.get("verdict") == "accepted"
@@ -358,14 +366,11 @@ def evaluate(plan, events, reviews, base_ceiling=None, enforce=True, waiver=None
     if unclosed_blocker:
         reasons.append("存在 accepted 且严重度为 blocker/major 的未闭环缺陷候选："
                        + "、".join(sorted(str(x) for x in unclosed_blocker)) + "；结论上限为不通过")
+        ceiling_flags.append("不通过")
 
     adversarial_ceiling = "通过"
-    for reason in reasons:
-        if "不通过" in reason:
-            adversarial_ceiling = "不通过"
-            break
-        if "待核实" in reason:
-            adversarial_ceiling = "待核实"
+    for flag in ceiling_flags:
+        adversarial_ceiling = _strictest(adversarial_ceiling, flag)
 
     ceiling = _strictest(adversarial_ceiling, base_ceiling) if base_ceiling else adversarial_ceiling
     if not enforce:

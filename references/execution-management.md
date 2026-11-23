@@ -52,19 +52,20 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | `path_type` | positive / boundary / exception / permission / combo / ui_content / usability / accessibility / data_consistency / regression | 本用例打的是哪个攻击维度；`positive` 只用于"确认功能可用" |
 | `surf_id` | `SURF-…` | 对应的风险面，须在对抗 plan 的 surfaces 清单内 |
 | `method` | 方法库稳定 ID（`probe-playbook.md` B 节） | 用了哪种方法；多样性只作披露，不作配额 |
-| `hypothesis` | 自由文本 | **可证伪预测**："如果 <条件> 则 <可观察的坏结果>"。每个高风险风险面至少一条；写了要能被执行出来 |
+| `hypothesis` | 自由文本 | **可证伪预测**："如果 <条件> 则 <可观察的坏结果>"，须含可核对的取值/对象/状态或明确预期方向；空话（如"输入不对就会坏"）不计入覆盖但保留披露。每个高风险风险面至少一条；写了要能被执行出来 |
 | `hypothesis_outcome` | broken / held / blocked | 该预测是否被打破；缺省时按 status 推导（FAIL→broken、PASS→held、BLOCKED→blocked）。**broken 是产出不是违规**。**推导不出结果时为「缺结果」，不得计入 held**——没跑出结果不等于假设没被打破 |
 | `oracle_source` | independent / self_attested | 判据来自独立通道还是被测物自己的回显 |
 | `oracle_channel` | 自由文本 | `independent` 必填且要点名通道（网页端 DOM/接口响应/持久化读回）；只写"读回一致"不算 |
 | `discovery_mode` | designed_probe / incidental / undetermined | 这条来自为失效假设设计的探针，还是碰巧撞见 |
 | `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现 |
 
-收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>" [--amend-note "<计划外风险面的纳入说明>"]`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
+收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>" [--amend-note "<计划外风险面的纳入说明>"] [--atk-absent-reason "<本轮为何没有前置攻击假设>"] [--replay-note <不复打理由 JSON>]`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
 
 **残余风险声明的两种入口**：
 
 - `--residual-note "<自由文本>"`（旧文本入口）：判不了"这条声明说的是不是真的"，
-  只判有没有引用已登记编号（`residual_note_checked`）。保持兼容。
+  只判有没有引用已登记编号（`residual_note_checked`）。**结论达「通过」时不接受自由文本**
+  （记 `residual_declaration_required_for_pass`）；结论已被其他缺口压到「待核实」时，文本入口保留可用。
 - `--residual-declaration <JSON 文件>`（结构化入口）：`{"items":[{"id":"SURF-01","status":"unbroken"}]}`，
   `status` 取 `unbroken`/`broken`/`not_verified`。逐条核对：编号须在已登记清单内，
   状态须与该编号的实际验证状态相符。不符分别记 `residual_ref_not_registered`
@@ -82,9 +83,14 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | 声明 `independent` 却拿不出通道/证据 | 计划外风险面（`surfaces_beyond_plan` 计为产出） |
 | 高风险风险面没有一条可证伪预测 | 方法多样性不足 |
 | 一条独立判据都没有（绝对零，不是比例） | 风险面关联率偏低 |
-| 失效假设缺结果（`hypotheses.no_result`） | 高风险面只用单一方法（`high_risk_surface_single_method`） |
+| 失效假设缺结果（`hypotheses.no_result`） | 高风险面单一方法但未全 held、或尚未验证（`high_risk_surface_single_method` 提示 + 复测建议） |
 | 高风险面写了预测但无可采信验证结果 | 可疑自然语言措辞（`suspicious_wording`） |
 | 残余风险声明引用未登记编号 / 状态与实际不符 | ATK 跨轮持续未执行（`atk_stagnant`，需 `--atk-prev`） |
+| 未提交 ATK（含提交为空）且未说明理由（`atk_absent_unexplained`） | 已说明理由的零 ATK 登记（`atk_not_submitted` 留痕） |
+| 假设空话、不可核对（`hypothesis_vague`，不计覆盖） | 假设锐度存疑但有取值/对象/方向词时放行；**已 broken 的笼统假设只披露**（`hypothesis_vague_but_broken`，打破即产出） |
+| 高风险面（`risk=high`）单一方法且结果全部 held，既未换方法复打也无点名不复打理由（`surface_unreplayed_unexplained`） | 已 broken 的面不触发本项 |
+| 通过档残余声明为自由文本（`residual_declaration_required_for_pass`） | 待核实档保留文本残余声明入口 |
+| 只读申报关联到 `caution`/`danger` 写记录（只读 × 写台账对账不符） | 写台账缺失或修订未显式关联条目：只披露未做机械对账 |
 
 理由：配额能被标注操纵（改个 `discovery_mode` 就过关），而"如果 X 则 Y 会坏"凑不出来——写了就得能被执行。绝对值（一条都没有）同样凑不出来，比例能。
 

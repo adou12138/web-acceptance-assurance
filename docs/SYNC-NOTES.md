@@ -779,6 +779,68 @@ D1 数值回填（单批 token 与耗时统计）、五场景路由的剩余 3 �
 
 - 未执行真实网站测试（对象是专家包自身）；F4 的修复只保证"未测量不被显示为 0"，**不宣称 A/B 检出能力**。
 - 变异验证数字（v1.45.0 记录的"34 处语义变异全部捕获"）无法复核，本版未采信也未否定。
+## v1.46.1（2026-11-22）：第四轮审核整改——模板枚举同步、运行产物脱库、答案分发隔离、档位结构化
+
+按第四轮以项目目的为准绳的审核整改。目的锚点不变：专家作为批判者/挑刺者自主全面测试，主动质疑需求、假设与实现，扩大覆盖、减少漏测、多发现 bug；诚实登记不被惩罚。本轮四项均为纠偏既有口径漂移与治理隐患，不新增测试配额。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| F1 | 挑刺模板枚举与模板库漂移修复：`adversarial_data.PLAYBOOK_TEMPLATES` 由 P1~P20 扩到 P1~P24，schema `pattern` 与描述同步到 P21~P24。此前状态组合/控件遍历/文案一致性/断言杀伤四类高价值探针诚实引用 P21+ 会被校验拒绝，规避方式只剩删掉模板引用，导致探针失去溯源、方法多样性失真——属惩罚诚实登记的制度性缺陷，方向与目的相反 | 3 例：P21~P24 合法通过、P25 拒绝、代码枚举与 probe-playbook.md A 节编号双向一致守卫 |
+| P2 | 历史运行产物移出版本库：`git rm --cached` 400 份 evidence JSON 与 3 份 issues/observations CSV、`api_test_report_full.json`；磁盘文件保留，依赖既有 `.gitignore` 规则（`api_test_out/` 目录 + 两份 CSV + `*_report_full.json` 共四条）不再入库。测试与脚本对这些历史产物路径零引用，清理不破坏运行期输出 | 测试零引用核验；四条 ignore 规则 `check-ignore` 均命中 |
+| P3 | 盲测答案键分发边界：`detection-protocol.md` 补「随包分发隔离」条款，`evals-baseline/README.md` 同步指引——答案夹具属评测者侧受限资料，插件/技能包/仓库副本对外分发时必须排除答案目录，执行方只拿 `prepare` 产物，对外归档只用 `--sanitized` 去敏件；答案夹具本身不移除 | 文档 |
+| 低优先 | 对抗门禁档位判定去 reason 字符串扫描：压档规则改为同时记录结构化档位 flag（待核实/不通过），上限取 flag 最严值；不再靠扫描 reason 文案里的「待核实/不通过」字样反推。文案改写不会再误改上限 | 4 例：源码守卫（禁止回退到 `in reason` 扫描）、未闭环 blocker 压不通过、三高风险面单一方法压待核实、压档 reason 与 flag 一一对应不变量守卫 |
+
+### 准出记录
+
+- **全量回归**：`python -m pytest tests/ -q` → **764 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.46.0 基线 757 + 本轮新增 7 例）；`compileall scripts` 通过。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查。
+- **二轮加固（审核观察项 O1/O3）**：补多样性（方法单一）压档行为用例与「每条带档位字样的压档 reason 必须登记同档位 flag」不变量守卫，防以后新增压档规则漏标 flag 导致上限静默变松；同步修正 P2 行 ignore 规则条数表述（目录 + 两 CSV + report_full JSON 共四条）。
+- **口径不变项**：通过 < 待核实 < 不通过 的最严档位顺序不变；豁免不上抬结论上限（最高待核实）；`broken` 是产出不是违规；`not_verified` 保守登记不压档；计划外发现计为产出；方法多样性整体仍只作披露。
+- **本轮不改项**：台账 FAIL 未闭环粒度（观察项 D）为既有分层口径，保留；正式 A/B 盲测仍缺受控可运行被测应用与独立执行方，不在本轮修复范围。
+
+### 兼容性说明
+
+- 移出版本库的运行产物仅退出版本跟踪，磁盘保留；再次运行 api-test 管线按原路径重新生成并被 ignore 拦截，不影响脚本输出。
+- 门禁结构化 flag 为内部实现，CLI 输出字段（verdict_ceiling/reasons/notes/stats）形状不变；旧台账与旧产物可读。
+
+## v1.46.0（2026-11-21）：批判者口径加固——假设锐度、解释或复打、只读 × 写台账对账
+
+按本轮修订方案（N3–N12）落地。目的锚点：专家作为批判者/挑刺者，主动质疑需求、假设与实现，扩大覆盖、减少漏测、在自主测试中多发现 bug；全部新增检测服从「加检测不加锁」，如实登记不被惩罚。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| N3 | 基线口径修正：735 passed + 2 skipped（环境依赖）+ 230 subtests；v1.44.2 为 630 总（628 passed + 2 跳过）+ 226 subtests；passed 与 skipped 分账书写 | — |
+| N12 | `case_data.py` YAML 写入改为 `open(..., newline=)`，兼容 Python 3.9（旧 `Path.write_text(newline=)` 仅 3.10 支持） | 既有 CLI 链 |
+| N4 | 未提交 ATK 或提交为空且无理由 → `atk_absent_unexplained` 压档；有非空理由只留痕；新增 `--atk-absent-reason`；`atk_checked` 仅在登记非空时为真 | 5 例三向（无 ATK 无理由 / 有理由 / 已提交不受影响 / 空登记无理由 / 空登记有理由） |
+| N5 | 假设锐度质检：空话、占位词不计入覆盖（`hypothesis_vague`），记录保留披露；**已 broken 的笼统假设只披露不压档**（`hypothesis_vague_but_broken`，打破即产出）；合格信号含数值/长度、角色状态名、条件组合、对象 + 预期方向词 | 4 例双向（空话被拦、自然语言与数值假设放行、笼统但 broken 不被罚） |
+| N6 | **政策反转**：高风险面（含 `critical`）单一方法且可采信结果全部 held，须换方法复打或提交 `--replay-note` 点名不复打理由，否则 `surface_unreplayed_unexplained`；已 broken 的面不触发；不是方法数量配额 | 5 例双向（无理由被拦 / 复打理由放行 / broken 不触发 / 第二方法探针放行 / critical 面同义务） |
+| N7 | 通过档残余声明必须为结构化声明；仅自由文本 → `residual_declaration_required_for_pass`；待核实档保留文本入口；**判定排在 ATK 轨道之后**，ATK 已压档时不再追加声明义务 | 并入 M5 残余声明用例改写 + 1 例顺序回归 |
+| N8 | `readonly_lead` × 写台账交叉核对：只对账显式 `linked_records`；关联到 `caution`/`danger` 写记录 → 过程问题 + 压待核实 + 首屏披露；写台账缺失或未显式关联只披露不压档；新增 `--write-ops-ledger` | 5 例三向（不符压档 / 无关联放行 / 缺台账只披露 / 未关联只披露 / 已批 scope_change 不受本项约束） |
+| N10 | 浏览器通道降级路由：DevTools 通道无 route/fulfill，需要黑盒注入时切 Playwright 或按缺口四分类登记「能力待探测，未实测」，不得虚构注入 | 文档 |
+
+### 准出记录
+
+- **全量回归**：`python -m pytest tests/ -q` → **755 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.45.0 基线 735 + 本轮新增 20 例）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过。
+- **二轮审核修正（以项目目的为准绳的四条）**：① N7 判定移到 ATK 轨道之后，消除「同时报结论将达通过 + ATK 未闭环」的自相矛盾误罚；② 笼统假设但结果 broken 只披露不压档（打破即产出，不因措辞笼统扣分）；③ `--atk` 传空数组等同零登记，须附理由，堵住「空文件免解释且标为已核对」的旁路；④ 高风险面判定补回 `critical`（旧版按 high/critical 取面，只判 high 会把更严的面整段漏出义务与建议）。另修 `case_data` 裸 import 为按文件路径加载，避免门禁按路径加载本脚本时导入失败。
+- **政策反转显式登记**：N6 替代旧「高风险面单一方法只提示、不压上限」口径。旧测试 `test_single_method_surface_is_disclosed_not_gated`、`test_single_method_repeat_is_notice_only` 覆盖的是低风险/未验证/多方法场景，维持只披露；全 held 的高风险单一方法面走新「解释或复打」义务。
+- **三轮复核修正（风险枚举统一 + 档位传播 + 探索分层）**：① 风险分级全项目统一为 `high/medium/low`（上游对抗 plan 契约 `adversarial_data.RISKS`、对抗门禁、探索清单、报告渲染均只认 `high`）；回退 `attack_coverage` 旧版遗留的 `critical` 死分支，`required_surfaces` 与 N6 义务、复测建议只取 `risk=high`，`critical` 不再被当作高风险面。② `phase_gate.check_verdict` 未放行时按上游 ceiling 取最严值，上游已判「不通过」不再被恒压成「待核实」；更正 `CEILINGS` 注释对上游客出档位的描述。③ 探索文档写明分层：机械「不通过」来自台账未闭环 FAIL 用例，探索清单 FAIL 属观察候选，须先落成台账缺陷/用例条目并经闭环核对才进入不通过判定，探索门禁本身不代判。历史条目 N6 与二轮修正④保留当时记录，口径以本条为准。回归用例：`test_critical_is_not_treated_as_high_risk`、attack/explor 两分支 `test_fail_ceiling...`、`test_explore_fail_ceiling...`。全量回归 **757 passed, 2 skipped（环境依赖）, 230 subtests passed**。
+- **文档回链**：`agents/web-acceptance-assurance.md`、`references/execution-management.md`、`references/phase-workflow.md`、`references/browser-connection.md` 口径已同步；孤儿引用扫描为 0。
+
+### 兼容性说明
+
+- 新增 CLI 参数全部可选；旧台账与旧产物可读；未提供写台账时对账项只披露，不改变既有结论。
+- 自由文本残余声明在「待核实」档仍可用；仅在无其他缺口、结论将达「通过」时要求结构化。
+- 历史报告与历史 SKILL 登记口径不重算。
+
+### 本版不宣称的能力
+
+- N1 冻结 A/B 运行矩阵未在本轮执行，不宣称检出能力提升；N2 真实需求样本待项目方提供脱敏素材。
+- N9 红队密封包时序核验、N11 第二会话独立复核暂缓，待 N1 数据显示误报/漏检仍是瓶颈后再评估。
+- 本轮未改变既有口径：`broken` 是产出不是违规、`not_verified` 保守登记不压档、计划外发现（`surfaces_beyond_plan`）计为产出、方法多样性整体仍只作披露。
+
+### 回退说明
+
+- 本版对应待打 tag `v1.46.0`，上一已验证基线为 `v1.45.0`。
+- 回退路径：暂停候选版本用于真实验收 → 切回 `v1.45.0` 对应提交并重新注册 → 按确认后的有效版本重新计算并登记两个结果。
 
 ## v1.45.0（2026-11-20）：砺衡项目修订方案 M1–M10 落地
 
@@ -796,7 +858,7 @@ M1–M10 共十项改造，分批推进、每批单独准出：
 
 ### 准出记录
 
-- **全量回归**：`python -m pytest tests/ -q` → **737 passed, 230 subtests passed**（v1.44.2 为 691 + 230）。
+- **全量回归**：`python -m pytest tests/ -q` → **735 passed, 2 skipped（环境依赖）, 230 subtests passed**（v1.44.2 为 630 总：628 passed + 2 环境跳过，226 子测试）。2 项跳过来自 `test_skill_registration` 的本机路径/缓存目录检查，随运行环境跳过或通过，计数以实际环境为准；总选用例数 737 = 735 passed + 2 skipped，passed 与 skipped 分账书写。
 - **变异验证**：本轮 34 处语义变异全部被对应断言精确捕获，无假阴性；其中 M7 首轮 2 处
   未捕获（分类判定存在死分支、`execution_ledger` 未真实加载分类模块）已修复后重做。
 - **引用回链**：全仓 `.md` 语料扫描，references 与新增脚本的孤儿引用数为 0。
@@ -1228,3 +1290,37 @@ ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证�
 - 全量：`pytest tests/ -q` → **737 passed, 230 subtests passed**（M9 后 725）。
 - 新增回归：`tests/test_eval_baseline_contract.py` 12 项，覆盖输入指纹固定、版本固定、
   换题标不可比、旧基线兼容、四类条目级定位、差异 CSV 与样本可复跑。
+
+## v1.46.2（2026-11-23）：v1.45.1 修复线与 v1.46.x 加固线合并
+
+### 一、合并来源
+
+- 本地线（`backup/v1.45.1-fixes` 留痕）：`59ac7bd`（F1–F8 影响面审查修复）+
+  `0cb952c`（R1/R2 复审修复）。
+- 远端线（origin/main 53fe31d）：v1.46.0 自主挑刺能力加固（N3/N12/N4–N10）、
+  二轮/四轮审核整改（产物脱库、模板枚举同步、档位结构化）、档位不变量守卫。
+- 分叉点 `f047b30`；两线为独立演进，merge 后逐项核对：F1/F4/F7/R1/R2 已被远端
+  等价实现覆盖（`_applicable_missing`、`"NA"` 口径、blind_eval 重写），
+  F2/F5/F8 为远端仍缺的独立修复，随合并带入。
+
+### 二、冲突解决（3 处，均融合保留双方）
+
+- `plugin.json`：版本取 `1.46.2`（合并提交顺延远端 1.46.1，小步递进）。
+- `agents/web-acceptance-assurance.md`：修订申请段融合（本地「类型取值合格 +
+  auto_approval」× 远端「linked_records 对账」）；攻击面门禁段取远端压档清单 +
+  本地 schema/tool_version 尾段。
+- `docs/SYNC-NOTES.md`：双方记录块均保留。
+
+### 三、判据版本
+
+- `attack_coverage.TOOL_VERSION` 2 → **3**：远端 v1.46 改了判定口径
+  （N6 例外、ATK 轨道、多样性压档），按 F8 口径必须 +1；旧台账在 v2/v3 下
+  可能得到不同 `verdict_ceiling`，归档引用须写明判的版本。
+- `eval_cases.TOOL_VERSION` 保持 2：本轮未改其判定，不同步 bump。
+
+### 四、验证
+
+- 合并冲突解决后全量：见本轮回归记录（预期 ≥779 passed / 230 subtests）。
+- cache 同步：`cache/my-experts/web-acceptance-assurance/1.46.2/` 新建；
+  `1.45.1/` 下 4 个启用态 `SKILL.md` 改名 `.disabled`
+  （`test_skill_registration` 旧缓存禁用规则）。
