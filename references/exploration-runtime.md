@@ -56,13 +56,13 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 `cells` 取 1~2 的整数；不写则默认 2。
 
-根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`，可选`allowed_origins`（纯origin数组，无路径/查询/片段/凭据）：被测对象跨域嵌入时（如 Agent 会话在 A 域、独立核验页在 B 域），把额外允许的域写进来，`page_url` 与 `target_url` 或任一同源即通过；缺省时仍锁 `target_url` 同源，旧清单行为不变。该字段只放宽清单可表达范围，不改变门禁算法，且随 JSON 摘要带出供审阅识别跨域清单（CSV 视图不展开）。每个item必填：
+根对象严格含`schema_version: "1.0"`、`context`及`items`。context严格含非空`target_url/application_version/environment`，无其他字段。每份清单严格同源：`page_url` 必须与 `target_url` 同协议、主机和有效端口。被测对象分布在不同域时**不得合成单份跨域清单**——视角覆盖按 (page_url, state) 单元统计，跨域同池会让一域的记录补齐另一域的缺口（"每域各自达标"变"跨域合计达标"），构成放水旁路（v1.47.2 实测证实后于 v1.47.3 回退该设计）。正确做法：每域各出一份同源清单，用 `phase_gate.py` 的 `--exploration`（可重复）一次登记多份 gate，合并取最严 ceiling、缺口合并、任一份缺控件遍历即整体缺。每个item必填：
 
 | 字段 | 约束 |
 |---|---|
 | id | 清单内唯一稳定ID，字符集为字母数字及`_.:-`，首字符字母数字 |
 | requirement_ids | 非空且无重复ID数组；只校验格式，不加载外部REQ目录验证存在性 |
-| page_url | 无凭据的绝对http/https，与target_url（或context.allowed_origins任一项）同协议、主机和有效端口 |
+| page_url | 无凭据的绝对http/https，与target_url同协议、主机和有效端口（严格同源；跨域见上文多份清单路径） |
 | role / viewport / state / action | 非空字符串，写真实角色、视口、状态及拟做/已做动作 |
 | risk | high / medium / low；具体风险依据记录在场景/manifest |
 | status | NOT_RUN / PASS / FAIL / BLOCKED / SKIPPED |

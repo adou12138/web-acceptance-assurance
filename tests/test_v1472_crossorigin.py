@@ -1,18 +1,20 @@
-"""v1.47.2 回归：跨域探索清单契约 + 多份分域 gate 补登记。
+"""v1.47.2/v1.47.3 回归：多份分域 gate 登记 + 跨域单份混排旁路锁死。
 
-背景：本项目星仔在 agent.sojump.cn 域，独立核验页（编辑器/设置/预览/列表）在
-drunkyong.sojump.cn 域，单份同源清单无法表达；旧实现把 page_url 锁死与 target_url
-同源，跨域布局只能拆两份手工清单，而 phase_gate 的 --exploration 又只收单份，
-两份清单始终无法一起登记。本文件锁住四处：
-①allowed_origins 放宽后旧清单行为不变；②放宽不放宽门禁（缺视角/FAIL 仍压上限）；
-③origin 必须是纯 origin，带路径会引入"看似同域实则不同页"的漏报；④多份合并取最严、
-缺口合并、任一缺遍历都算整体缺，且单份调用方零回归。
+背景：本项目星仔在 agent.sojump.cn 域，独立核验页在 drunkyong.sojump.cn 域。
+v1.47.2 曾引入 context.allowed_origins 允许单份清单混入跨域记录，复审实证该
+设计构成旁路：视角覆盖按 (page_url, state) 单元跨域同池统计，一域的记录可
+补齐另一域的缺口（受控实验：合并单份=通过，两份独立登记=待核实），"算法
+没改但输入池被换了"。v1.47.3 回退该字段——本文件锁住四处：
+①allowed_origins 是未知字段，显式拒绝（旁路不存在，而非放宽后靠算法弥补）；
+②跨域 page_url 拒绝，报错指路"每域各出一份清单 + 多份 gate 合并"；
+③多份合并取最严、缺口合并、任一缺遍历都算整体缺，单份调用方零回归；
+④数组混 None/嵌套包装显式报错、mandatory_attributes 合并取最严、
+--exploration 可重复传（免手工拼合并文件）。
 """
 import copy
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -30,9 +32,11 @@ def _load(name, filename):
     return module
 
 
-class CrossOriginContractTests(unittest.TestCase):
+class CrossOriginBypassBlockedTests(unittest.TestCase):
+    """v1.47.3 回退后的契约：单份清单严格同源，跨域只能走多份登记路径。"""
+
     def setUp(self):
-        self.tool = _load("exploration_state_1472", "exploration_state.py")
+        self.tool = _load("exploration_state_1473", "exploration_state.py")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.folder = Path(self.tmp.name)
@@ -56,78 +60,85 @@ class CrossOriginContractTests(unittest.TestCase):
         return self.tool.summarize(data)
 
     def test_legacy_plan_without_allowed_origins_is_unchanged(self):
-        data = copy.deepcopy(self.base)
-        report = self.report(data)
+        report = self.report(copy.deepcopy(self.base))
         self.assertEqual(report["ready"], ["EXP-1"])
         self.assertNotIn("allowed_origins", report["context"])
 
-    def test_other_origin_still_rejected_without_declaration(self):
+    def test_allowed_origins_is_unknown_field_and_rejected(self):
+        """v1.47.2 的旁路字段必须显式拒绝，而不是静默忽略或放宽。"""
+        for value in [["https://drunkyong.sojump.cn"], [], "https://drunkyong.sojump.cn",
+                      123, None]:
+            data = copy.deepcopy(self.base)
+            data["context"]["allowed_origins"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.report(data)
+
+    def test_cross_domain_page_url_rejected_with_migration_hint(self):
+        """跨域记录被拒时，报错必须指明替代路径（每域一份 + 多份 gate），避免执行者
+        在报错面前退回"合成单份"的老路。"""
         data = copy.deepcopy(self.base)
         data["items"][0]["page_url"] = "https://drunkyong.sojump.cn/wjx/design.aspx"
         with self.assertRaises(ValueError) as ctx:
             self.report(data)
-        self.assertIn("同源", str(ctx.exception))
+        message = str(ctx.exception)
+        self.assertIn("同源", message)
+        self.assertIn("多份", message)
 
-    def test_declared_origin_allows_cross_domain_item(self):
-        data = copy.deepcopy(self.base)
-        data["context"]["allowed_origins"] = ["https://drunkyong.sojump.cn"]
-        data["items"][0]["page_url"] = "https://drunkyong.sojump.cn/wjx/design.aspx"
-        report = self.report(data)
-        self.assertEqual(report["ready"], ["EXP-1"])
-        self.assertEqual(report["context"]["allowed_origins"], ["https://drunkyong.sojump.cn"])
+    def test_v1472_bypass_scenario_is_now_blocked_entirely(self):
+        """复审受控实验的旁路场景：域A全覆盖 + 域B仅功能1单元，v1.47.2 允许合并
+        单份并判"通过"；v1.47.3 该路径根本不存在——混入即拒绝，只能走两份独立
+        清单 + phase_gate 多份合并（结论待核实）。"""
+        def item(ident, host, state, attrs):
+            return {
+                "id": ident, "requirement_ids": ["REQ-1"],
+                "page_url": f"https://{host}/p/{ident}", "role": "r",
+                "viewport": "1440x900", "state": state, "action": "act",
+                "risk": "medium", "status": "PASS", "observation": "观察",
+                "evidence_paths": [str(self.evidence)], "blocked_reason": "",
+                "side_effect_pending": False, "attributes": [attrs],
+                "falsify_action": f"证伪-{ident}",
+            }
+        # 域A：五视角各2单元 + 遍历条目 —— 域A单份可过（属性走 rulings 全豁免）
+        domain_a = []
+        for index, attrs in enumerate(["visual", "usability", "accessibility",
+                                       "functional", "performance"]):
+            domain_a.append(item(f"EXP-A{index}1", "agent.sojump.cn", f"状态{index}1", attrs))
+            domain_a.append(item(f"EXP-A{index}2", "agent.sojump.cn", f"状态{index}2", attrs))
+        domain_a.append(item("EXP-TRAV-A", "agent.sojump.cn", "遍历态", "functional"))
+        rulings = {key: {"state": "not_applicable", "reason": "本轮不涉及"}
+                   for key in ("security", "compatibility", "content", "visual",
+                               "usability", "accessibility")}
 
-    def test_default_port_and_case_normalization_still_applies(self):
-        data = copy.deepcopy(self.base)
-        data["context"]["allowed_origins"] = ["https://DRUNKYONG.SOJUMP.CN:443"]
-        data["items"][0]["page_url"] = "https://drunkyong.sojump.cn/other"
-        self.assertEqual(self.report(data)["ready"], ["EXP-1"])
+        def make(items, target, extra_context=None):
+            context = {"target_url": target, "application_version": "build-1",
+                       "environment": "测试环境"}
+            if extra_context:
+                context.update(extra_context)
+            return {"schema_version": "1.0", "context": context,
+                    "items": items, "attribute_rulings": rulings}
 
-    def test_path_query_fragment_in_origin_is_rejected(self):
-        for value in ["https://drunkyong.sojump.cn/wjx", "https://drunkyong.sojump.cn/?a=1",
-                      "https://drunkyong.sojump.cn/#frag", "https://u:p@drunkyong.sojump.cn"]:
-            data = copy.deepcopy(self.base)
-            data["context"]["allowed_origins"] = [value]
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                self.report(data)
+        gate_a = self.tool.summarize(make(domain_a, "https://agent.sojump.cn"))["gate"]
+        self.assertEqual(gate_a["verdict_ceiling"], "通过")
 
-    def test_malformed_allowed_origins_array_is_rejected(self):
-        for value in ["https://drunkyong.sojump.cn", 123, None, ["", ], ["bad url"]]:
-            data = copy.deepcopy(self.base)
-            data["context"]["allowed_origins"] = value
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                self.report(data)
+        # 域B：仅功能1单元——覆盖不足，单份必然不达标
+        domain_b = [item("EXP-B1", "drunkyong.sojump.cn", "状态B1", "functional"),
+                    item("EXP-TRAV-B", "drunkyong.sojump.cn", "遍历态B", "functional")]
+        gate_b = self.tool.summarize(
+            make(domain_b, "https://drunkyong.sojump.cn"))["gate"]
+        self.assertEqual(gate_b["verdict_ceiling"], "待核实")
+        self.assertIn("界面样式", gate_b["missing_views"])
 
-    def test_empty_and_duplicate_allowed_origins_are_idempotent(self):
-        """空数组等价于不声明；重复项归一到 set，不该把合法清单判成非法。"""
-        for value in [[], ["https://drunkyong.sojump.cn", "https://drunkyong.sojump.cn"]]:
-            data = copy.deepcopy(self.base)
-            data["context"]["allowed_origins"] = value
-            with self.subTest(value=value):
-                self.assertEqual(self.report(data)["ready"], ["EXP-1"])
+        # 两份独立登记（唯一合法路径）：合并取最严 = 待核实，域B缺口完整保留
+        merged = phase_gate._exploration_check([gate_a, gate_b])
+        self.assertEqual(merged["ceiling"], "待核实")
+        self.assertTrue(any("missing_views=界面样式" in gap for gap in merged["gaps"]))
 
-    def test_cross_origin_declaration_does_not_unlock_gate(self):
-        """放宽的只是清单可表达范围；缺视角/FAIL 依旧把 ceiling 压到待核实。"""
-        data = copy.deepcopy(self.base)
-        data["context"]["allowed_origins"] = ["https://drunkyong.sojump.cn"]
-        data["items"][0]["status"] = "FAIL"
-        data["items"][0]["observation"] = "HTTP 405 静默"
-        data["items"][0]["evidence_paths"] = [str(self.evidence)]
-        data["items"][0]["page_url"] = "https://drunkyong.sojump.cn/wjx"
-        gate = self.report(data)["gate"]
-        self.assertEqual(gate["verdict_ceiling"], "待核实")
-        self.assertIn("EXP-1", gate["failed_items"])
-
-    def test_csv_export_does_not_expand_allowed_origins(self):
-        data = copy.deepcopy(self.base)
-        data["context"]["allowed_origins"] = ["https://drunkyong.sojump.cn"]
-        out = self.folder / "ledger.csv"
-        report = self.tool.export_csv(data, out)
-        self.assertIn("allowed_origins", report["context"])
-        self.assertFileHasNoAllowedOriginsColumn(out)
-
-    def assertFileHasNoAllowedOriginsColumn(self, path):
-        header = path.read_text(encoding="utf-8-sig").splitlines()[0]
-        self.assertNotIn("allowed_origins", header)
+        # v1.47.2 的旁路：把 B 域记录混进 A 域清单 + allowed_origins —— 现在必须被拒
+        data = make(domain_a + [item("EXP-B1", "drunkyong.sojump.cn", "状态B1", "functional")],
+                    "https://agent.sojump.cn",
+                    {"allowed_origins": ["https://drunkyong.sojump.cn"]})
+        with self.assertRaises(ValueError):
+            self.report(data)
 
     def test_full_report_of_both_domains_summarizes(self):
         """真实形态：两份分域报告各自只含本域 URL，均可独立 summarize。"""
@@ -179,6 +190,19 @@ class MultiExplorationGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.pg._exploration_check([])
 
+    def test_none_or_empty_element_rejected_not_silently_merged(self):
+        """复审实证：混入 None 时 state 仍报 provided、该份诊断被丢弃（死变量）。
+        修复后必须显式报错，不给"占位混入"留通道。"""
+        for bad in [None, {}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as ctx:
+                self.pg._exploration_check([self.gate_pass, bad])
+            self.assertIn("空/None", str(ctx.exception))
+
+    def test_nested_wrapper_element_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.pg._exploration_check([self.gate_pass, {"source": "x", "gate": self.gate_hold}])
+        self.assertIn("外层包装", str(ctx.exception))
+
     def test_read_arg_multi_unwraps_reports_and_plain_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "gates.json"
@@ -188,6 +212,74 @@ class MultiExplorationGateTests(unittest.TestCase):
             ], ensure_ascii=False), encoding="utf-8")
             result = self.pg._read_exploration_arg(str(path), multi=True)
             self.assertEqual(result, [self.gate_pass, self.gate_hold])
+
+    def test_read_arg_rejects_none_placeholder_in_array(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gates.json"
+            path.write_text(json.dumps([{"gate": self.gate_pass}, None], ensure_ascii=False),
+                            encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                self.pg._read_exploration_arg(str(path), multi=True)
+            self.assertIn("空/None", str(ctx.exception))
+
+    def test_read_arg_without_multi_rejects_array_with_clear_error(self):
+        """复审实证：multi=False 传数组时报误导性的 verdict_ceiling 错误。
+        修复后必须先说清"这是数组，请走多份路径"。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gates.json"
+            path.write_text(json.dumps([{"gate": self.gate_pass}], ensure_ascii=False),
+                            encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                self.pg._read_exploration_arg(str(path))
+            self.assertIn("数组", str(ctx.exception))
+            self.assertIn("--exploration", str(ctx.exception))
+
+    def test_read_args_multiple_paths_flatten(self):
+        """--exploration action='append'：两份分域清单各传一个路径，免手工拼合并文件。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = Path(tmp) / "a.json"
+            p2 = Path(tmp) / "b.json"
+            p1.write_text(json.dumps({"gate": self.gate_pass}, ensure_ascii=False), encoding="utf-8")
+            p2.write_text(json.dumps({"source": "独立核验域", "gate": self.gate_hold},
+                                     ensure_ascii=False), encoding="utf-8")
+            result = self.pg._read_exploration_args([str(p1), str(p2)])
+            self.assertIsInstance(result, list)
+            checked = self.pg._exploration_check(result)
+            self.assertEqual(checked["ceiling"], "待核实")
+            self.assertEqual(checked["sources"][1]["source"], "独立核验域")
+
+    def test_read_args_array_file_flattens_to_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gates.json"
+            path.write_text(json.dumps([{"gate": self.gate_pass}, self.gate_hold],
+                                       ensure_ascii=False), encoding="utf-8")
+            result = self.pg._read_exploration_args([str(path)])
+            self.assertEqual(len(result), 2)
+
+    def test_read_args_single_path_keeps_single_gate_shape(self):
+        """只传一份时保持单份 gate 形状——既有调用方与已登记数据的形状不变。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gate.json"
+            path.write_text(json.dumps({"gate": self.gate_pass}, ensure_ascii=False), encoding="utf-8")
+            result = self.pg._read_exploration_args([str(path)])
+            self.assertNotIsInstance(result, list)
+            self.assertEqual(result, self.gate_pass)
+
+    def test_read_args_none_returns_none(self):
+        self.assertIsNone(self.pg._read_exploration_args(None))
+        self.assertIsNone(self.pg._read_exploration_args([]))
+
+    def test_multi_gate_mandatory_attributes_merge_strictest(self):
+        """合并路径顶层 mandatory_attributes 不再恒为 {}：任一份未闭合即未闭合；
+        两份闭合但取值冲突时取 covered（not_applicable 是豁免，covered 是已测，取严）。"""
+        open_gate = dict(self.gate_pass,
+                         mandatory_attributes={"content": "covered", "security": "unresolved"})
+        na_gate = dict(self.gate_hold,
+                       mandatory_attributes={"content": "not_applicable", "security": "not_applicable"})
+        result = self.pg._exploration_check([open_gate, na_gate])
+        self.assertEqual(result["mandatory_attributes"]["security"], "unresolved")
+        self.assertEqual(result["mandatory_attributes"]["content"], "covered")
+        self.assertTrue(any("security" in gap for gap in result["gaps"]))
 
     def test_source_label_survives_unwrap_and_appears_in_gaps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +319,7 @@ class MultiExplorationGateTests(unittest.TestCase):
             self.assertEqual(entry["ceiling"], "待核实")
             self.assertEqual(len(entry["sources"]), 2)
             self.assertTrue(entry["revised"])
+            self.assertEqual(entry["mandatory_attributes"]["content"], "covered")
 
     def test_revise_refuses_unlock_from_multi_gate_to_pass(self):
         """反后门：多份补登也不得把待核实洗成通过。"""

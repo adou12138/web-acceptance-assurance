@@ -1370,3 +1370,21 @@ ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证�
 - 全量：`pytest tests/ -q` → **825 passed, 243 subtests passed**（v1.47.1 为 805 + 230，新增 20 项）。
 - 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2。
 - **本版不宣称**：跨域放宽只让跨域清单能表达并通过字段校验，不改变门禁算法（缺视角/FAIL/缺遍历仍压待核实）；待核实不会被补登洗成通过。本项目实测把两份分域 gate 补登后，execute 探索字段从 missing 变 provided，但整体结论仍为待核实（同会话放行 + 四视角实测缺口）。
+
+## v1.47.3（2026-11-23）：回退跨域旁路字段 + 多份 gate 路径加固
+
+v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改门禁算法，但**换了输入池**：视角覆盖按 (page_url, state) 单元统计，跨域混入单份后一域的记录会补齐另一域的缺口——受控实验：域A全覆盖+域B仅功能1单元，两份独立登记=待核实，合并单份=通过。「算法没改但口径被换」，属过度宣称下的放水旁路。本轮按复审建议**方案甲回退**，同时修复数组路径的四处 P3。本项目实测走的是两份独立登记路径，交付物未被污染。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| P1 回退 allowed_origins | `scripts/exploration_state.py`：context 恢复严格三字段（未知字段显式拒绝）、page_url 恢复严格同源，报错指路「每域各出一份清单 + phase_gate 多份 gate 合并」；docstring、`references/exploration-runtime.md` 字段表同步。**跨域表达力不损失**：多份独立清单是更严的等价表达 | `CrossOriginBypassBlockedTests`：allowed_origins 显式拒绝、跨域 page_url 拒绝含迁移提示、**v1.47.2 旁路场景整体阻断**（同一批证据只能走两份独立路径，结论待核实、缺口完整保留） |
+| P3-a 数组混 None/空 | `phase_gate._exploration_check` 与 `_read_exploration_arg`：占位元素显式报错（原实现 state 仍报 provided、该份诊断因死变量丢失）；嵌套包装（数组项再带 gate 键）同样拒绝 | 锁死「静默丢诊断」通道 |
+| P3-b 死变量清除 | 合并分支不再累加后丢弃逐份 reasons；最终 reasons 由 gaps 合成 | — |
+| P3-c mandatory_attributes 合并 | 多份合并顶层不再恒 `{}`：逐键取最严（任一份未闭合即未闭合；闭合冲突时 covered 严于 not_applicable） | 合并结果含未闭合键并进 gaps |
+| P3-d 误导报错 | multi=False 收到 JSON 数组时报「请走多份路径」，不再误报 verdict_ceiling 非法 | 报错文案断言 |
+| P3-e CLI 免手工合并 | `--exploration`（complete/revise）改 `action="append"` 可重复传，`_read_exploration_args` 展平数组、单路径保持单份 gate 形状；单 dict `{"source":..,"gate":..}` 的标签也透传 | 多路径展平、数组展平、单份形状不变、None→None |
+| P1-a 项目报告 | 本项目 `星仔全能力测试报告_20261123.md`：修正「未运行探索清单门禁」等与 phase-state 矛盾的表述；7 条门禁缺口（含 mandatory_attributes 未闭合、核验域无 EXP-TRAV）如实全列 | 报告口径与 check-verdict reasons=2 一致 |
+
+- 全量：`pytest tests/ -q` → **829 passed, 239 subtests passed**（v1.47.2 为 825 + 243；测试文件重写：跨域断言反转为拒绝、新增 6 项 P3 测试）。
+- 附带恢复正确的表述（v1.47.2 时曾判过时，回退后重新成立）：`observation_bridge.py` 同源硬校验、`README.md`「严格校验同源探索清单」、`references/source-comparison.md`。
+- **本版宣称**：跨域场景唯一合法路径是「每域一份同源清单 + 多份 gate 合并」；单份混排从「能表达但会放水」变为「不存在」。判定口径依旧未放宽：缺视角/FAIL/未闭合/缺遍历仍压待核实。

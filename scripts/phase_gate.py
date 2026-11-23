@@ -466,15 +466,22 @@ def _read_json_file(path, label):
 
 
 def _read_exploration_arg(path, multi=False):
-    """读取探索清单参数。
+    """读取单份探索清单参数。
 
     兼容两种输入：exploration_state.summarize() 的**整份报告**（自动取 gate 字段），
     以及直接传 gate 摘要本身。上游换用哪种都不必改命令。multi=True 时额外接受
-    JSON 数组（每份可以是整份报告或 gate 摘要），用于跨域场景的多份分域清单——
-    被测对象域与独立核验域各有自己的 target_url，无法用单份清单表达。
+    JSON 数组（每份可以是整份报告或 gate 摘要，外层 source/label 透传进 sources），
+    用于跨域场景的多份分域清单——被测对象域与独立核验域各有自己的 target_url，
+    无法用单份清单表达。CLI 建议改用 _read_exploration_args（--exploration 可重复），
+    免去手工拼合并文件。
     """
     raw = _read_json_arg(path)
-    if isinstance(raw, list) and multi:
+    if isinstance(raw, list):
+        if not multi:
+            raise ValueError(
+                "探索清单参数是 JSON 数组：多份分域清单请在 CLI 上重复 --exploration"
+                "（每份一个文件/路径），或确认这是数组后再走多份路径；"
+                "单份 gate 应是 JSON 对象而非数组")
         values = []
         for index, item in enumerate(raw):
             label = None
@@ -483,11 +490,47 @@ def _read_exploration_arg(path, multi=False):
                 item = item["gate"]
             if label is not None and isinstance(item, dict):
                 item = dict(item, _source_label=str(label))
+            if item is None or item == {}:
+                raise ValueError(
+                    f"exploration gate 数组第 {index + 1} 项为空/None："
+                    "未生成的清单不要占位混入数组（会静默丢诊断），"
+                    "只登记实际存在的清单")
+            if isinstance(item, dict) and "gate" in item:
+                raise ValueError(
+                    f"exploration gate 数组第 {index + 1} 项仍带外层包装（gate 字段）："
+                    "嵌套包装不受支持，请展平后重试")
             values.append(item)
         return values
     if isinstance(raw, dict) and "gate" in raw:
-        return raw["gate"]
+        gate = raw["gate"]
+        label = raw.get("source") or raw.get("label")
+        if label is not None and isinstance(gate, dict):
+            gate = dict(gate, _source_label=str(label))
+        return gate
     return raw
+
+
+def _read_exploration_args(paths):
+    """读取一个或多个探索清单路径（--exploration action='append' 的结果）。
+
+    每个路径先按 _read_exploration_arg 读取（数组展开、source 标签透传），
+    多路径结果合并为一份有序列表。只传一个非数组路径时返回单份 gate，
+    保持既有登记形状不变。
+    """
+    if not paths:
+        return None
+    values = []
+    for path in paths:
+        result = _read_exploration_arg(path, multi=True)
+        if isinstance(result, list):
+            values.extend(result)
+        else:
+            values.append(result)
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return values
 
 
 def _exploration_check(gate):
@@ -500,6 +543,15 @@ def _exploration_check(gate):
     if isinstance(gate, list):
         if not gate:
             raise ValueError("exploration gate 数组不能为空")
+        for index, item in enumerate(gate):
+            if item is None or item == {}:
+                raise ValueError(
+                    f"exploration gate 数组第 {index + 1} 项为空/None："
+                    "未生成的清单不要占位混入数组（会静默丢诊断），只登记实际存在的清单")
+            if isinstance(item, dict) and "gate" in item:
+                raise ValueError(
+                    f"exploration gate 数组第 {index + 1} 项仍带外层包装（gate 字段）："
+                    "嵌套包装不受支持，请展平后重试")
         labels = [item.get("_source_label") if isinstance(item, dict) else None for item in gate]
         checked = [_exploration_check_one(
             {k: v for k, v in item.items() if k != "_source_label"} if isinstance(item, dict) else item)
@@ -507,13 +559,25 @@ def _exploration_check(gate):
         ceiling = "通过"
         for item in checked:
             ceiling = _strictest(ceiling, item["ceiling"])
-        gaps, reasons, sources = [], [], []
+        gaps, sources = [], []
+        # mandatory_attributes 逐键合并取最严：任一份对某属性未闭合，合并后仍视为未闭合；
+        # 两份都已闭合但取值不一致时取 covered（not_applicable 是豁免，covered 是已测，取严）。
+        closed = ("covered", "not_applicable")
+        merged_attrs = {}
+        for item in checked:
+            for key, val in (item.get("mandatory_attributes") or {}).items():
+                existing = merged_attrs.get(key)
+                if existing is None:
+                    merged_attrs[key] = val
+                elif val not in closed:
+                    merged_attrs[key] = val
+                elif existing in closed and val == "covered":
+                    merged_attrs[key] = "covered"
         for index, item in enumerate(checked):
             label = labels[index]
             tag = f"[{index + 1}{':' + label if label else ''}]"
             for gap in item["gaps"]:
                 gaps.append(f"{tag} {gap}")
-            reasons.extend(f"{tag} {reason}" for reason in item["reasons"])
             source = {"index": index + 1, "ceiling": item["ceiling"],
                       "gaps": item["gaps"], "message": item.get("message")}
             if label:
@@ -523,7 +587,7 @@ def _exploration_check(gate):
             gaps.append("多份探索清单均未给出可核对缺口")
         return {"state": "provided", "ceiling": ceiling,
                 "traversal_recorded": all(item["traversal_recorded"] for item in checked),
-                "mandatory_attributes": {}, "gaps": gaps,
+                "mandatory_attributes": merged_attrs, "gaps": gaps,
                 "message": "多份分域探索清单合并判定：" + "；".join(
                     f"[{i + 1}{':' + labels[i] if labels[i] else ''}]{item['ceiling']}"
                     for i, item in enumerate(checked)),
@@ -1427,9 +1491,10 @@ def main(argv=None):
     p.add_argument("--session", help="本会话标识")
     p.add_argument("--attack-coverage",
                    help="attack_coverage.py 结论输出；execute 阶段收尾必填，缺失则结论上限压待核实")
-    p.add_argument("--exploration",
+    p.add_argument("--exploration", action="append",
                    help="exploration_state.summarize() 输出的 gate 字段（或整份报告，自动取 gate）；"
-                        "可传 JSON 数组登记多份分域清单（取最严 ceiling、缺口合并）；"
+                        "可重复传多份分域清单的文件路径（取最严 ceiling、缺口合并），"
+                        "单个文件也可含 JSON 数组；"
                         "execute 阶段收尾提供，缺失则告警并压结论上限")
     p.add_argument("--artifact", action="append", dest="artifacts", default=None,
                    help="本阶段产物路径，可重复；登记后交接包「本阶段产物」才列得出来")
@@ -1446,8 +1511,9 @@ def main(argv=None):
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
     p.add_argument("--attack-coverage", help="补正用的 attack_coverage.py 结论")
-    p.add_argument("--exploration", help="补正用的 exploration gate（或整份报告，自动取 gate）；"
-                   "可用 JSON 数组一次补登多份分域清单（取最严 ceiling、缺口合并）")
+    p.add_argument("--exploration", action="append",
+                   help="补正用的 exploration gate（或整份报告，自动取 gate）；"
+                        "可重复传多份分域清单的文件路径（取最严 ceiling、缺口合并）")
     p.add_argument("--allow-relax", action="store_true",
                    help="允许把未通过结论升级为「通过」。默认禁止；仅在补齐探针后重跑门禁"
                         "确实得「通过」时使用，note 须写明依据——history 的 transitions 字段留痕")
@@ -1532,14 +1598,14 @@ def main(argv=None):
         elif args.command == "complete":
             complete(state, args.phase, args.note, args.session,
                      _read_json_arg(args.attack_coverage),
-                     exploration=_read_exploration_arg(args.exploration, multi=True),
+                     exploration=_read_exploration_args(args.exploration),
                      artifacts=args.artifacts,
                      assumptions=args.assumptions,
                      regression=args.regression)
         elif args.command == "revise":
             revise(state, args.phase,
                    attack_coverage=_read_json_arg(args.attack_coverage),
-                   exploration=_read_exploration_arg(args.exploration, multi=True),
+                   exploration=_read_exploration_args(args.exploration),
                    note=args.note, session=args.session,
                    allow_relax=args.allow_relax)
         elif args.command == "amend":
