@@ -1388,3 +1388,15 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - 全量：`pytest tests/ -q` → **829 passed, 239 subtests passed**（v1.47.2 为 825 + 243；测试文件重写：跨域断言反转为拒绝、新增 6 项 P3 测试）。
 - 附带恢复正确的表述（v1.47.2 时曾判过时，回退后重新成立）：`observation_bridge.py` 同源硬校验、`README.md`「严格校验同源探索清单」、`references/source-comparison.md`。
 - **本版宣称**：跨域场景唯一合法路径是「每域一份同源清单 + 多份 gate 合并」；单份混排从「能表达但会放水」变为「不存在」。判定口径依旧未放宽：缺视角/FAIL/未闭合/缺遍历仍压待核实。
+
+## v1.47.4（2026-11-23）：原始清单误登记的误导报错修复（v1.47.3 自审补漏）
+
+按用户要求对 v1.47.3 做审核自身修改，端到端实测（temp 副本 + CLI revise 双 --exploration）抓到一处残留：把**原始探索清单**（schema_version/items 形态，无 gate 结论）直接当 gate 登记时，报错仍是复审 P3-d 批判过的误导文案「verdict_ceiling 非法 … got None」——没告诉用户真正的问题（该先跑 summarize）。v1.47.3 只修了 multi=False 收数组的误导报错，原始清单入口漏了。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| 原始清单检测 | `phase_gate._exploration_check_one`：识别 schema_version+items 且无 verdict_ceiling 的原始清单形态，报错指明「先运行 exploration_state.py summarize 生成 gate 摘要，或传 summarize 完整报告（自动取 gate）」 | `test_raw_plan_file_rejected_with_summarize_hint`（报错文案断言） |
+| CLI append 数据链锁定 | `test_read_args_summarize_reports_end_to_end`：两份 summarize 完整报告 → `_read_exploration_args` → 合并取最严，锁住双路径 wiring | 端到端单测 |
+
+- 全量：`pytest tests/ -q` → **830 passed, 239 subtests**（v1.47.3 条目记录的 829 passed 系 cache 未同步态下的数字，当时含 1 个 cache 态失败；同步后实际 830，本版以同步后全量为准）。
+- 端到端验证（真实项目副本）：CLI `revise` 双 `--exploration` 传 summarize 报告 → ceiling=待核实、sources=2（标签透传）、gaps=7；会话校验对无权会话正确拦截。

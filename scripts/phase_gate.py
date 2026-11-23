@@ -618,6 +618,13 @@ def _exploration_check_one(gate):
     if not isinstance(gate, dict):
         raise ValueError("exploration gate 必须为对象（exploration_state.summarize() 的 gate 字段）")
     ceiling = gate.get("verdict_ceiling")
+    if ceiling is None and "verdict_ceiling" not in gate \
+            and "schema_version" in gate and "items" in gate:
+        # 原始清单形态（schema_version/context/items，无 gate 结论）被直接当成 gate
+        # 登记——不给出笼统的 verdict_ceiling 报错，指明先跑 summarize。
+        raise ValueError("传入的是原始探索清单（schema_version/items 形态），尚未生成 gate 结论："
+                         "请先运行 exploration_state.py summarize 生成 gate 摘要，"
+                         "或直接传 summarize 的完整报告（自动取 gate 字段）")
     # 与 _attack_check 保持同一口径：verdict_ceiling 有三种合法取值。exploration_state
     # 目前只产出 通过/待核实（FAIL 项也走待核实），但只收两种取值会在上游改用「不通过」
     # 时报一句误导性的「缺 verdict_ceiling」——字段其实在，是取值不在白名单。

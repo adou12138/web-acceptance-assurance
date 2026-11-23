@@ -301,6 +301,53 @@ class MultiExplorationGateTests(unittest.TestCase):
             path.write_text(json.dumps({"gate": self.gate_pass}, ensure_ascii=False), encoding="utf-8")
             self.assertEqual(self.pg._read_exploration_arg(str(path)), self.gate_pass)
 
+    def test_raw_plan_file_rejected_with_summarize_hint(self):
+        """自审发现：CLI 把原始清单（schema_version/items，无 gate 结论）直接当 gate
+        登记时，报的是误导性的 verdict_ceiling 非法——必须指明先跑 summarize。"""
+        raw_plan = {"schema_version": "1.0",
+                    "context": {"target_url": "https://agent.sojump.cn",
+                                "application_version": "build-1", "environment": "测试环境"},
+                    "items": []}
+        with self.assertRaises(ValueError) as ctx:
+            self.pg._exploration_check(raw_plan)
+        message = str(ctx.exception)
+        self.assertIn("原始探索清单", message)
+        self.assertIn("summarize", message)
+
+    def test_read_args_summarize_reports_end_to_end(self):
+        """CLI append 的完整数据链：两份 summarize 完整报告 → 两个 gate → 合并取最严。"""
+        tool = _load("exploration_state_e2e", "exploration_state.py")
+        item = {
+            "id": "EXP-1", "requirement_ids": ["REQ-1"],
+            "page_url": "https://agent.sojump.cn/t/abc", "role": "r",
+            "viewport": "1440x900", "state": "s1", "action": "a",
+            "risk": "medium", "status": "NOT_RUN", "observation": "",
+            "evidence_paths": [], "blocked_reason": "", "side_effect_pending": False,
+            "attributes": ["functional"],
+        }
+        report_a = tool.summarize({
+            "schema_version": "1.0",
+            "context": {"target_url": "https://agent.sojump.cn",
+                        "application_version": "b1", "environment": "T"},
+            "items": [dict(item)],
+        })
+        report_b = tool.summarize({
+            "schema_version": "1.0",
+            "context": {"target_url": "https://drunkyong.sojump.cn",
+                        "application_version": "b1", "environment": "T"},
+            "items": [dict(item, page_url="https://drunkyong.sojump.cn/pm/1.aspx")],
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = Path(tmp) / "report_a.json"
+            p2 = Path(tmp) / "report_b.json"
+            p1.write_text(json.dumps(report_a, ensure_ascii=False), encoding="utf-8")
+            p2.write_text(json.dumps(report_b, ensure_ascii=False), encoding="utf-8")
+            gates = self.pg._read_exploration_args([str(p1), str(p2)])
+            self.assertIsInstance(gates, list)
+            result = self.pg._exploration_check(gates)
+            self.assertEqual(result["ceiling"], "待核实")
+            self.assertEqual(len(result["sources"]), 2)
+
     def test_revise_accepts_multi_gate_without_unlocking_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "phase-state.json"
