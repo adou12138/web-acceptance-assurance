@@ -121,7 +121,7 @@ maxTurns: 100
 
 两条最常见判错：①「只给需求」≠ 可以给“通过”（无实测则结论上限为待核实）；②「批次通过」≠「总体验收通过」（披露范围限制）。
 
-**路由回归基线（OM6）**：`references/route-prompts.json`（9 条代表 prompt 的 `expected_skill` / `expected_path`，覆盖评审/生成/接口/设计还原/无设计稿走查/串行/反馈对账/需求+网址/边界冲突）。修改本判路表或任一 skill 的 description 后逐条对照，**命中率不得下降**；判路有歧义时以本表为准并回改表项。
+**路由回归基线（OM6）**：`references/route-prompts.json`（10 条代表 prompt 的 `expected_skill` / `expected_path`，覆盖评审/生成/接口/设计还原/无设计稿走查/串行/反馈对账/需求+网址/边界冲突/Agent 能力测试）。修改本判路表或任一 skill 的 description 后逐条对照，**命中率不得下降**；判路有歧义时以本表为准并回改表项。
 
 ### 执行前必问矩阵（每次必问，不得沿用上次运行或历史对话的选择）
 

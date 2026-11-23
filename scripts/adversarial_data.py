@@ -86,8 +86,17 @@ def load(path):
 def _object(value, required, optional, name):
     if not isinstance(value, dict):
         raise ValueError(f"{name}: 必须为对象")
-    if set(value) - required - optional or required - set(value):
-        raise ValueError(f"{name}: 缺少必填字段或包含未知字段")
+    missing = sorted(required - set(value))
+    unknown = sorted(set(value) - required - optional)
+    if missing or unknown:
+        # 与 exploration_state 同口径：缺字段与多余字段分列点名。合并成一句时执行者
+        # 无法判断该补哪个字段，只能回头读源码——手写 plan JSON 时这是第一道坎。
+        parts = []
+        if missing:
+            parts.append(f"缺字段 {missing}")
+        if unknown:
+            parts.append(f"未知字段 {unknown}")
+        raise ValueError(f"{name}: " + "；".join(parts))
 
 
 def _text(value, name):

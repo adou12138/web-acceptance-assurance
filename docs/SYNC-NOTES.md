@@ -1342,3 +1342,17 @@ ATK 条目：命中 → 已破，未命中 → 未破，其余 → 尚未验证�
 - 全量：`pytest tests/ -q` → **798 passed, 230 subtests passed**（v1.46.2 为 780 + 230）。
 - 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2——本版未改任何判定口径，只改诊断与呈现。
 - 本版**不宣称**：跨域 iframe 场景的探索清单同源限制未放宽（本版以分域清单 + 跨域证据关联表落地，契约未改）；界面样式/易用性/无障碍的量化检查能力未新增；A/B 检出能力未评测。
+
+## v1.47.1（2026-11-23）：影响面复审整改——旧产物兼容、条目数防漂移、第二处字段诊断
+
+按「结合影响范围、以项目目标为核心」的 v1.47.0 复审结论落地。v1.47.0 的 7 项改动本身兑现了承诺，但影响面只覆盖了改动时想到的那一个消费方，遗漏三类：旧版门禁产物、同一类报错的另一处校验器、引用基线条目数的常量。本版只修这三类，**不新增测试配额、不改判定口径**。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| F1 旧产物兼容 | `scripts/render_report_html.py`：`view_cells` 缺席时整列不渲染（此前 v1.46 形态门禁会被渲染成「8 条目 / 0 单元 / 有台账记录」自相矛盾）；部分缺失该格显 `—`；note 明确「依据产物未提供该数据」 | `TestLegacyGateCompatibility` 3 项 |
+| F2 条目数防漂移 | 主提示词「路由回归基线（OM6）」条目数 9 → 10，覆盖枚举补「Agent 能力测试」——原先照字面执行会跳过新增 R10，使 E07 的防回归机制自伤；`references/route-prompts.json` 注释改指真实测试文件，并写明增减条目须同步声明 | `TestRouteBaselineCountGuard`（机械比对声明与实际条数） |
+| F3 第二处字段诊断 | `scripts/adversarial_data.py` `_object()` 与 `exploration_state` 对齐：分列「缺字段 [...]」「未知字段 [...]」——手写 `adversarial-plan.json` 是第一道坎，原先只能读源码定位 | `TestAdversarialFieldDiagnostics` 3 项 |
+
+- 全量：`pytest tests/ -q` → **805 passed, 230 subtests passed**（v1.47.0 为 798 + 230）。
+- 判定口径未变：`attack_coverage.TOOL_VERSION` 保持 3、`eval_cases.TOOL_VERSION` 保持 2。
+- 本版**不宣称**：跨域 iframe 的探索清单同源限制仍未放宽；`mandatory_attributes` 与 `thin_views` 并存的原始 gate 输出未改口径（报告层已消歧，门禁算法按 v1.47.0 复审决定暂缓）。

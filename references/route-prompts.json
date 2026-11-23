@@ -1,5 +1,5 @@
 {
-  "_comment": "专家级跨 skill 路由回归样本集（OM6）。用途：修改 agents 判路表或任一 skill description 后，逐条对照 expected_skill / expected_path 做路由回归，命中率不得下降。expected_skill 取值：main（专家主体）/ requirement-review / case-generator / api-test / figma-ui-parity / pipeline（多 skill 串行）。本文件是人工/会话回归基线，不参与自动化测试的 skill 真路由（宿主路由不可离线复现）；tests/test_route_prompts.py 仅校验结构完整性与覆盖面。",
+  "_comment": "专家级跨 skill 路由回归样本集（OM6）。用途：修改 agents 判路表或任一 skill description 后，逐条对照 expected_skill / expected_path 做路由回归，命中率不得下降。expected_skill 取值：main（专家主体）/ requirement-review / case-generator / api-test / figma-ui-parity / pipeline（多 skill 串行）。本文件是人工/会话回归基线，不参与自动化测试的 skill 真路由（宿主路由不可离线复现）；tests/test_om_fixes.py 的路由结构用例仅校验结构完整性与覆盖面。条目数在 agents 主提示词「路由回归基线（OM6）」处声明，增删条目须同步该处数字（tests/test_v147_route_and_gates.py 机械比对，防止声明与实际脱节）。",
   "schema_version": "1.0",
   "prompts": [
     {
