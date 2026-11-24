@@ -978,7 +978,7 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         if isinstance(probes, int) and probes > 0:
             probes_total += probes
 
-    # v1.49.0：按现场证据去重的独立执行数。同一批证据文件被多条记录引用（补录、
+    # v1.48.4：按现场证据去重的独立执行数。同一批证据文件被多条记录引用（补录、
     # 台账更正、同一操作的多视角登记）只算一次执行；真正以同输入复跑会带新现场
     # 证据，正常计数。无申报值（旧批次）记 None——"没登记"与"登记了 0"不同。
     evidence_runs = set()
@@ -1531,8 +1531,9 @@ def _emit_csv(result, path):
             rows.append({"section": key, "metric": name, "value": value})
     for name in ("total", "attack_density", "density_threshold", "surf_linked",
                  "surf_linkage_rate", "method_missing", "method_diversity",
-                 "probes_total", "surfaces_beyond_plan", "verdict_ceiling",
-                 "tool_version"):
+                 "probes_total", "evidence_runs_deduped",
+                 "probes_declared_missing_runs", "surfaces_beyond_plan",
+                 "verdict_ceiling", "tool_version"):
         # 版本键用 get：产物一旦缺该键（旧版结果被复用），CSV 应留空而不是整条崩掉。
         rows.append({"section": "summary", "metric": name, "value": result.get(name, "")})
     for name, value in result["hypotheses"].items():

@@ -81,6 +81,8 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/executed_views/skipped_views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
 
+`gate.next_actions` 是把上述排序落成可执行的换路视图：`ordered`（可执行项，按风险→异常跟进→ID 排序——与 FAIL 条目同 case_id 的待执行项标记 `linked_fail` 并排前，把"发现异常后补测能区分解释的取值"提到普通待执行之前）、`recheck`（BLOCKED 条目及其复查条件）、`next_focus`（清单首项，执行遇阻时的显式切换目标）、`fail_candidates`。某条链路受阻（等待审核、环境不可达）时按 `next_focus` 切换，而不是空等或就地收尾；清单只呈现排序与依据，选择仍由专家负责并在台账留痕。
+
 CSV派生“界面样式”“交互易用性”“基础无障碍”“功能”“性能”视角，一条记录可属于多个视角，planned与总量按唯一id去重。CSV采用标准引号转义，疑似公式单元格加前导单引号避免表格应用执行，原始JSON不改。此视图不自动生成BUG严重度、UX评分或AC满足率；业务判断仍用实际断言与证据。正式执行结果不要直接从可编辑清单反向覆盖events.jsonl。
 
 ## 观察结果桥接

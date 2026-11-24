@@ -305,7 +305,7 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     return report_gate
 
 
-# —— 运行时换路（v1.49.0）——
+# —— 运行时换路（v1.48.4）——
 # 存在目的：探索门禁能算出 ready_pending/ready_high_risk，但滑块题实测证明它不会驱动
 # 下一步——收尾仍有 3 项可执行（含 1 项高风险）照样结束。这里把「还剩什么可做」变成
 # 带重排依据的确定性清单：排除前置不满足/副作用待核对/被阻塞项，按风险→复现候选→

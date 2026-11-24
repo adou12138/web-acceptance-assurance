@@ -435,6 +435,112 @@ class CollectionRecordTests(PhaseGateTestBase):
         self.assertIn("lead_unknown_field", codes)
 
 
+class CollectionClosureTests(PhaseGateTestBase):
+    """v1.48.4：complete(execute) 消费采集记录——脏数据拒收尾、缺失/空清单压待核实。"""
+
+    def _reach_execute(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", self.session_for("execute"))
+
+    def _finish_execute(self, collection="__clean__"):
+        """复刻 finish_phase("execute") 但 collection 可控（"__clean__"/None/路径）。"""
+        session = self.session_for("execute")
+        self.resume("execute")
+        self.pg.start(self.state, "execute", session)
+        coverage = {"verdict_ceiling": "通过", "gaps": [], "attack_density": 0.4}
+        exploration = {"verdict_ceiling": "通过", "ready_pending": 0,
+                       "missing_views": [], "failed_items": [],
+                       "traversal_recorded": True,
+                       "mandatory_attributes": {"security": "covered",
+                                                "compatibility": "covered",
+                                                "copy": "covered"},
+                       "message": "夹具"}
+        kwargs = {}
+        if collection != "__clean__":
+            kwargs["collection"] = collection
+        else:
+            kwargs["collection"] = self.clean_collection_file()
+        self.pg.complete(self.state, "execute", session=session,
+                         attack_coverage=coverage, exploration=exploration, **kwargs)
+        self.pg.submit(self.state, "adjudicate", session=session,
+                       model_class=self.pg.ROUTING["adjudicate"]["model_class"],
+                       model_name=self.pg.ROUTING["adjudicate"]["model_hint"])
+        self.pg.checkpoint(self.state, "execute", self.handoff_dir, session=session)
+
+    def _close_all_after_execute(self, collection="__clean__"):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self._finish_execute(collection)
+        self.resume("adjudicate")
+        self.pg.start(self.state, "adjudicate", self.session_for("adjudicate"))
+        self.pg.complete(self.state, "adjudicate", session=self.session_for("adjudicate"))
+        return self.check()
+
+    def _dirty_file(self):
+        path = self.folder / "dirty.jsonl"
+        path.write_text(json.dumps({"id": "OBS-1", "collection_state": "collected",
+                                    "verdict": "PASS",
+                                    "evidence_paths": ["a.png"]}), encoding="utf-8")
+        return str(path)
+
+    def test_dirty_collection_blocks_complete(self):
+        """判定字段混进采集 = 采集事实不成立：必须先修正，不能带病收尾。"""
+        self._reach_execute()
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                             collection=self._dirty_file())
+        self.assertIn("结构违规", str(ctx.exception))
+        self.assertEqual(self.state["phases"]["execute"]["status"], "in_progress")
+
+    def test_clean_collection_recorded_as_provided(self):
+        self._reach_execute()
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file())
+        self.assertEqual(self.state["phases"]["execute"]["collection"]["state"],
+                         "provided")
+
+    def test_missing_collection_closes_and_presses_ceiling(self):
+        """收尾不交采集 = 受限交付：可完成，但 check_verdict 留痕压待核实。"""
+        check = self._close_all_after_execute(collection=None)
+        self.assertEqual(self.state["phases"]["execute"]["collection"]["state"],
+                         "not_provided")
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("未提供采集记录" in r for r in check["reasons"]))
+
+    def test_empty_collection_file_not_disguised_as_provided(self):
+        """空清单登记 empty：拿 0 条记录冒充"已校验通过"必须可区分。"""
+        empty = self.folder / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+        check = self._close_all_after_execute(collection=str(empty))
+        entry = self.state["phases"]["execute"]["collection"]
+        self.assertEqual(entry["state"], "empty")
+        self.assertEqual(entry["records"], 0)
+        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(any("采集记录为空" in r for r in check["reasons"]))
+
+    def test_legacy_state_without_collection_field_disclosed(self):
+        """旧批次状态文件没有 collection 字段：不拒绝，但按原契约披露留痕。"""
+        check = self._close_all_after_execute(collection=self.clean_collection_file())
+        del self.state["phases"]["execute"]["collection"]
+        legacy = self.check()
+        self.assertTrue(any("旧批次状态文件" in r for r in legacy["reasons"]))
+        self.assertNotIn("旧批次状态文件", " ".join(check["reasons"]))
+
+    def test_collection_on_other_phase_rejected(self):
+        """--collection 只对 execute 有意义：传给 plan 收尾必须显式报错而非静默丢弃。"""
+        self.pg.start(self.state, "plan", "SESS-1")
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.complete(self.state, "plan", session="SESS-1",
+                             collection=self.clean_collection_file())
+        self.assertIn("--collection", str(ctx.exception))
+
+
 class AdjudicationHonestyTests(PhaseGateTestBase):
     def valid(self, **overrides):
         finding = {"id": "BUG-1", "classification": "product_defect",

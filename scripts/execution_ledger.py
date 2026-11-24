@@ -769,7 +769,7 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
         raise ValueError("bug_ids must be string array")
     if not isinstance(assertions, list) or any(not isinstance(x, dict) or not isinstance(x.get("check"), str) or not x["check"].strip() or "actual" not in x or type(x.get("matched")) is not bool for x in assertions):
         raise ValueError("assertions require check, actual and matched boolean")
-    # v1.49.0：断言级证据核实声明（可选扩展，旧格式完全兼容）。evidence_verified=False
+    # v1.48.4：断言级证据核实声明（可选扩展，旧格式完全兼容）。evidence_verified=False
     # 表示该断言的判据没有对应证据（如用列表快照充当下载文件断言）。允许与 matched=True
     # 并存——matched 是业务观察，evidence_verified 是证据是否支撑判据本身。
     for item in assertions:
@@ -1172,7 +1172,7 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
         if same and status == "NOT_RUN" and not pending:
             ready.append(case_id)
         outcomes[case_id] = {"status": status, "flaky": flaky, "attempt_ids": [e["attempt_id"] for e in completed], "unfinished_attempts": pending}
-        # v1.49.0：断言级证据核实缺口的派生视图（PASS 用例中声明无证据支撑的判据）。
+        # v1.48.4：断言级证据核实缺口的派生视图（PASS 用例中声明无证据支撑的判据）。
         for event in valid:
             if event["status"] != "PASS":
                 continue

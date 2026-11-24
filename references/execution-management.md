@@ -25,7 +25,7 @@ known_issues来自独立缺陷台账，可以为空数组表示明确未有已�
 
 1. 读取当前设计与summary，核对版本、环境、角色、开关、目标及授权。
 2. 执行前写 BEGIN：唯一attempt_id、TC ID、拟执行动作；确认日志落盘后再操作目标。此记录不是对外部系统的事务锁。
-3. 按完整规格执行，保存脱敏业务观察证据；PASS/FAIL必须有本地证据文件及每个设计断言的check/actual/matched。工具核对check集合，不替代对证据内容的真实性审阅，也不自动解释断言语义。
+3. 按完整规格执行，保存脱敏业务观察证据；PASS/FAIL必须有本地证据文件及每个设计断言的check/actual/matched。断言可选带 `evidence_verified`（布尔）：该断言的判据是否有对应类型的证据支撑——下载类断言要实际文件读回、保存类要重开/发布后读回、交互类要实际操作记录，用列表明细充当下载文件证据时该断言记 `false`。**全部断言都是 `false` 的 PASS 被拒绝**（改记 BLOCKED 写明缺什么证据，或拆出已核实断言单独记）；部分核实可 PASS 入账，summary 的 `evidence_unverified` 逐条列出缺口，不带病进报告。工具核对check集合，不替代对证据内容的真实性审阅，也不自动解释断言语义。
 4. 立即写 FINISH：status、actual、evidence_paths、assertions、cause、bug_ids、cleanup。失败归因为product须关联BUG；其他归因可为environment/data/automation/unknown，不能为提高通过率修改归因。
 5. 更新独立缺陷台账后生成阶段摘要。相同attempt的同类同内容事件幂等返回；不同内容拒绝覆盖。重试使用新attempt ID。
 
@@ -57,7 +57,7 @@ NOT_RUN表示尚无attempt，不提交FINISH；BLOCKED/SKIPPED需在actual说明
 | `oracle_source` | independent / self_attested | 判据来自独立通道还是被测物自己的回显 |
 | `oracle_channel` | 自由文本 | `independent` 必填且要点名通道（网页端 DOM/接口响应/持久化读回）；只写"读回一致"不算 |
 | `discovery_mode` | designed_probe / incidental / undetermined | 这条来自为失效假设设计的探针，还是碰巧撞见 |
-| `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现 |
+| `probes` | 非负整数 | 本用例实际发出的探针数，用于算每百探针有效发现。覆盖统计另出 `evidence_runs_deduped`（按现场证据集去重的独立执行数）与 `probes_declared_missing_runs`（无申报值记录数）——同一批证据被多条记录引用（补录/台账更正）只算一次执行，申报值本身不去重、原样披露 |
 
 收尾时执行 `python scripts/attack_coverage.py --ledger <工作区>/events.jsonl --plan <对抗plan> --residual-note "<未破的攻击面>" [--amend-note "<计划外风险面的纳入说明>"] [--atk-absent-reason "<本轮为何没有前置攻击假设>"] [--replay-note <不复打理由 JSON>]`，把结论交给 `phase_gate complete --phase execute --attack-coverage`。
 

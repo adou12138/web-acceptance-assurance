@@ -1423,11 +1423,25 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 | 条目 | 变更 | 回归 |
 |---|---|---|
 | M1 执行调度 | `exploration_state.py` summarize 新增 `gate.next_actions`：按风险+复现候选（FAIL 条目在同一风险级排前）排序的可执行清单、阻塞项复查条件、next_focus 单项指派；判定业务仍由专家负责，脚本只做排序呈现 | `test_next_actions_promotes_reproduction_candidate`（FAIL 候选优先）等 2 例 |
-| M2 采集收尾 | `phase_gate.py` complete(execute) 新增 `--collection`：消费台账采集记录 JSONL，含判定字段（verdict/collection_state 违规混入）即拒绝收尾（结构违规列明逐条原因）；未提供记 `state=not_provided` 并在 check-verdict 压「待核实」——保留阶段性交付能力，但采集事实缺失不再是静默通过 | `CollectionClosureTests`（dirty 拒收/clean 入账/缺失压级）4 例 + 既有链路测试全部补合规采集 |
+| M2 采集收尾 | `phase_gate.py` complete(execute) 新增 `--collection`：消费台账采集记录 JSONL，含判定字段（verdict/collection_state 违规混入）即拒绝收尾（结构违规列明逐条原因）；未提供记 `state=not_provided`、空文件（0 条）记 `state=empty`——两者均在 check-verdict 压「待核实」并分文案留痕（空清单不得冒充"已校验通过"）；旧状态文件无该字段按原契约披露，保留阶段性交付能力 | `CollectionClosureTests` 6 例（dirty 拒收尾/clean 入账/缺失压级/空文件登记 empty/旧状态文件披露/传给 plan 报错）+ 既有链路测试全部补合规采集 |
 | M3 断言证据 | `execution_ledger.py` finish 新增 `evidence_verified`（逐断言布尔）：全部断言无证据核实却报 PASS → 拒绝；部分核实 → PASS 入账但 summary 新增 `evidence_unverified` 逐条暴露缺口（case_id+check）。下载/保存/交互类「证据类型错配」从此在台账层可见，不再拖到裁决 | `test_unverified_pass_rejected`、`test_partial_unverified_exposed_in_summary` 等 3 例 |
 | M4 探针计数 | `attack_coverage.py` analyse 新增 `evidence_runs_deduped`（按现场证据集包含归并去重的独立执行数）与 `probes_declared_missing_runs`（无申报值记录数，区别于 0）；申报值 `probes_total` 原样披露不去重。修复首版归并逻辑两处缺陷：互为子集的证据组两侧全部被丢弃（真子集关系下 `<` 与 `<=` 判定互相命中）、旧批次「有证据无申报」漏计 missing | `ProbeEvidenceDedupTests`（同证据三记录计一次/新证据计复跑/无申报报 missing）3 例 |
 
-- 准出记录：全量 `python -m unittest discover -s tests -q` → **870 passed**（M4 修复归并缺陷前 98 项 attack_coverage 有 2 失败，修复后全绿）。缓存守卫：plugin.json 升 1.48.4 后旧缓存 1.47.5 SKILL.md 需禁活或缓存目录刷新（见兼容性）。
+- 准出记录：全量 `python -m unittest discover -s tests -q` → **870 passed**（M4 修复归并缺陷前 98 项 attack_coverage 有 2 失败，修复后全绿）。缓存守卫：plugin.json 升 1.48.4 后旧缓存 1.47.5 SKILL.md 已禁活（改名 .disabled，缓存副本无 git 属禁活例外）。
 - 兼容性：`complete(execute)` 不传 `--collection` 仍可收尾（state=not_provided，非硬阻断）；`finish` 不传 `evidence_verified` 走原口径（视为已核实，兼容旧批次）；`next_actions`/`evidence_unverified`/`evidence_runs_deduped` 均为新增键，不改既有键语义。
 - 回退：本版四项彼此独立，`git revert` 单条提交即可分别回退；M2 回退后 check-verdict 恢复不查采集；M4 回退后恢复申报值直加。
 - 本版不宣称的能力：不改变「脚本排序、专家决策」的职责边界；采集记录的真实性仍由复核环节把关；探针去重只按证据文件集，不识别「同文件不同内容」的复跑（该场景应换新文件名归档）。
+
+### v1.48.4 复审更正（v1.48.5 发布）
+
+按「子 agent/自身描述不可信、以 git 与实跑为准」复审 v1.48.4 提交内容，发现四处问题，全部修复并实测：
+
+| 发现（实测坐实） | 修复 | 回归 |
+|---|---|---|
+| **M2 测试类整批丢失**：SYNC-NOTES 声称「CollectionClosureTests 4 例」，`grep -c CollectionClosure tests/test_phase_gate.py` = 0——补丁流程中执行过 `git checkout -- tests/test_phase_gate.py` 回退，把新测试类连同首轮补丁一起冲掉，只重新补了 helper 与调用点。870 全绿是因为基座 finish_phase 已带合规 collection，缺的只是 M2 自身的锁定测试 | 补回 `CollectionClosureTests` **6 例**（比原声称多 2：空文件与传给 plan 的分支） | 6 例全绿；全量 876 passed |
+| **空采集登记逃逸**：`--collection <空文件>` → `records=[]` → `violations=[]` → 登记 `state=provided`，一个空文件把「未提供」洗成「已校验通过」，check_verdict 采集分支静默放行 | complete 区分 `empty` 态；check_verdict 对 empty 单独文案压「待核实」（实测撤分支该测试变红） | `test_empty_collection_file_not_disguised_as_provided` |
+| **版本痕迹错误**：4 个脚本共 6 处注释写 `v1.49.0`，实际发版 1.48.4 | 统一改为 v1.48.4（正文不留版本痕迹属常规清理，注释保留作变更溯源） | grep 零残留 |
+| **新键消费缺位**：`next_actions`/`evidence_unverified`/`evidence_runs_deduped`/`probes_declared_missing_runs` 在脚本与文档里零读取点（仅 SYNC-NOTES 提及）——按「注释里说不算、grep 真实读取点」纪律，属半死字段 | 契约接线：`execution-management.md` §3 步 3 写 evidence_verified 口径与 §攻击面表写去重双指标；`exploration-runtime.md` 写 next_actions 换路口径；`phase-workflow.md` §3 写收尾三态口径；`attack_coverage.py` CSV summary 白名单补两个新指标 | 契约回链 grep 命中；CSV 导出含新行 |
+
+- 复审同时核对的**非缺陷**项：旧状态文件兼容（collection 键缺失走「披露不拒绝」分支，实测留痕文案正确）；`scan_collection_records` 自 v1.38.0 已存在，本次是接进收尾主链路非新造；revise 不覆盖 collection 补正——旧状态文件本就压级、新状态空文件有 empty 态，升级依赖是重跑 complete 的正当流程，不构成解锁旁路（记录为已知设计边界）。
+- 过程教训：**批量补丁脚本中途 `git checkout -- <test file>` 会把同文件内的新增测试一并冲掉**。跨会话/多轮补丁后必须 `grep` 点名核对每个声称的测试类/函数真实存在，再跑全量——"Ran N tests OK" 不能证明目标测试在其中。

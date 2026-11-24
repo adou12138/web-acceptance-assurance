@@ -784,7 +784,9 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
     if phase == "execute":
         entry["attack_coverage"] = _attack_check(attack_coverage)
         entry["exploration"] = _exploration_check(exploration)
-        # v1.49.0：收尾消费真实采集。结构违规 = 采集事实不成立，拒绝收尾（修正后再交）；
+        # 收尾消费真实采集。结构违规 = 采集事实不成立，拒绝收尾（修正后再交）；
+        # 空清单（0 条记录）= 采集根本没发生，登记 empty 压待核实——否则一个空文件
+        # 就能把"未提供"升级为"已校验通过"，绕过 check_verdict 的采集留痕。
         # 未提供 = 保留"受限收尾"能力（预算耗尽/外部依赖仍可交付已取得证据），但逐项
         # 留痕并把该缺口带进 check_verdict——"没交"与"交了且合规"在结论上可区分。
         if collection is not None:
@@ -795,8 +797,12 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
                     f"采集记录存在 {len(violations)} 处结构违规，未收尾："
                     f"{violations[0].get('code')}（{violations[0].get('message', '')[:80]}）；"
                     "修正采集记录后重新 complete——结果台账不能改名充当采集输入")
-            entry["collection"] = {"state": "provided", "records": len(records),
-                                   "violations": [], "checked_at": _now()}
+            if not records:
+                entry["collection"] = {"state": "empty", "records": 0,
+                                       "violations": [], "checked_at": _now()}
+            else:
+                entry["collection"] = {"state": "provided", "records": len(records),
+                                       "violations": [], "checked_at": _now()}
         else:
             entry["collection"] = {"state": "not_provided", "checked_at": _now()}
     elif attack_coverage is not None or exploration is not None or collection is not None:
@@ -1288,12 +1294,15 @@ def check_verdict(state, assumptions=None, regression=None):
                        "已测类结论上限压待核实")
     elif explor.get("ceiling") != "通过":
         reasons.extend(explor.get("reasons") or ["探索清单不达标，结论上限压待核实"])
-    # 采集合规（v1.49.0）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
+    # 采集合规（v1.48.4）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
     # 不拒绝历史批次（旧状态文件没有该字段），但把缺口写进原因与上限。
     collection = (state["phases"].get("execute") or {}).get("collection")
     if collection is None:
         reasons.append("execute 阶段未登记采集合规结论（旧批次状态文件，按原契约披露，"
                        "本轮采集未经 scan-collection 校验）")
+    elif collection.get("state") == "empty":
+        reasons.append("execute 阶段收尾登记的采集记录为空（0 条）：采集未实际发生，"
+                       "裁决复核与「轨迹为准」缺少输入，结论上限压待核实")
     elif collection.get("state") != "provided":
         reasons.append("execute 阶段收尾未提供采集记录（--collection）：采集事实未经校验，"
                        "裁决复核与「轨迹为准」缺少输入，结论上限压待核实")
@@ -1549,7 +1558,7 @@ def main(argv=None):
     p.add_argument("--collection",
                    help="本轮采集记录 JSONL/JSON 数组路径；execute 阶段收尾提供则做 "
                         "scan-collection 结构校验，有违规即拒绝收尾（修正后重试）；"
-                        "未提供则保留受限收尾能力，但结论上限压待核实")
+                        "空文件记 empty、未提供记 not_provided，两者都在裁决终检压待核实")
 
     p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）")
     p.add_argument("state")
