@@ -716,5 +716,176 @@ class ReplayObligationTests(unittest.TestCase):
         self.assertEqual(result["retest_suggestions"], [])
 
 
+class AtkNegativeEvidenceTests(unittest.TestCase):
+    """M1：ATK「未命中」的证据等级门禁——推演不能冒充实测，practical 须挂证据。
+
+    判定三重交集：status=未命中 × verified_by × impact 属功能/数据/权限。
+    - 推演/走读（simulation/code_walk）判「未命中」→ 须 --replay-note 点名解释或补实操；
+    - practical 判「未命中」→ 须 attempt_id 绑定 E1 FINISH（case_id 关联 + 哈希复核）
+      或 evidence 落盘文件+哈希；--replay-note 不能替代实操证据；
+    - verified_by 缺省 unknown（旧台账）→ 零改动兼容，不触发任何新门禁。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.evidence_file = self.dir / "probe-result.png"
+        self.evidence_file.write_bytes(b"probe evidence bytes")
+
+    def _evidence(self):
+        import hashlib
+        return [{"path": str(self.evidence_file.resolve()),
+                 "sha256": hashlib.sha256(self.evidence_file.read_bytes()).hexdigest()}]
+
+    def _finish(self, attempt_id="AT-1", case_id="TC-9", status="PASS", grade="E1"):
+        event = {"kind": "FINISH", "attempt_id": attempt_id, "case_id": case_id,
+                 "status": status, "evidence": self._evidence()}
+        if grade:
+            event["evidence_grade"] = grade
+        return event
+
+    def _atk(self, **extra):
+        item = {"id": "ATK-001", "hypothesis": "并发提交可能重复扣款",
+                "validation_path": "并发提交比对流水", "impact": "功能",
+                "status": "未命中"}
+        item.update(extra)
+        return item
+
+    def _codes(self, result):
+        return [g["code"] for g in result["gaps"]]
+
+    def _notice_codes(self, result):
+        return [n["code"] for n in result["notices"]]
+
+    # 1) 推演判「未命中」且无解释 → gap
+    def test_simulation_negative_without_note_is_gap(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk(verified_by="simulation")])
+        self.assertIn("atk_negative_by_simulation_unexplained", self._codes(result))
+
+    # 2) 同上 + replay_note 点名该 ATK → 豁免
+    def test_simulation_negative_with_replay_note_is_exempt(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk(verified_by="simulation")],
+                            replay_notes={"ATK-001": "推演依据第 3 轮并发观察 OBS-7，见既有台账"})
+        self.assertNotIn("atk_negative_by_simulation_unexplained", self._codes(result))
+
+    # 3) practical 无 attempt_id 且无 evidence → gap
+    def test_practical_negative_without_evidence_is_gap(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk(verified_by="practical")])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    # 4) attempt_id 指向 E1 FINISH、case_id 匹配、哈希完好 → 无 gap
+    def test_practical_negative_bound_to_e1_finish_passes(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertNotIn("atk_practical_negative_grade_unset", self._notice_codes(result))
+
+    # 5) case_id 与 linked_tc 不匹配 → gap（跨案件挂靠）
+    def test_case_id_mismatch_is_gap(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-OTHER")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    # 6) E2 等级不合格 → gap
+    def test_e2_grade_is_gap(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish(grade="E2")], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    # 7) 旧格式 FINISH（未设 evidence_grade）→ 无 gap 但产生 notice
+    def test_legacy_finish_without_grade_passes_with_notice(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish(grade=None)], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertIn("atk_practical_negative_grade_unset", self._notice_codes(result))
+
+    # 8) 体验类不扩大义务
+    def test_experience_impact_practical_negative_not_gated(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk(impact="体验", verified_by="practical")])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertNotIn("atk_negative_by_simulation_unexplained", self._codes(result))
+
+    # 9) 回归：旧台账无 verified_by（缺省 unknown）→ 不触发任何新门禁
+    def test_legacy_registry_without_verified_by_untouched(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk()])
+        self.assertNotIn("atk_negative_by_simulation_unexplained", self._codes(result))
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertEqual(result["atk"]["not_hit_verified_by"]["unknown"], 1)
+
+    def test_invalid_verified_by_rejected(self):
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=[self._atk(verified_by="脑内推演")])
+        self.assertIn("atk_registry_invalid", self._codes(result))
+
+    def test_evidence_without_hash_rejected(self):
+        # evidence 不是 Path.exists() 的放宽版：落盘证据必须带哈希
+        atk = self._atk(verified_by="practical", evidence=[{"path": "x.png"}])
+        result = ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_registry_invalid", self._codes(result))
+
+    def test_hash_mismatch_evidence_is_gap(self):
+        atk = self._atk(verified_by="practical",
+                        evidence=[{"path": str(self.evidence_file.resolve()),
+                                   "sha256": "0" * 64}])
+        result = ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    def test_attempt_id_not_in_ledger_is_gap(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-MISSING", linked_tc="TC-9")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    def test_blocked_finish_does_not_count(self):
+        # status ∈ {PASS, FAIL} 才算执行完成：BLOCKED 是中途弃置，不能挂靠
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish(status="BLOCKED")], residual_note="x",
+                            atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
+    def test_file_evidence_fallback_passes(self):
+        # 降级路径：确实不依附任何执行时可用落盘证据（note 须写明为何没有 run）
+        atk = self._atk(verified_by="practical", evidence=self._evidence(),
+                        note="独立探针，不依附任何台账执行")
+        result = ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+
+    def test_linked_ac_only_unproven_carries_manual_check_note(self):
+        # linked_tc 为空但 linked_ac 非空：绑定仍可用，但 gap 消息须附人工核对义务
+        atk = self._atk(verified_by="practical", attempt_id="AT-MISSING",
+                        linked_ac="AC-3")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        gap = [g for g in result["gaps"] if g["code"] == "atk_practical_negative_unproven"][0]
+        self.assertIn("人工核对 AC 与执行记录的对应性", gap["message"])
+
+    def test_not_hit_verified_by_distribution_exposed(self):
+        # M3 披露口径：未命中的验证方式分布（practical/simulation/code_walk/unknown）
+        entries = [self._atk(verified_by="simulation"),
+                   self._atk(id="ATK-002", verified_by="practical"),
+                   self._atk(id="ATK-003", verified_by="code_walk")]
+        result = ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=entries)
+        self.assertEqual(result["atk"]["not_hit_verified_by"],
+                         {"practical": 1, "simulation": 1, "code_walk": 1, "unknown": 0})
+
+    def test_atk_stagnant_grouped_by_impact(self):
+        # M3：atk_stagnant 按 impact 分组呈现，功能/数据/权限单列一行
+        atk_prev = [self._atk(status="未执行"),
+                    {"id": "ATK-002", "hypothesis": "h2", "validation_path": "路径 v",
+                     "impact": "体验", "status": "未执行"}]
+        atk_curr = [self._atk(status="未执行"),
+                    {"id": "ATK-002", "hypothesis": "h2", "validation_path": "路径 v",
+                     "impact": "体验", "status": "未执行"}]
+        result = ac.analyse([rec(1, "boundary")], residual_note="x",
+                            atk_entries=atk_curr, prev_atk_entries=atk_prev)
+        stagnant = [n for n in result["notices"] if n["code"] == "atk_stagnant"][0]
+        self.assertIn("功能：", stagnant["message"])
+        self.assertIn("体验：", stagnant["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

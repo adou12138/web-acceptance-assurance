@@ -48,6 +48,7 @@ UI 类发现反而被压上限——那是制度性逆向激励。
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -61,7 +62,10 @@ COVERAGE_SCHEMA = "attack-coverage/1"
 # 只改输出字段（不影响判定）不 bump——版本号表达的是"判定规则变没变"。
 # v3：并入 v1.46 线的判定变化（N6「解释或复打」例外、ATK 独立轨道、
 # 多样性压档收紧）——同一份台账在 v2 与 v3 下可能得到不同 verdict_ceiling。
-TOOL_VERSION = "3"
+# v4：M1 证据等级门禁——ATK「未命中」新增 verified_by/attempt_id/evidence 字段；
+# 推演/走读判「未命中」且影响面属功能/数据/权限时须解释或复打；practical 未命中
+# 须挂 E1 执行记录或落盘证据。同一份台账在 v3 与 v4 下可能得到不同 verdict_ceiling。
+TOOL_VERSION = "4"
 
 # 路径类型：positive 表示"确认功能可用"，其余全部是攻击维度（非正向）。
 ATTACK_PATH_TYPES = (
@@ -119,6 +123,16 @@ ATK_STATUSES = ("未执行", "执行中", "命中", "未命中", "无法验证")
 # 影响面属功能/数据/权限的命中才升级为严重度候选：体验类命中不压结论上限
 ATK_SEVERITY_IMPACTS = ("功能", "数据", "权限")
 ATK_REQUIRED = ("id", "hypothesis", "validation_path", "impact", "status")
+# M1：ATK「未命中」的证据等级。verified_by 声明这条否定结论是怎么得来的——
+# practical（实操探针）/ simulation（场景推演）/ code_walk（代码走读）/ unknown（旧台账缺省）。
+# 缺省 unknown 不触发任何门禁：旧台账零改动兼容，不为"没填新字段"惩罚存量记录。
+ATK_VERIFIED_BY = ("practical", "simulation", "code_walk", "unknown")
+# 推演/走读属于"脑内否定"：拿它们判「未命中」时，否定结论没有可核对的对象，
+# 影响面属功能/数据/权限时须解释（--replay-note 点名）或补实操探针。
+ATK_UNSUPPORTED_NEGATIVE = ("simulation", "code_walk")
+# practical 未命中可接受的证据等级：E1 是唯一合格等级；旧格式 FINISH 未设
+# evidence_grade 按"历史兼容"处理，但降级为 notice 披露，区分"历史兼容"与"新写入规避"。
+ATK_PRACTICAL_GRADE = "E1"
 # ATK 严重度：与缺陷严重度同一套口径。缺省按影响面推定（功能/数据/权限 → major，
 # 体验/其他 → minor），登记里显式给了就以登记为准——显式登记不被静默忽略。
 ATK_SEVERITIES = ("blocker", "major", "minor")
@@ -201,9 +215,9 @@ def _normalize_events(records):
         item.setdefault("id", rec.get("case_id") or cases.get(rec.get("attempt_id")))
         item["case_id"] = rec.get("case_id") or cases.get(rec.get("attempt_id"))
         item["desc"] = rec.get("actual")
-        evidence = rec.get("evidence")
-        if isinstance(evidence, list):
-            item["evidence"] = [e.get("path") if isinstance(e, dict) else e for e in evidence]
+        # 方案 A：不再把 evidence 的 dict 压成裸 path 字符串——压平会把 sha256
+        # 当场丢掉，M1 的 practical 证据挂钩要做读时哈希复核就必须拿到完整结构。
+        # 下游 _evidence_list() 同时兼容 dict 与字符串形态，既有消费不受影响。
         out.append(item)
     return out
 
@@ -574,7 +588,9 @@ def _normalise_atk(entries):
         if not isinstance(item, dict):
             errors.append(f"{name}: 必须为对象")
             continue
-        unknown = set(item) - set(ATK_REQUIRED) - {"linked_tc", "linked_ac", "severity", "note"}
+        unknown = set(item) - set(ATK_REQUIRED) - {
+            "linked_tc", "linked_ac", "severity", "note",
+            "verified_by", "evidence", "attempt_id"}
         if unknown:
             errors.append(f"{name}: 含未知字段 {sorted(unknown)}")
             continue
@@ -606,6 +622,26 @@ def _normalise_atk(entries):
         if status not in ATK_STATUSES:
             errors.append(f"{name}.status: 必须为 {list(ATK_STATUSES)} 之一")
             continue
+        verified_by = str(item.get("verified_by") or "unknown").strip().lower()
+        if verified_by not in ATK_VERIFIED_BY:
+            errors.append(f"{name}.verified_by: 必须为 {list(ATK_VERIFIED_BY)} 之一")
+            continue
+        attempt_id = str(item.get("attempt_id") or "").strip()
+        evidence_raw = item.get("evidence")
+        evidence = None
+        if evidence_raw is not None:
+            if not isinstance(evidence_raw, list) or not evidence_raw:
+                errors.append(f"{name}.evidence: 须为非空数组（元素含 path 与 sha256）")
+                continue
+            bad = [i for i, ev in enumerate(evidence_raw)
+                   if not isinstance(ev, dict) or not str(ev.get("path") or "").strip()
+                   or not str(ev.get("sha256") or "").strip()]
+            if bad:
+                errors.append(f"{name}.evidence: 第 {bad} 项缺 path 或 sha256（落盘证据必须带哈希，"
+                              "不是 Path.exists() 的放宽版）")
+                continue
+            evidence = [{"path": str(ev["path"]).strip(), "sha256": str(ev["sha256"]).strip()}
+                        for ev in evidence_raw]
         normalised.append({
             "id": ident,
             "hypothesis": hypothesis,
@@ -616,8 +652,69 @@ def _normalise_atk(entries):
             "linked_ac": item.get("linked_ac"),
             "severity": _normalise_atk_severity(item.get("severity")),
             "note": str(item.get("note") or "").strip() or None,
+            "verified_by": verified_by,
+            "attempt_id": attempt_id or None,
+            "evidence": evidence,
         })
     return normalised, errors
+
+
+# —— M1：practical「未命中」的证据挂钩 ——
+# 证据两级，优先级从高到低：首选 attempt_id 绑定台账 FINISH（E1 等级 + case_id 关联 +
+# 读时哈希复核，复刻 execution_ledger 的读时校验）；降级为 evidence 落盘文件+哈希，
+# 仅当该 ATK 确实不依附任何执行时使用（note 须写明为何没有 attempt_id）。
+# 一句话解释（--replay-note）不能证明"做了实操"，故 practical 未命中不可豁免。
+def _evidence_hash_ok(evidence):
+    """落盘证据完整性：is_file() + sha256 重算比对，逐项全过才算合格。"""
+    for item in evidence or []:
+        path = Path(str(item.get("path") or ""))
+        digest = str(item.get("sha256") or "").strip().lower()
+        if not path.is_file():
+            return False
+        try:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _practical_negative_evidence(entry, attempt_index):
+    """核验 practical「未命中」条目的证据挂钩。
+
+    返回 (state, detail)：state 取
+    - "bound"        attempt_id 绑定台账 FINISH 且全部核验通过；
+    - "bound_legacy" 绑定通过但 FINISH 为旧格式（未设 evidence_grade）——历史兼容，
+                      降级为 notice 披露，区分"历史兼容"与"新写入规避"；
+    - "file"         evidence 落盘证据核验通过（降级路径）；
+    - None           无有效证据（detail 说明原因，供 gap 消息引用）。
+    """
+    attempt_id = str(entry.get("attempt_id") or "").strip()
+    if attempt_id:
+        event = attempt_index.get(attempt_id)
+        if event is None:
+            return None, f"attempt_id {attempt_id} 不在本轮台账 FINISH 事件中"
+        status = str(event.get("status") or "").strip().upper()
+        if status not in ("PASS", "FAIL"):
+            return None, (f"attempt_id {attempt_id} 的执行未完成"
+                          f"（status={event.get('status') or '缺失'}，非中途弃置才算执行完成）")
+        grade = str(event.get("evidence_grade") or "").strip().upper()
+        legacy = not grade
+        if not legacy and grade != ATK_PRACTICAL_GRADE:
+            return None, (f"attempt_id {attempt_id} 的证据等级为 {grade or '缺失'}，"
+                          f"仅 {ATK_PRACTICAL_GRADE} 合格")
+        evidence = event.get("evidence")
+        if not isinstance(evidence, list) or not evidence or not _evidence_hash_ok(evidence):
+            return None, f"attempt_id {attempt_id} 的证据文件缺失或哈希不符，无法复核"
+        linked_tc = str(entry.get("linked_tc") or "").strip()
+        if linked_tc and str(event.get("case_id") or "").strip() != linked_tc:
+            return None, (f"attempt_id {attempt_id} 的 case_id={event.get('case_id')} 与 "
+                          f"linked_tc={linked_tc} 不匹配（不得拿任意 E1 记录挂攻击面）")
+        return ("bound_legacy" if legacy else "bound"), f"绑定台账执行记录 {attempt_id}"
+    evidence = entry.get("evidence")
+    if isinstance(evidence, list) and evidence and _evidence_hash_ok(evidence):
+        return "file", "绑定落盘证据（降级路径：note 须写明为何没有 attempt_id）"
+    return None, None
 
 
 def _closed_review_ids(reviews):
@@ -675,6 +772,17 @@ def analyse_atk(entries):
     candidates = [item for item in normalised
                   if item["status"] == "命中" and item["impact"] in ATK_SEVERITY_IMPACTS]
     not_hit = [item["id"] for item in normalised if item["status"] == "未命中"]
+    # M1：推演/走读判出的「未命中」单列——否定结论的验证方式必须可见，
+    # 且影响面属功能/数据/权限时在 analyse() 中升级为证据义务。
+    unsupported_negative = [item["id"] for item in normalised
+                            if item["status"] == "未命中"
+                            and item["verified_by"] in ATK_UNSUPPORTED_NEGATIVE
+                            and item["impact"] in ATK_SEVERITY_IMPACTS]
+    # M3 披露口径：ATK 未命中的验证方式分布（各方式 N 条，只披露不判定）。
+    not_hit_verified_by = {vb: sum(1 for item in normalised
+                                   if item["status"] == "未命中"
+                                   and item["verified_by"] == vb)
+                           for vb in ATK_VERIFIED_BY}
     unexecuted = [item["id"] for item in normalised if item["status"] == "未执行"]
     return {
         "registered": len(normalised),
@@ -682,6 +790,8 @@ def analyse_atk(entries):
         "hit": counts["命中"],
         "not_hit": len(not_hit),
         "not_hit_ids": not_hit,
+        "not_hit_verified_by": not_hit_verified_by,
+        "unsupported_negative": unsupported_negative,
         "unexecuted": len(unexecuted),
         "unexecuted_ids": unexecuted,
         "severity_candidates": [
@@ -704,6 +814,12 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
 
     records = _normalize_events(records)
     total = len(records)
+    # M1：FINISH 事件索引（attempt_id → 归一记录），供 practical 未命中的
+    # attempt_id 绑定核验。归一记录保留 evidence 原始 {path, sha256} 结构（方案 A）。
+    attempt_index = {}
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("kind") == "FINISH":
+            attempt_index[str(rec.get("attempt_id") or "")] = rec
     path_counts = {k: 0 for k in PATH_TYPES}
     path_unknown = 0
     inferred_counts = {k: 0 for k in PATH_TYPES}
@@ -1135,13 +1251,75 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         notices.append({"code": "atk_unexecuted",
                         "message": f"{atk['unexecuted']} 条攻击假设尚未执行："
                                    f"{atk['unexecuted_ids'][:6]}（允许长期悬置，不压结论上限）"})
+    # —— M1：ATK「未命中」的证据等级门禁 ——
+    # 推演/走读判出的否定没有可核对对象：影响面属功能/数据/权限时，须 --replay-note
+    # 点名该 ATK 并引用既有观察（解释为什么不复打——这是 replay-note 的本职），
+    # 或补一条实操探针。unknown（旧台账缺省）不触发，不为"没填新字段"罚存量记录。
+    unexplained = [i for i in atk["unsupported_negative"]
+                   if not str((replay_notes or {}).get(i) or "").strip()]
+    if unexplained:
+        gaps.append({"code": "atk_negative_by_simulation_unexplained",
+                     "message": f"{len(unexplained)} 条攻击假设判「未命中」，"
+                                f"但验证方式为推演/代码走读且影响面属功能/数据/权限："
+                                f"{unexplained[:6]}"
+                                "（须 --replay-note 点名该 ATK 并引用既有观察，"
+                                "或补一条实操探针）"})
+    # —— M1 扩展：practical「未命中」的证据挂钩 ——
+    # 三重交集（状态=未命中 × verified_by=practical × 影响面属功能/数据/权限），
+    # 一个不能少——体验类未命中不扩大义务。可用 --replay-note 豁免的是推演/走读；
+    # practical 声称"做了实操"，一句话解释证明不了，必须挂可关联的执行记录或落盘证据。
+    practical_negative = [entry for entry in atk["entries"]
+                          if entry["status"] == "未命中"
+                          and entry["verified_by"] == "practical"
+                          and entry["impact"] in ATK_SEVERITY_IMPACTS]
+    unproven_practical, legacy_grade = [], []
+    for entry in practical_negative:
+        state, detail = _practical_negative_evidence(entry, attempt_index)
+        if state is None:
+            # linked_ac 非空但 linked_tc 为空：绑定仍可用，但覆盖关系无法自动核验，
+            # 在消息中如实附加人工核对义务（完全不做关联检查会退化为形式门禁）。
+            if not str(entry.get("linked_tc") or "").strip() \
+                    and str(entry.get("linked_ac") or "").strip():
+                detail += ("；linked_tc 为空，无法从 case_id 自动验证覆盖关系，"
+                           "须人工核对 AC 与执行记录的对应性")
+            unproven_practical.append((entry["id"], detail))
+        elif state == "bound_legacy":
+            if not str(entry.get("linked_tc") or "").strip() \
+                    and str(entry.get("linked_ac") or "").strip():
+                detail += ("；linked_tc 为空，无法从 case_id 自动验证覆盖关系，"
+                           "须人工核对 AC 与执行记录的对应性")
+            legacy_grade.append((entry["id"], detail))
+    if unproven_practical:
+        detail = "；".join(f"{ident}: {why}" for ident, why in unproven_practical[:6])
+        gaps.append({"code": "atk_practical_negative_unproven",
+                     "message": f"{len(unproven_practical)} 条攻击假设声称实操验证"
+                                f"（verified_by=practical）但判「未命中」且拿不出合格证据：{detail}"
+                                "（须绑定 attempt_id 指向证据等级为 E1 的 FINISH 执行记录"
+                                "——linked_tc 非空时 case_id 必须匹配——或在 note 写明为何没有 run "
+                                "并附 evidence 落盘文件+sha256；--replay-note 不能替代实操证据）"})
+    if legacy_grade:
+        detail = "；".join(f"{ident}: {why}" for ident, why in legacy_grade[:6])
+        notices.append({"code": "atk_practical_negative_grade_unset",
+                        "message": f"{len(legacy_grade)} 条 practical 未命中绑定的执行记录"
+                                   f"未携带证据等级（旧格式台账，按历史兼容处理）：{detail}"
+                                   "（只披露，不压结论上限；新写入的 FINISH 应携带 evidence_grade）"})
     # —— M6：ATK 停滞披露（只披露，不改上限）——
     # 与「未执行」提示分开：未执行是本轮事实，停滞是**跨轮**事实（上一批同样悬置）。
     stagnant_ids, stagnant_reasons = _find_stagnant_atk(atk["entries"], prev_atk_entries)
     if stagnant_ids:
+        # M3：按 impact 分组呈现——功能/数据/权限单列，让读者一眼看出
+        # 烂掉的是不是要命的那批。notice 不改判定。
+        impact_of = {str(e.get("id") or ""): str(e.get("impact") or "其他").strip()
+                     for e in atk["entries"] if isinstance(e, dict)}
+        group_order = ("功能", "数据", "权限", "体验", "其他")
+        grouped = {name: [i for i in stagnant_ids if impact_of.get(i, "其他") == name]
+                   for name in group_order}
+        detail = "；".join(
+            f"{name}：{len(ids)} 条（{'、'.join(ids[:6])}）"
+            for name, ids in ((n, grouped[n]) for n in group_order) if ids)
         notices.append({"code": "atk_stagnant",
-                        "message": f"{len(stagnant_ids)} 条攻击假设跨轮持续未执行："
-                                   f"{stagnant_ids[:6]}（{stagnant_reasons[stagnant_ids[0]]}；"
+                        "message": f"{len(stagnant_ids)} 条攻击假设跨轮持续未执行（按影响面分组）：{detail}"
+                                   f"（{stagnant_reasons[stagnant_ids[0]]}；"
                                    "仅披露，不压结论上限）"})
 
     # ATK 子结论与顶层结论必须一致：闭环判定在上一段完成后才写子结论，
