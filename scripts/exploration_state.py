@@ -278,7 +278,7 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         ceiling = "通过"
         message = "无未消费候选、必查视角均有记录且含控件遍历条目；仍须按缺陷、断言和证据判定，不代表已通过"
     ready_set = set(ready)
-    return {
+    report_gate = {
         "ready_pending": len(ready),
         "ready_pending_ids": ready,
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
@@ -300,6 +300,51 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         "mandatory_attributes": mandatory_status,
         "verdict_ceiling": ceiling,
         "message": message,
+    }
+    report_gate["next_actions"] = _next_actions(rows, report_gate, failed)
+    return report_gate
+
+
+# —— 运行时换路（v1.49.0）——
+# 存在目的：探索门禁能算出 ready_pending/ready_high_risk，但滑块题实测证明它不会驱动
+# 下一步——收尾仍有 3 项可执行（含 1 项高风险）照样结束。这里把「还剩什么可做」变成
+# 带重排依据的确定性清单：排除前置不满足/副作用待核对/被阻塞项，按风险→复现候选→
+# 稳定 ID 排序；阻塞项单独列出复查条件，异常候选单列追踪动作。
+def _next_actions(rows, gate, failed):
+    """按风险与异常线索排序的可执行清单；判定业务仍由专家负责。
+
+    FAIL 条目本身不可执行，不进 ordered；与 FAIL 用例同 case_id 的待执行项
+    视为异常跟进，同级风险下排前——把「发现 0 分档异常 → 补测 5」这类判别
+    动作提到普通待执行之前。
+    """
+    fail_cases = {row.get("case_id") for row in rows
+                  if row["status"] == "FAIL" and row.get("case_id")}
+    ready_rows = [row for row in rows
+                  if row["status"] == "NOT_RUN" and not row["side_effect_pending"]
+                  and not row["blocked_reason"].strip() and not _acknowledged(row)]
+    ready_rows.sort(key=lambda row: (RISKS[row["risk"]],
+                                     row.get("case_id") not in fail_cases, row["id"]))
+    actionable = [{"id": row["id"],
+                   "risk": row["risk"],
+                   "linked_fail": row.get("case_id") in fail_cases and bool(fail_cases),
+                   "case_id": row.get("case_id"),
+                   "reason": ("异常跟进（与 FAIL 用例同链路）"
+                              if row.get("case_id") in fail_cases
+                              else f"可执行（{row['risk']} 风险）")}
+                  for row in ready_rows]
+    blocked = [{"id": row["id"],
+                "risk": row["risk"],
+                "recheck": row["blocked_reason"].strip(),
+                "side_effect_pending": row["side_effect_pending"]}
+               for row in rows if row["status"] == "BLOCKED"]
+    top = actionable[0] if actionable else None
+    return {
+        "ordered": actionable,
+        "recheck": blocked,
+        "next_focus": top,
+        "fail_candidates": [row["id"] for row in rows if row["status"] == "FAIL"],
+        "note": ("发现异常时优先安排能区分解释的验证；阻塞项等复查条件出现后重试"
+                 if actionable or blocked else "无待执行项"),
     }
 
 

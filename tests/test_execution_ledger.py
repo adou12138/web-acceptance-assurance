@@ -580,5 +580,70 @@ class ReadonlyWriteCrosscheckTests(unittest.TestCase):
         self.assertNotIn("readonly_write_ceiling", report["final_precondition"])
 
 
+class EvidenceVerifiedTests(unittest.TestCase):
+    """v1.49.0：断言级证据核实声明。旧格式无该字段完全兼容。"""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("execution_ledger", SCRIPT)
+        self.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tool)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name)
+        self.workspace = self.folder / "run"
+        self.design = json.loads((ROOT / "examples" / "cases-example.json").read_text(encoding="utf-8"))
+        self.context = {"target_url": "https://example.invalid/test", "environment": "test",
+                        "application_version": "build-1", "dependency_mode": "sandbox",
+                        "feature_flags": {}, "role_scope": ["editor"]}
+        self.evidence = self.folder / "file.csv"
+        self.evidence.write_text("fixture csv", encoding="utf-8")
+        self.tool.initialize(self.workspace, self.design, self.context, "ROUND-EV", [])
+
+    def begin(self):
+        self.tool.begin(self.workspace, self.design, self.context, "ATT-EV1",
+                        "TC-NAME-001", "验证下载断言")
+
+    def finish(self, assertions):
+        return self.tool.finish(self.workspace, self.design, self.context, "ATT-EV1",
+                                "PASS", "observed", [str(self.evidence)], assertions,
+                                "none", [], "cleanup")
+
+    def test_pass_with_all_unverified_rejected(self):
+        """全部判据都无证据支撑时不得记 PASS：改记 BLOCKED 或拆分。"""
+        self.begin()
+        with self.assertRaises(ValueError) as ctx:
+            self.finish([{"check": "项目重新打开后的名称", "actual": "新名称",
+                          "matched": True, "evidence_verified": False}])
+        self.assertIn("证据核实声明", str(ctx.exception))
+
+    def test_partial_unverified_exposed_in_summary(self):
+        """部分断言无证据支撑：PASS 可入账，summary 显式列出缺口。"""
+        # 独立台账加第二条设计断言，使"部分核实"形态可表达（不改示例文件本体）
+        design = json.loads(json.dumps(self.design, ensure_ascii=False))
+        tc = next(t for t in design["testcases"] if t["id"] == "TC-NAME-001")
+        tc["assertions"].append({"check": "下载文件中该题数值", "expect": "0", "oracle": "file"})
+        ws2 = self.folder / "run-partial"
+        self.tool.initialize(ws2, design, self.context, "ROUND-EV2", [])
+        self.tool.begin(ws2, design, self.context, "ATT-EV2",
+                        "TC-NAME-001", "验证下载断言")
+        self.tool.finish(ws2, design, self.context, "ATT-EV2",
+                         "PASS", "observed", [str(self.evidence)],
+                         [{"check": "项目重新打开后的名称", "actual": "新名称",
+                           "matched": True, "evidence_verified": True},
+                          {"check": "下载文件中该题数值", "actual": "0",
+                           "matched": True, "evidence_verified": False}],
+                         "none", [], "cleanup")
+        report = self.tool.summarize(ws2, design, self.context)
+        self.assertEqual([g["check"] for g in report["evidence_unverified"]],
+                         ["下载文件中该题数值"])
+        self.assertEqual(report["evidence_unverified"][0]["case_id"], "TC-NAME-001")
+
+    def test_non_boolean_rejected(self):
+        self.begin()
+        with self.assertRaises(ValueError):
+            self.finish([{"check": "项目重新打开后的名称", "actual": "新名称",
+                          "matched": True, "evidence_verified": "yes"}])
+
+
 if __name__ == "__main__":
     unittest.main()

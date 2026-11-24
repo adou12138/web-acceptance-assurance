@@ -966,5 +966,36 @@ class AtkNegativeEvidenceTests(unittest.TestCase):
         self.assertIn("体验：", stagnant["message"])
 
 
+class ProbeEvidenceDedupTests(unittest.TestCase):
+    """v1.49.0：探针计数按现场证据去重，补录与台账更正不虚增执行数。"""
+
+    def test_shared_evidence_counts_once(self):
+        """同一批证据文件被三条记录引用 = 一次执行，不是三次。"""
+        records = [
+            {**rec(1, "regression"), "probes": 2, "evidence": ["a.yml", "b.yml"]},
+            {**rec(1, "regression"), "probes": 2, "evidence": ["b.yml", "a.yml"]},
+            {**rec(1, "regression"), "probes": 2, "evidence": ["a.yml"]},
+        ]
+        result = ac.analyse(records)
+        self.assertEqual(result["evidence_runs_deduped"], 1)
+        self.assertEqual(result["probes_total"], 6)  # 申报值原样披露，不去重
+
+    def test_new_evidence_counts_as_independent_rerun(self):
+        """复跑带新现场证据：正常计入第二次执行。"""
+        records = [
+            {**rec(1, "regression"), "probes": 2, "evidence": ["run1/a.yml"]},
+            {**rec(1, "regression"), "probes": 2, "evidence": ["run2/a.yml"]},
+        ]
+        result = ac.analyse(records)
+        self.assertEqual(result["evidence_runs_deduped"], 2)
+
+    def test_no_declared_probes_reported_not_zero(self):
+        """旧批次无申报值：记 missing 计数，不得当 0 冒充已统计。"""
+        records = [rec(1, "positive"), rec(2, "positive")]
+        result = ac.analyse(records)
+        self.assertEqual(result["probes_total"], 0)
+        self.assertEqual(result["probes_declared_missing_runs"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

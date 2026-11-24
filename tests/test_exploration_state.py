@@ -187,6 +187,41 @@ class ExplorationStateTests(unittest.TestCase):
         self.assertEqual(gate["verdict_ceiling"], "待核实")
         self.assertIn("未执行", gate["message"])
 
+    def test_next_actions_rank_ready_first_and_expose_recheck(self):
+        """运行时换路（v1.49.0）：可执行项按风险排序，阻塞项单列复查条件。"""
+        self.data["items"] = [
+            self.item("EXP-Z", risk="low"),
+            self.item("EXP-B", risk="high"),
+            self.item("EXP-D", status="BLOCKED", blocked_reason="等待评审数据"),
+        ]
+        actions = self.report()["gate"]["next_actions"]
+        self.assertEqual([a["id"] for a in actions["ordered"]], ["EXP-B", "EXP-Z"])
+        self.assertEqual(actions["next_focus"]["id"], "EXP-B")
+        self.assertEqual([(b["id"], b["recheck"]) for b in actions["recheck"]],
+                         [("EXP-D", "等待评审数据")])
+
+    def test_next_actions_promotes_reproduction_candidate(self):
+        """FAIL 复现候选同级风险下排前：异常线索优先于普通待执行。"""
+        self.data["items"] = [
+            self.item("EXP-A", risk="high"),
+            self.item("EXP-F", risk="high", status="FAIL", observation="观察到异常",
+                      evidence_paths=[str(self.evidence)], case_id="TC-14"),
+            self.item("EXP-G", risk="high", case_id="TC-14"),
+        ]
+        actions = self.report()["gate"]["next_actions"]
+        self.assertEqual([a["id"] for a in actions["ordered"]], ["EXP-G", "EXP-A"])
+        self.assertTrue(actions["ordered"][0]["linked_fail"])
+        self.assertEqual(actions["ordered"][0]["reason"], "异常跟进（与 FAIL 用例同链路）")
+        self.assertIn("EXP-F", actions["fail_candidates"])
+
+    def test_next_actions_empty_when_nothing_executable(self):
+        """全阻塞时不得虚构下一步：ordered 为空、next_focus 为 None。"""
+        self.data["items"] = [self.item("EXP-1", status="BLOCKED", blocked_reason="环境不可用")]
+        actions = self.report()["gate"]["next_actions"]
+        self.assertEqual(actions["ordered"], [])
+        self.assertIsNone(actions["next_focus"])
+        self.assertEqual(actions["recheck"][0]["id"], "EXP-1")
+
     def test_gate_allows_pass_only_after_candidates_consumed_and_views_recorded(self):
         attributes = {"visual": ["visual"], "usability": ["usability"], "accessibility": ["accessibility"],
                       "functional": ["functional"], "performance": ["performance"]}

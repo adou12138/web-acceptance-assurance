@@ -769,8 +769,17 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
         raise ValueError("bug_ids must be string array")
     if not isinstance(assertions, list) or any(not isinstance(x, dict) or not isinstance(x.get("check"), str) or not x["check"].strip() or "actual" not in x or type(x.get("matched")) is not bool for x in assertions):
         raise ValueError("assertions require check, actual and matched boolean")
+    # v1.49.0：断言级证据核实声明（可选扩展，旧格式完全兼容）。evidence_verified=False
+    # 表示该断言的判据没有对应证据（如用列表快照充当下载文件断言）。允许与 matched=True
+    # 并存——matched 是业务观察，evidence_verified 是证据是否支撑判据本身。
+    for item in assertions:
+        if "evidence_verified" in item and type(item["evidence_verified"]) is not bool:
+            raise ValueError("evidence_verified must be boolean when present")
     if status == "PASS" and (not assertions or not all(x["matched"] for x in assertions) or cause != "none"):
         raise ValueError("PASS requires satisfied assertions and cause=none")
+    if status == "PASS" and assertions and all(item.get("evidence_verified") is False for item in assertions):
+        raise ValueError("PASS rejected: 每条断言的证据核实声明都是 False（判据无证据支撑）；"
+                         "改记 BLOCKED 并写明缺什么证据，或拆出已核实断言单独记 PASS")
     if status == "FAIL" and (not assertions or all(x["matched"] for x in assertions)):
         raise ValueError("FAIL requires observed failed business assertion")
     if status == "FAIL" and cause == "product" and not bug_ids:
@@ -1115,6 +1124,7 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
     bugs = _bugs(bugs)
     events = read_events(workspace)
     outcomes, evidence_issues, ready, reconcile, flaky_cases = {}, [], [], [], []
+    evidence_unverified = []
     executed = 0
     for case_id in cases:
         relevant = [e for e in events if e["case_id"] == case_id]
@@ -1162,6 +1172,15 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
         if same and status == "NOT_RUN" and not pending:
             ready.append(case_id)
         outcomes[case_id] = {"status": status, "flaky": flaky, "attempt_ids": [e["attempt_id"] for e in completed], "unfinished_attempts": pending}
+        # v1.49.0：断言级证据核实缺口的派生视图（PASS 用例中声明无证据支撑的判据）。
+        for event in valid:
+            if event["status"] != "PASS":
+                continue
+            for assertion in event.get("assertions") or []:
+                if assertion.get("evidence_verified") is False:
+                    evidence_unverified.append({"case_id": case_id,
+                                                "attempt_id": event["attempt_id"],
+                                                "check": assertion["check"]})
     counts = {status: sum(o["status"] == status for o in outcomes.values()) for status in sorted(STATUSES)}
     known = _bugs(baseline.get("known_issues"))
     open_bugs = None if bugs is None else {severity: sum(b["severity"] == severity and b["status"] != "closed" for b in bugs) for severity in sorted(SEVERITIES)}
@@ -1195,7 +1214,7 @@ def summarize(workspace, design, context, bugs=None, phase_state=None,
     headline = _build_headline(baseline, counts, executed, cases, final_precondition,
                                 verdict_ceiling, evidence_issues, flaky_cases,
                                 context, missing_inputs, delegated_inputs)
-    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "missing_inputs": missing_inputs, "missing_input_reasons": missing_reasons, "delegated_inputs": delegated_inputs, "delegated_input_reasons": delegated_reasons, "final_precondition": final_precondition, "headline": headline, "verdict_ceiling": verdict_ceiling, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
+    return {"round_id": baseline["round_id"], "compatible": same, "baseline": baseline, "current_context": context, "context_changed": not same, "planned": len(cases), "executed": executed, "counts": counts, "execution_rate": executed / len(cases) if cases else None, "pass_rate": counts["PASS"] / executed if executed else None, "outcomes": outcomes, "ready": ready, "needs_reconcile": reconcile, "stale_cases": [] if same else list(cases), "retest_candidates": [c for c, o in outcomes.items() if o["status"] in {"FAIL", "BLOCKED", "SKIPPED"}], "flaky_cases": flaky_cases, "evidence_issues": evidence_issues, "evidence_unverified": evidence_unverified, "open_bugs": open_bugs, "bug_delta": bug_delta, "missing_bug_ids": missing_bugs, "design_warnings": warnings, "missing_inputs": missing_inputs, "missing_input_reasons": missing_reasons, "delegated_inputs": delegated_inputs, "delegated_input_reasons": delegated_reasons, "final_precondition": final_precondition, "headline": headline, "verdict_ceiling": verdict_ceiling, "scope": "progress only; no acceptance or release verdict; evidence content requires human/tool review"}
 
 
 def _load(path):

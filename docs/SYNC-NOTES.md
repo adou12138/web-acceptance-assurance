@@ -1415,3 +1415,19 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 - 审核另做实证（结论：不需要改）：回退彻底（原始清单含 allowed_origins → 未知字段拒绝；export_csv 内部先 summarize 故同样拒绝）；mandatory_attributes 三态冲突逐项正确；reasons 由 gaps 合成且非通过时必有；全仓 allowed_origins 残留仅历史记录与测试；调用方仅 phase_gate 内部两处；本项目 6 份 exploration 产物无该字段（可复现）；报告与 check-verdict（reasons=2）一致。
 - 全量：**834 passed, 241 subtests**（先同步 cache 再实测；v1.47.4 真值为 831 passed / 239 subtests，本版新增 3 测试 + 2 subtests）。
+
+## v1.48.4（2026-11-24）：执行调度与证据事实化——滑块题实测四项落地
+
+依据滑块题项目（liheng-slider-20261124）实测复盘的四项审核发现落地：高风险项遇阻未换路、覆盖缺失仍能收尾、证据类型错配被记 PASS、重复证据虚增探针数。改造方案与执行计划见 `D:/TestCase/liheng-slider-20261124/砺衡专家包改造方案与执行计划.md`。
+
+| 条目 | 变更 | 回归 |
+|---|---|---|
+| M1 执行调度 | `exploration_state.py` summarize 新增 `gate.next_actions`：按风险+复现候选（FAIL 条目在同一风险级排前）排序的可执行清单、阻塞项复查条件、next_focus 单项指派；判定业务仍由专家负责，脚本只做排序呈现 | `test_next_actions_promotes_reproduction_candidate`（FAIL 候选优先）等 2 例 |
+| M2 采集收尾 | `phase_gate.py` complete(execute) 新增 `--collection`：消费台账采集记录 JSONL，含判定字段（verdict/collection_state 违规混入）即拒绝收尾（结构违规列明逐条原因）；未提供记 `state=not_provided` 并在 check-verdict 压「待核实」——保留阶段性交付能力，但采集事实缺失不再是静默通过 | `CollectionClosureTests`（dirty 拒收/clean 入账/缺失压级）4 例 + 既有链路测试全部补合规采集 |
+| M3 断言证据 | `execution_ledger.py` finish 新增 `evidence_verified`（逐断言布尔）：全部断言无证据核实却报 PASS → 拒绝；部分核实 → PASS 入账但 summary 新增 `evidence_unverified` 逐条暴露缺口（case_id+check）。下载/保存/交互类「证据类型错配」从此在台账层可见，不再拖到裁决 | `test_unverified_pass_rejected`、`test_partial_unverified_exposed_in_summary` 等 3 例 |
+| M4 探针计数 | `attack_coverage.py` analyse 新增 `evidence_runs_deduped`（按现场证据集包含归并去重的独立执行数）与 `probes_declared_missing_runs`（无申报值记录数，区别于 0）；申报值 `probes_total` 原样披露不去重。修复首版归并逻辑两处缺陷：互为子集的证据组两侧全部被丢弃（真子集关系下 `<` 与 `<=` 判定互相命中）、旧批次「有证据无申报」漏计 missing | `ProbeEvidenceDedupTests`（同证据三记录计一次/新证据计复跑/无申报报 missing）3 例 |
+
+- 准出记录：全量 `python -m unittest discover -s tests -q` → **870 passed**（M4 修复归并缺陷前 98 项 attack_coverage 有 2 失败，修复后全绿）。缓存守卫：plugin.json 升 1.48.4 后旧缓存 1.47.5 SKILL.md 需禁活或缓存目录刷新（见兼容性）。
+- 兼容性：`complete(execute)` 不传 `--collection` 仍可收尾（state=not_provided，非硬阻断）；`finish` 不传 `evidence_verified` 走原口径（视为已核实，兼容旧批次）；`next_actions`/`evidence_unverified`/`evidence_runs_deduped` 均为新增键，不改既有键语义。
+- 回退：本版四项彼此独立，`git revert` 单条提交即可分别回退；M2 回退后 check-verdict 恢复不查采集；M4 回退后恢复申报值直加。
+- 本版不宣称的能力：不改变「脚本排序、专家决策」的职责边界；采集记录的真实性仍由复核环节把关；探针去重只按证据文件集，不识别「同文件不同内容」的复跑（该场景应换新文件名归档）。

@@ -42,6 +42,19 @@ class PhaseGateTestBase(unittest.TestCase):
         kwargs.setdefault("model_class", self.pg.ROUTING[phase]["model_class"])
         return self.pg.submit(self.state, phase, session=session, **kwargs)
 
+    def clean_collection_file(self):
+        """新契约：完整 happy path 的 execute 收尾包含合规采集记录。"""
+        folder = Path(self.tmp.name) / "collection"
+        folder.mkdir(exist_ok=True)
+        record = {"id": "OBS-1", "tc_ref": "TC-1", "collection_state": "collected",
+                  "action_sequence": [{"step": 1, "action": "click", "target": "提交"}],
+                  "evidence_paths": ["evidence/step1.png"],
+                  "observed": {"page": "提示已保存"}}
+        path = folder / "clean.jsonl"
+        if not path.exists():
+            path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        return str(path)
+
     def check(self, **kwargs):
         """带齐风险假设与回归影响面的裁决前置检查（缺任一项都该被压上限）。"""
         kwargs.setdefault("assumptions", {"reviewed": True, "items": []})
@@ -87,7 +100,8 @@ class PhaseGateTestBase(unittest.TestCase):
             "message": "无未消费候选、必查视角均有记录且含控件遍历条目",
         } if phase == "execute" else None)
         self.pg.complete(self.state, phase, session=session, attack_coverage=coverage,
-                         exploration=exploration)
+                         exploration=exploration,
+                         collection=self.clean_collection_file() if phase == "execute" else None)
         nxt = self.pg.NEXT_PHASE[phase]
         if nxt:
             self.pg.submit(self.state, nxt, session=session,
@@ -122,7 +136,8 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
         self.resume("execute")
         self.pg.start(self.state, "execute", self.session_for("execute"))
-        self.pg.complete(self.state, "execute", session=self.session_for("execute"))
+        self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file())
         entry = self.state["phases"]["execute"]["attack_coverage"]
         self.assertEqual(entry["state"], "missing")
         check = self.check()
@@ -137,6 +152,7 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.resume("execute")
         self.pg.start(self.state, "execute", self.session_for("execute"))
         self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file(),
                          attack_coverage={"verdict_ceiling": "待核实", "attack_density": 0.078,
                                           "gaps": [{"code": "attack_density_low",
                                                     "message": "密度 0.078 低于门槛 0.3"}]})
@@ -293,7 +309,8 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         # 已完成阶段用过的会话标识不得复用
         self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast")
         self.pg.start(self.state, "execute", "SESS-2")
-        self.pg.complete(self.state, "execute", session="SESS-2")
+        self.pg.complete(self.state, "execute", session="SESS-2",
+                         collection=self.clean_collection_file())
         self.submit_phase("adjudicate", session="SESS-2")
         self.pg.checkpoint(self.state, "execute", self.handoff_dir, session="SESS-2")
         token2 = self.state["phases"]["execute"]["handoff"]["token"]
@@ -801,6 +818,7 @@ class ExplorationGateWiringTests(PhaseGateTestBase):
         self.resume("execute")
         self.pg.start(self.state, "execute", self.session_for("execute"))
         self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file(),
                          attack_coverage={"verdict_ceiling": "通过", "gaps": []},
                          exploration=exploration)
 
@@ -855,6 +873,7 @@ class CompleteArtifactTests(PhaseGateTestBase):
         for path in extra:
             path.write_text("{}", encoding="utf-8")
         self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file(),
                          attack_coverage={"verdict_ceiling": "通过", "gaps": []},
                          exploration=ExplorationGateWiringTests.GATE_OK,
                          artifacts=[str(p) for p in extra])
@@ -876,6 +895,7 @@ class CompleteArtifactTests(PhaseGateTestBase):
             with self.subTest(artifact=bad):
                 with self.assertRaises(ValueError):
                     self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file(),
                                      attack_coverage={"verdict_ceiling": "通过", "gaps": []},
                                      exploration=ExplorationGateWiringTests.GATE_OK,
                                      artifacts=[bad])
@@ -887,6 +907,7 @@ class CompleteArtifactTests(PhaseGateTestBase):
         self.pg.start(self.state, "execute", self.session_for("execute"))
         before = list(self.state["phases"]["execute"]["artifacts"])
         self.pg.complete(self.state, "execute", session=self.session_for("execute"),
+                         collection=self.clean_collection_file(),
                          attack_coverage={"verdict_ceiling": "通过", "gaps": []},
                          exploration=ExplorationGateWiringTests.GATE_OK)
         self.assertEqual(self.state["phases"]["execute"]["artifacts"], before)

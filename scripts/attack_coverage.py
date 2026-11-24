@@ -978,6 +978,29 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         if isinstance(probes, int) and probes > 0:
             probes_total += probes
 
+    # v1.49.0：按现场证据去重的独立执行数。同一批证据文件被多条记录引用（补录、
+    # 台账更正、同一操作的多视角登记）只算一次执行；真正以同输入复跑会带新现场
+    # 证据，正常计数。无申报值（旧批次）记 None——"没登记"与"登记了 0"不同。
+    evidence_runs = set()
+    probes_declared_missing = 0
+    for rec in records:
+        declared = rec.get("probes")
+        evidence = _evidence_list(rec)
+        if not isinstance(declared, int):
+            probes_declared_missing += 1
+        if not evidence:
+            continue  # 无证据身份，不参与执行归并
+        # 现场身份 = 证据集合的包含归并：同一操作多视角登记时证据文件常有子集
+        # （主记录全量、引用记录只带其中一张）。把互为子集的证据组归并为同一次
+        # 执行；真正复跑的全新文件集自然落进新组。
+        evidence_runs.add(frozenset(evidence))
+    # 归并互为子集的证据组：只保留极大组（等集已在 set 去重时合并）
+    evidence_runs_count = sum(
+        1 for run in evidence_runs
+        if not isinstance(run, frozenset)
+        or not any(isinstance(other, frozenset) and run < other
+                   for other in evidence_runs if other is not run))
+
     non_positive = sum(v for k, v in path_counts.items() if k != "positive")
     # 分母只取显式声明了 path_type 的条目：字段全缺时报 NA，不以 0 冒充"一条非正向都没有"
     declared_total = total - path_unknown
@@ -1481,6 +1504,8 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         "method_missing": declared_method_missing,
         "method_diversity": method_diversity,
         "probes_total": probes_total,
+        "evidence_runs_deduped": evidence_runs_count,
+        "probes_declared_missing_runs": probes_declared_missing,
         "residual_note": (str(residual_note or "").strip() or None)
         if not isinstance(residual_note, (dict, list)) else None,
         "residual_declaration_raw": residual_note
