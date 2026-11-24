@@ -915,6 +915,42 @@ class AtkNegativeEvidenceTests(unittest.TestCase):
         self.assertEqual(result["atk"]["not_hit_verified_by"],
                          {"practical": 1, "simulation": 1, "code_walk": 1, "unknown": 0})
 
+    # 逃逸口一：把「未命中」改标「无法验证」即可绕开证据义务 → 必须可见
+    def test_unable_to_verify_is_disclosed_by_verified_by(self):
+        atk = self._atk(status="无法验证", verified_by="simulation")
+        result = ac.analyse([rec(1, "boundary")], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_unable_to_verify", self._notice_codes(result))
+        self.assertEqual(result["atk"]["unable_verified_by"]["simulation"], 1)
+        # 「无法验证」不触发 M1 的证据义务（计划明确只约束「未命中」）
+        self.assertNotIn("atk_negative_by_simulation_unexplained", self._codes(result))
+
+    # 逃逸口二：不填 verified_by 即绕过 M1 → 新格式台账下须逐条确认
+    def test_unset_verified_by_disclosed_on_new_format_ledger(self):
+        atk = self._atk()  # 无 verified_by → 缺省 unknown
+        result = ac.analyse([self._finish(grade="E1")], residual_note="x",
+                            atk_entries=[atk])
+        self.assertIn("atk_negative_verified_by_unset", self._notice_codes(result))
+        # 只披露，不压结论上限
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+
+    def test_unset_verified_by_not_disclosed_on_legacy_ledger(self):
+        # 旧台账（FINISH 未携带 evidence_grade）无法区分历史登记与规避 → 不打扰
+        atk = self._atk()
+        result = ac.analyse([self._finish(grade=None)], residual_note="x",
+                            atk_entries=[atk])
+        self.assertNotIn("atk_negative_verified_by_unset", self._notice_codes(result))
+
+    # 回归：畸形证据输入不得让门禁崩溃（崩溃 = 整轮审查没有结论）
+    def test_malformed_finish_evidence_does_not_crash(self):
+        for malformed in (["a.png"], [None], [{"path": "a.png"}], "a.png"):
+            with self.subTest(evidence=malformed):
+                event = self._finish(grade="E1")
+                event["evidence"] = malformed
+                atk = self._atk(verified_by="practical", attempt_id="AT-1",
+                                linked_tc="TC-9")
+                result = ac.analyse([event], residual_note="x", atk_entries=[atk])
+                self.assertIn("atk_practical_negative_unproven", self._codes(result))
+
     def test_atk_stagnant_grouped_by_impact(self):
         # M3：atk_stagnant 按 impact 分组呈现，功能/数据/权限单列一行
         atk_prev = [self._atk(status="未执行"),

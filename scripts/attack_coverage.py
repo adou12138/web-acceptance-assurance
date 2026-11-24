@@ -665,16 +665,22 @@ def _normalise_atk(entries):
 # 仅当该 ATK 确实不依附任何执行时使用（note 须写明为何没有 attempt_id）。
 # 一句话解释（--replay-note）不能证明"做了实操"，故 practical 未命中不可豁免。
 def _evidence_hash_ok(evidence):
-    """落盘证据完整性：is_file() + sha256 重算比对，逐项全过才算合格。"""
+    """落盘证据完整性：is_file() + sha256 重算比对，逐项全过才算合格。
+
+    畸形输入（元素非对象、路径不可访问）一律判不合格，**不得抛异常**——
+    门禁自身被脏台账打崩，比"证据不合格"严重得多：它会让整轮审查没有结论。
+    """
     for item in evidence or []:
-        path = Path(str(item.get("path") or ""))
-        digest = str(item.get("sha256") or "").strip().lower()
-        if not path.is_file():
+        if not isinstance(item, dict):
             return False
         try:
+            path = Path(str(item.get("path") or ""))
+            digest = str(item.get("sha256") or "").strip().lower()
+            if not path.is_file():
+                return False
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 return False
-        except OSError:
+        except (OSError, ValueError):
             return False
     return True
 
@@ -791,6 +797,12 @@ def analyse_atk(entries):
                                    if item["status"] == "未命中"
                                    and item["verified_by"] == vb)
                            for vb in ATK_VERIFIED_BY}
+    # 目标导向补漏：「无法验证」此前完全不可见——把「未命中」改标成「无法验证」
+    # 即可绕开 M1 的证据义务。只加披露、不加义务：让读者看得见这种转移。
+    unable_verified_by = {vb: sum(1 for item in normalised
+                                  if item["status"] == "无法验证"
+                                  and item["verified_by"] == vb)
+                          for vb in ATK_VERIFIED_BY}
     unexecuted = [item["id"] for item in normalised if item["status"] == "未执行"]
     return {
         "registered": len(normalised),
@@ -799,6 +811,7 @@ def analyse_atk(entries):
         "not_hit": len(not_hit),
         "not_hit_ids": not_hit,
         "not_hit_verified_by": not_hit_verified_by,
+        "unable_verified_by": unable_verified_by,
         "unsupported_negative": unsupported_negative,
         "unexecuted": len(unexecuted),
         "unexecuted_ids": unexecuted,
@@ -1272,6 +1285,28 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                 f"{unexplained[:6]}"
                                 "（须 --replay-note 点名该 ATK 并引用既有观察，"
                                 "或补一条实操探针）"})
+    # —— 目标导向补漏（只披露，不加义务）——
+    # 逃逸口一：把「未命中」改标成「无法验证」，M1 的证据义务就不适用（未命中专属）。
+    # 「无法验证」此前完全不可见——现在按验证方式分布披露，读者能看见这种转移。
+    if any(atk["unable_verified_by"].values()):
+        detail = "、".join(f"{vb}：{n}" for vb, n in atk["unable_verified_by"].items() if n)
+        notices.append({"code": "atk_unable_to_verify",
+                        "message": f"{sum(atk['unable_verified_by'].values())} 条攻击假设判「无法验证」"
+                                   f"（验证方式分布：{detail}）——「无法验证」不受 M1 证据义务约束，"
+                                   "若实为「已试但未破」请改标「未命中」并挂证据"})
+    # 逃逸口二：不填 verified_by（缺省 unknown）即绕过 M1。旧台账无法区分"历史登记"
+    # 与"本轮规避"，但新格式台账（FINISH 已携带 evidence_grade）可给出一条线索：
+    # 此时未声明验证方式应被逐条确认。只披露，不压上限。
+    ledger_has_grade = any("evidence_grade" in rec for rec in attempt_index.values())
+    if ledger_has_grade:
+        unset = [entry["id"] for entry in atk["entries"]
+                 if entry["status"] == "未命中" and entry["verified_by"] == "unknown"]
+        if unset:
+            notices.append({"code": "atk_negative_verified_by_unset",
+                            "message": f"{len(unset)} 条攻击假设判「未命中」但未声明验证方式"
+                                       f"（verified_by 缺省 unknown）：{unset[:6]}"
+                                       "（本台账 FINISH 已携带证据等级格式，无法自动区分"
+                                       "历史登记与本轮未声明——请逐条确认）"})
     # —— M1 扩展：practical「未命中」的证据挂钩 ——
     # 三重交集（状态=未命中 × verified_by=practical × 影响面属功能/数据/权限），
     # 一个不能少——体验类未命中不扩大义务。可用 --replay-note 豁免的是推演/走读；

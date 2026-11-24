@@ -260,7 +260,7 @@ RUN 元信息：目标、环境、版本或不可得声明、开始/结束时间
 
 ### 5.8 披露页（只披露，不评分）
 
-结论页固定披露六项，均给出分子分母；分母为零写"不适用"，不写 0 掩盖。
+结论页固定披露七项，均给出分子分母；分母为零写"不适用"，不写 0 掩盖。
 
 | 披露项 | 口径 |
 |---|---|
@@ -268,6 +268,7 @@ RUN 元信息：目标、环境、版本或不可得声明、开始/结束时间
 | `OBS-` 游离观察数 | 本轮第 4 类中类型为"游离观察"的条目数 |
 | 计划外 SURF 数 | `scripts/attack_coverage.py` 输出的 `surfaces_beyond_plan` |
 | ATK 未命中的验证方式分布 | `practical` / `simulation` / `code_walk` / `unknown` 各 N 条（取 `scripts/attack_coverage.py` 输出的 `atk.not_hit_verified_by`）——让读者看见有多少"没破"是实测证出来的、多少只是推演 |
+| ATK 无法验证条数与验证方式分布 | 验证状态为"无法验证"的条目数及其 `practical` / `simulation` / `code_walk` / `unknown` 分布（取 `atk.unable_verified_by`）——"无法验证"不受证据义务约束，改标即绕开，须显性呈现 |
 | 未覆盖状态格点 | 三态：**已运行**：N 格未覆盖 / **未运行** / **不适用（附理由）**。取 `scripts/state_matrix.py` 输出的 `uncovered_cells` |
 | 未覆盖参数对 | 三态：**已运行**：N 对未覆盖 / **未运行** / **不适用（附理由）**。取 `scripts/pairwise.py` 输出的 `missing_pairs` |
 
