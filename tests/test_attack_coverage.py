@@ -889,6 +889,23 @@ class AtkNegativeEvidenceTests(unittest.TestCase):
         gap = [g for g in result["gaps"] if g["code"] == "atk_practical_negative_unproven"][0]
         self.assertIn("人工核对 AC 与执行记录的对应性", gap["message"])
 
+    def test_linked_ac_only_bound_success_discloses_manual_check(self):
+        # 计划 2.4 的形式门禁退化点：绑定成功 + 仅挂 AC 时，覆盖关系未经自动核验，
+        # 必须单列 notice 披露人工核对义务（只披露，不压结论上限）
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_ac="AC-3")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        manual = [n for n in result["notices"]
+                  if n["code"] == "atk_practical_negative_link_manual"]
+        self.assertEqual(len(manual), 1)
+        self.assertIn("人工核对 AC 与执行记录的对应性", manual[0]["message"])
+
+    def test_linked_tc_bound_success_produces_no_manual_notice(self):
+        # 对照：linked_tc 非空且 case_id 匹配时，覆盖关系已自动核验，无人工核对披露
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish()], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_link_manual", self._notice_codes(result))
+
     def test_not_hit_verified_by_distribution_exposed(self):
         # M3 披露口径：未命中的验证方式分布（practical/simulation/code_walk/unknown）
         entries = [self._atk(verified_by="simulation"),

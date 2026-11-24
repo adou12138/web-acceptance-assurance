@@ -1280,23 +1280,32 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                           if entry["status"] == "未命中"
                           and entry["verified_by"] == "practical"
                           and entry["impact"] in ATK_SEVERITY_IMPACTS]
-    unproven_practical, legacy_grade = [], []
+    unproven_practical, legacy_grade, link_manual = [], [], []
     for entry in practical_negative:
         state, detail = _practical_negative_evidence(entry, attempt_index)
+        # linked_ac 非空但 linked_tc 为空：绑定仍可用，但覆盖关系无法自动核验——
+        # 计划 2.4 点名的形式门禁退化点。无论绑定成败，人工核对义务都要显式披露：
+        # 失败时附加进 gap/notice 消息，成功时单列 notice（只披露，不压结论上限）。
+        manual_note = (not str(entry.get("linked_tc") or "").strip()
+                       and str(entry.get("linked_ac") or "").strip())
         if state is None:
-            # linked_ac 非空但 linked_tc 为空：绑定仍可用，但覆盖关系无法自动核验，
-            # 在消息中如实附加人工核对义务（完全不做关联检查会退化为形式门禁）。
-            if not str(entry.get("linked_tc") or "").strip() \
-                    and str(entry.get("linked_ac") or "").strip():
+            if manual_note:
                 detail += ("；linked_tc 为空，无法从 case_id 自动验证覆盖关系，"
                            "须人工核对 AC 与执行记录的对应性")
             unproven_practical.append((entry["id"], detail))
         elif state == "bound_legacy":
-            if not str(entry.get("linked_tc") or "").strip() \
-                    and str(entry.get("linked_ac") or "").strip():
+            if manual_note:
                 detail += ("；linked_tc 为空，无法从 case_id 自动验证覆盖关系，"
                            "须人工核对 AC 与执行记录的对应性")
             legacy_grade.append((entry["id"], detail))
+        elif manual_note:
+            link_manual.append((entry["id"], detail))
+    if link_manual:
+        detail = "；".join(f"{ident}: {why}" for ident, why in link_manual[:6])
+        notices.append({"code": "atk_practical_negative_link_manual",
+                        "message": f"{len(link_manual)} 条 practical 未命中的执行记录绑定"
+                                   f"已核验通过，但 linked_tc 为空，覆盖关系未经自动核验：{detail}"
+                                   "（须人工核对 AC 与执行记录的对应性；只披露，不压结论上限）"})
     if unproven_practical:
         detail = "；".join(f"{ident}: {why}" for ident, why in unproven_practical[:6])
         gaps.append({"code": "atk_practical_negative_unproven",
