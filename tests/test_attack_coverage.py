@@ -803,6 +803,32 @@ class AtkNegativeEvidenceTests(unittest.TestCase):
         self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
         self.assertIn("atk_practical_negative_grade_unset", self._notice_codes(result))
 
+    # 7b) 审核修复：键存在但为空串不是"未设"——只能来自手工拼 JSON 绕过工具写入，
+    #     属新写入规避，必须判 gap 而不是洗成历史兼容 notice
+    def test_empty_string_grade_is_evasion_not_legacy(self):
+        event = self._finish(grade=None)
+        event["evidence_grade"] = ""
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([event], residual_note="x", atk_entries=[atk])
+        self.assertIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertNotIn("atk_practical_negative_grade_unset", self._notice_codes(result))
+
+    # 7c) 键为 null 与缺键同义（写入侧 None 即不写键），按历史兼容处理
+    def test_null_grade_is_treated_as_legacy(self):
+        event = self._finish(grade=None)
+        event["evidence_grade"] = None
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([event], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertIn("atk_practical_negative_grade_unset", self._notice_codes(result))
+
+    # 7d) 小写 "e1" 与写入侧合法枚举等价（ledger 校验前会拒绝小写，手工值宽容到大小写）
+    def test_lowercase_grade_is_accepted(self):
+        atk = self._atk(verified_by="practical", attempt_id="AT-1", linked_tc="TC-9")
+        result = ac.analyse([self._finish(grade="e1")], residual_note="x", atk_entries=[atk])
+        self.assertNotIn("atk_practical_negative_unproven", self._codes(result))
+        self.assertNotIn("atk_practical_negative_grade_unset", self._notice_codes(result))
+
     # 8) 体验类不扩大义务
     def test_experience_impact_practical_negative_not_gated(self):
         result = ac.analyse([rec(1, "boundary")], residual_note="x",

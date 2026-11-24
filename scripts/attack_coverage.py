@@ -698,8 +698,16 @@ def _practical_negative_evidence(entry, attempt_index):
         if status not in ("PASS", "FAIL"):
             return None, (f"attempt_id {attempt_id} 的执行未完成"
                           f"（status={event.get('status') or '缺失'}，非中途弃置才算执行完成）")
-        grade = str(event.get("evidence_grade") or "").strip().upper()
-        legacy = not grade
+        grade_raw = event.get("evidence_grade")
+        grade = str(grade_raw or "").strip().upper()
+        # 旧格式判定只认「键缺失或 null」：execution_ledger 写入侧保证 evidence_grade
+        # 要么不写、要么是合法 E1/E2/E3（非法值当场 raise）。键存在但为空串/乱值
+        # 只能来自手工拼 JSON 绕过工具写入——那是"新写入规避"，不是历史兼容，
+        # 不得洗成 notice 放行。
+        legacy = "evidence_grade" not in event or grade_raw is None
+        if not legacy and grade not in ("E1", "E2", "E3"):
+            return None, (f"attempt_id {attempt_id} 携带无效证据等级 {grade_raw!r}"
+                          "（合法值仅 E1/E2/E3；空值等同未携带，不得冒充旧格式）")
         if not legacy and grade != ATK_PRACTICAL_GRADE:
             return None, (f"attempt_id {attempt_id} 的证据等级为 {grade or '缺失'}，"
                           f"仅 {ATK_PRACTICAL_GRADE} 合格")
@@ -1464,6 +1472,12 @@ def _emit_csv(result, path):
         rows.append({"section": "path_type_group", "metric": name, "value": value})
     for name in ("registered", "hit", "not_hit", "unexecuted", "verdict_ceiling"):
         rows.append({"section": "atk", "metric": name, "value": result["atk"][name]})
+    # M3 披露口径：未命中的验证方式分布与推演/走读否定清单随 CSV 导出，
+    # 报告 5.8 取数不必回读 JSON。
+    for method, count in result["atk"]["not_hit_verified_by"].items():
+        rows.append({"section": "atk_not_hit_verified_by", "metric": method, "value": count})
+    for ident in result["atk"]["unsupported_negative"]:
+        rows.append({"section": "atk_unsupported_negative", "metric": ident, "value": 1})
     for candidate in result["atk"]["pending_candidates"]:
         rows.append({"section": "atk_candidate_pending", "metric": candidate["id"],
                      "value": f"{candidate['impact']}/{candidate['severity']}：{candidate['reason']}"})
