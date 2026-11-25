@@ -1483,3 +1483,9 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **D1 runtime_probe.py**：五通道三态纯探测（http_contract 依赖恒具备/available 取决于 manifest——X-07；auth_state 只查 profile 存在可写不做读回；browser_mcp 恒 unprobed 会话内判定）+ runtime-manifest/1 校验；消费四落点见 §0.4；adversarial_gate 本版未改（X-03）。回归：19 例（撤 manifest 依赖判断变红）；无 playwright 环境返回结构化三态不崩。
 - **D2 exploration_runner.py**：只编排不执行；ready_queue 复用 summarize() 不另建排序；X-02 自动续批走 classify+is_blocking 双层（record 内嵌 declaration 供第二层凭据复验），三种反向凭据 requires_human；X-13 honest_exits 只登记条目 ID；writeback_commands 为发射模板（审核 P3）；预算账本 budget-consumption/1。回归：14 例（三反向凭据全绿；classify/is_blocking 为防御纵深，无行为差异，验收按 §19 以 grep 在位确认）。
 - **D3 runtime_diagnostics**：交接包独立字段（batch_count/probes_consumed/budget_remaining/blocked_by_capability）派生可重建；不落 state 顶层、不进 pending_inputs、phase-handoff/1 不升版（X-06）；CLI checkpoint --budget-ledger/--capabilities。回归：2 例；不自动 resume、不自动放行。
+
+### G3 · 方案甲发布（2026-11-25 用户确认）
+
+- **P0 决策采纳方案甲**：G2 从「E1/E2 实跑归档硬闸门」改为「代码冻结 + 893 tests 绿 + 旧状态零差异 + README 状态页『已就绪待执行』」——E1 检出 A/B（20 run）与 E2 自主性对照**降为并行验证轨道**，跑完回写 README 状态页，不阻塞 1.49.0 发布。依据：E1/E2 属专家自测体系（docs/evals-baseline/），用户立项目标明确「自身测试体系非必要可略过、以项目主体为重点」；诚实性由状态页承载（不冒称已验证），不靠发布闸门强制。
+- **发布动作**：plugin.json 升 1.49.0（唯一版本，无 1.50.0 产物）；注册守卫处置宿主 1.48.6 旧缓存 4 个启用态 SKILL.md 改名 .disabled（发布步骤，非代码缺陷）；全量 893 tests OK、注册守卫 3 例绿。
+- **待执行（并行轨道）**：E1 按 M1-execution-checklist.md 逐 run 实跑（≥2 执行方分臂、交错、答案隔离受限区）；E2 按 autonomy-protocol.md 五指标对照；完成后回写 README 状态页与 M1-result.md / autonomy-result.md，负结果如实写。
