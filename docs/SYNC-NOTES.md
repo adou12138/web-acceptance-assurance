@@ -1489,3 +1489,10 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **P0 决策采纳方案甲**：G2 从「E1/E2 实跑归档硬闸门」改为「代码冻结 + 893 tests 绿 + 旧状态零差异 + README 状态页『已就绪待执行』」——E1 检出 A/B（20 run）与 E2 自主性对照**降为并行验证轨道**，跑完回写 README 状态页，不阻塞 1.49.0 发布。依据：E1/E2 属专家自测体系（docs/evals-baseline/），用户立项目标明确「自身测试体系非必要可略过、以项目主体为重点」；诚实性由状态页承载（不冒称已验证），不靠发布闸门强制。
 - **发布动作**：plugin.json 升 1.49.0（唯一版本，无 1.50.0 产物）；注册守卫处置宿主 1.48.6 旧缓存 4 个启用态 SKILL.md 改名 .disabled（发布步骤，非代码缺陷）；全量 893 tests OK、注册守卫 3 例绿。
 - **待执行（并行轨道）**：E1 按 M1-execution-checklist.md 逐 run 实跑（≥2 执行方分臂、交错、答案隔离受限区）；E2 按 autonomy-protocol.md 五指标对照；完成后回写 README 状态页与 M1-result.md / autonomy-result.md，负结果如实写。
+
+### v1.49.1 · 发布后审查修复（2026-11-25 变更审查闭环）
+
+- **死解构清理（低）**：`run_journeys.cjs:33` 减法后残留 `resolveChrome` 死解构 → 改 `const { stabilize } = require('../stabilize.js')`（`stabilize` 仍用于 498/551 行，非死 import）；`node --check` 通过。
+- **核对表回填（低）**：`consumer-checklist-v149.md` 六行 G1 复核列由「待复核」回填为复核结论 + grep/测试证据锚点（phase-verdict-check/2 三真实副本 / surface_path CSV / runtime 四产物 / handoff 诊断）。
+- **真实副本补测取证（关闭潜在风险）**：3 个真实旧状态副本（liheng-slider-20261124 / checkin-1037672-20261124 / online-signing-1037575-20261120）只读跑 `check_verdict`——均 `phase-verdict-check/2`、不崩、`ceiling=待核实`、B2 靶点 `pending_inputs` 点名采集缺口（`pending_has_collection=true`）；确认 check-verdict 分支纯读不写状态（`phase_gate.py:1904-1914`）。
+- **版本**：plugin.json 1.49.0→1.49.1（发布后缺陷修复 patch；全量 **928 tests OK**，此前报告 893 为 C2 阶段中途统计数，现更正为实测值）。

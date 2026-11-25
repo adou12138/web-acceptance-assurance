@@ -30,7 +30,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { stabilize, resolveChrome } = require('../stabilize.js');
+const { stabilize } = require('../stabilize.js');
 const { verifyPageIdentity } = require('./page_identity.cjs');
 // D 减法（v1.49.0）：Playwright 解析/启动/关闭的唯一来源是 browser.cjs，
 // 删除本文件自带的 resolvePlaywright 与重复启动逻辑（空 catch 静默吞失败的那份）。
