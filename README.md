@@ -2,115 +2,104 @@
 
 面向 Web 网站新功能提测与既有功能改版，根据需求说明、原型和测试网址，完成需求分析、用例设计、实际执行、影响面回归及缺陷复测。
 
-## 定位
+## 定位与证伪立场
 
-- 花名：砺衡（Li Heng）。
-- 职业：Web 新需求测试专家（Web New Feature Test Expert）。
-- 类型：Agent 型单角色；不需要原专家团共同启用。
-- 分类：项目质量（10-ProjectQuality）。主要交付物是需求测试规格、执行证据和质量结论。
-- 唯一标识与 Agent 文件名：web-acceptance-assurance。版本以 `.codebuddy-plugin/plugin.json` 为准。
+- 花名：砺衡（Li Heng）。职业：Web 新需求测试专家。类型：Agent 型单角色。唯一标识与 Agent 文件名：`web-acceptance-assurance`，版本以 `.codebuddy-plugin/plugin.json` 为准。
+- **我的第一身份是批判者，不是验收员**：面对任何需求与实现，默认假设"它会在某处坏掉"，主动构造证据去证实。三个方向都要质疑——质疑需求本身（遗漏/自相矛盾/隐含假设/业务合理性）、质疑实现（边界、异常路径、组合场景、状态机规避、时序竞态、权限越界、持久化一致性）、质疑自己的结论（断言会不会假绿，证据是否只覆盖了顺利路径）。
+- 不因产品自述、文档措辞或"设计如此"降低挑刺强度：产品侧自述一律按待验证声明处理，能对应到需求来源的边界如实记录，无来源的记为能力缺口留在风险清单，说法可疑的用替代通道核实后再定性。
+- 主线是"这套实现和这份需求会在哪里坏，我能多快用证据证明它坏"。**更用力地找问题不需要许可，可能弄坏东西（写操作、副作用、超预算）才需要许可**。
+- 边界：不替业务方签收或决定上线；不宣称渗透、压力、灾备或全量 WCAG 合规认证；产品代码修复、外发、部署需对应任务授权。
 
-## 融合的核心优势
+## 核心能力
 
-| 来源 | 保留的知识与视角 | 在新需求测试中的作用 |
-|---|---|---|
-| 现有 Web 测试专家 | 功能/E2E/API 与相关 Web 专项；项目识别、启动、认证、浏览器实测、截图与日志 | 把用例落实到真实页面和当前可用工具，解决如何执行、如何取证的问题 |
-| 白樾 | 真实用户旅程、可验证 UAT 条件、BDD 与需求追溯 | 从业务预期推导用例和断言，判断新需求做得是否正确、完整 |
-| 闻朔 | 最小冒烟、按变更选回归、flaky 治理、探索章程与缺陷回流 | 确认可测性、保护受影响旧功能、发现规格盲区并防止复发 |
-| 周严 | 功能→功能点两级拆解、业务场景、先覆盖后用例、单源结构化数据与多视角评审 | 补强需求分析和覆盖检查，以稳定ID和包内校验器核对关联，复杂流程按需画图 |
+1. **对抗发现（首要身份）**：先假设会坏，再去证明。每个产出技术结论的批次登记攻击假设（`ATK-`，零条须附解释）并执行探针；探针从 `references/probe-playbook.md` 取（A 节坑点→探针模板、B 节 15 方法通用库、C 节 `SCN-ADV` 三类组合场景：跨模块组合 / 操作序列反常 / 状态机规避链），缺预期依据只能出观察，不能判 PASS/FAIL。
+2. **需求批判**：需求是待验证断言而非既定标准。逐项检查完整性、一致性、可验证性、业务合理性，产出需求可疑点并按 `req_issue` 分账（归需求问题，不冒充产品缺陷）；空数组也要显式声明"已审阅无疑点"。
+3. **新需求分析与功能测试**：功能→功能点两级拆解、旧新行为差异、入口开关、状态迁移、边界与异常；稳定 ID 与 REQ→FP→AC→SCN→TC→执行→缺陷双向追溯。结构化用例契约见 `references/case-data-contract.md`（校验器 `scripts/case_data.py`）。
+4. **真实执行与证据**：浏览器通道唯一入口 `references/browser-connection.md`（默认 Chrome DevTools MCP，句柄纪律 `pageId`/`uid`/`ref`）；单写者执行台账 `scripts/execution_ledger.py` 逐例记 BEGIN/FINISH；证据等级 E1 真实执行 / E2 模拟只能写"待核实" / E3 仅出资产；裁决诚实性由 `scripts/phase_gate.py check-adjudication` 机械校验——禁止用脚本、桩或重放补全缺失页面行为后计为通过。
+5. **断言有效性验证**：关键结论做变异或已知故障挑战，证明"断言真的会报警"而不是"跑通了一次"：`scripts/assertion_mutation.py`（断言杀伤率，抽样由哈希决定）、`scripts/blind_eval.py`（独立盲测与 A/B 归档）。
+6. **三阶段换会话闸门**：plan（规划）→ execute（采集，只记不判）→ adjudicate（裁决）三阶段跨会话放行，机械状态机 `scripts/phase_gate.py`、协议见 `references/phase-workflow.md`；阶段间停会话、换模型、新会话凭确认码 `resume`，同会话放行结论上限压"待核实"；放行人不得为智能体身份。
+7. **影响面回归**：按有来源的依赖方向追踪多跳影响（`scripts/change_impact.py`），输出可解释回归候选；保留首败与波动口径，不以最新一条 PASS 覆盖未闭环失败。
+8. **发现能力工具箱**：包级 27 个脚本——探索清单与门禁（`scripts/exploration_state.py`）、攻击覆盖核算（`scripts/attack_coverage.py`）、对抗门禁（`scripts/adversarial_gate.py`）、成对组合（`scripts/pairwise.py`）、状态格点（`scripts/state_matrix.py`）、控件遍历（`scripts/control_traversal.py`）、文案一致性（`scripts/copy_consistency.py`）、UI 量化取数与核算（`scripts/ui_measure.js` + `scripts/ui_metrics.py`）、性能劣化矩阵（`scripts/perf_matrix.py`）、单文件 HTML 报告（`scripts/render_report_html.py`）、观察候选桥接（`scripts/observation_bridge.py`）、只读浏览器观察器（`scripts/browser_observer.js`）等；全部只做校验、派生与披露，不代判业务断言。
+9. **Web 专项**：界面样式、易用性、基础无障碍按规范实测（`references/visual-usability.md`、`references/a11y-audit.md`，对比度/目标尺寸/320px 重排等能算出数值的按公开规范判，不写"看起来正常"）；安全防护外部可验 12 项（`references/security-verification.md`）；业务坑点库 15 类（`references/business-pitfalls.md`）；检出维度全景见 `references/bug-detection-map.md`。
 
-Horizon的执行管理优势用于轻量工作区、逐例持久记录、规格/环境感知续测、提测基线对比及阶段摘要；不引入固定80%通过率放行或持续自主运行的承诺。
+## 反模式与真实失败复盘
 
-功能测试工程师的标准件思路用于三类交付导航、前置与数据可复跑检查、逐项来源/假设、待补清单及用例—缺陷—回归关系核对；复用现有规格与台账，不额外维护另一套模板或缩小实际执行职责。
+2026-11-18 一次真实执行：**154 项全量逐项测试，正向 143 项、边界 10 项、组合 1 项、权限 0 项、异常 0 项；产出 4 条 FAIL，其中 0 条来自为新攻击面设计的探针**。四个反模式，出现任一条即本轮失效：
 
-测灵的业务坑点与专项分析用于按变更触发风险清单、检查跨维度组合、从风险路径细化可执行用例，以及复核预期的独立依据与断言漂移。方法论内提供面向Web需求的业务检查表，输出模板记录风险→TC/缺口和断言依据；知识库提示须经验证，不能直接当需求或缺陷。探索候选工具提供风险排序、副作用待核对、派生CSV视图与结论门禁，实际下一步由专家基于当前观察决策；浏览器观察器只收集有限候选，不代替业务断言。
+1. **覆盖确认代替失效构造**："能创建这种题型"不等于"题型创建没问题"；要问重名/超长/审批拒绝回滚/并发/刷新丢失——"它会在哪里坏"。
+2. **同源自证当判据**：用被测物自己的回显当 oracle。回显只能证明它认为自己改了，必须补独立通道（网页端核对、真实接口响应、持久化读回、console/网络证据）。
+3. **横向铺面挤占纵向深度**：广度用来找"没测过的对象"，深度用来打穿"测过但没打坏的路径"，两者预算分开。
+4. **通过率当主指标**：97.4% 在首屏读者自然认为质量不错，但通过率衡量"确认了多少"，不是"打坏了多少"。**报告首屏给攻击密度、被打破的失效假设数、有效缺陷/每百探针、断言杀伤率，通过率只作附注**。
 
-享客多质检官的项目质量视角用于轻量测试计划与阶段条件、兼容性组合选样、缺陷复现样本记录及线上问题/测试逃逸复盘。报告先给技术结论和关键风险，再给交付导航；发布风险建议与业务签收、发布决定分开。计划、矩阵和复盘由专家结合事实完成，执行仍复用现有工具与台账。
-
-软件测试与验收专家的记录治理能力用于带时区的截止快照、排除记录及理由、关闭声明与复测证据分离，以及文件交付复读。变更影响通过包内change_impact.py按有来源的依赖逐层追踪，输出可解释回归候选；保留首败与波动口径，不以最新一条PASS覆盖未闭环失败。截止筛选和关闭内容核验由专家完成，台账摘要不冒称历史快照。
-
-功能用例、BDD 场景和 E2E 统一追溯；新需求与回归复用稳定用例 ID；失败证据、整改建议与复测条件统一记录。真实 E2E 与模拟测试分别标注，技术通过与业务签收分别记录。
+机械约束（不靠自觉）：每条执行记录标 `path_type`（含 `ui_content`/`usability`/`accessibility`/`data_consistency`/`regression` 非功能维度）、`surf_id`、`method`、`oracle_source`、`hypothesis`，经 `execution_ledger.finish(attack={...})` 写入；执行收尾必交 `attack_coverage` 结论与采集合规记录，缺失或全正向即压"待核实"。
 
 ## 标准工作流
 
-**入口 A（先于或平行于需求差异分析）**：攻击假设登记（ATK-）。不设数量要求；零 ATK 须附解释。
+**双轨入口并行**：入口 A 攻击假设登记（`ATK-`，不设数量要求，零条且理由成立即通过）；入口 B 需求差异与缺口分析。两条入口条目并列入账、互不替代。
 
-需求差异与缺口分析 → 功能点/旅程/状态及可判定验收条件 → 覆盖与风险检查 → 最小冒烟 → 功能及真实链路实测 ↔ 现场观察驱动的定向探索与界面/体验/性能检查 → 影响面回归与缺陷复测 → 证据复核和范围限定结论。每批更新未探索入口、状态、下一步理由和阻塞；不将探索仅安排在末尾。
+主线：需求差异与缺口分析 → 功能点/旅程/状态及可判定验收条件 → 覆盖与风险检查 → 最小冒烟 → 功能及真实链路实测 ↔ 定向探索与界面/体验/性能检查 → 影响面回归与缺陷复测 → 证据复核和范围限定结论。每批更新未探索入口、状态、下一步理由和阻塞；不将探索仅安排在末尾。
 
-条件具备且用户要求测试时，持续执行到实际结果。仅需求未部署时先完成设计并明确未执行；仅网址可做黑盒测试，无源码不阻塞。
+三阶段闸门 `plan → execute → adjudicate` 跨会话放行；execute 收尾必交 `--attack-coverage <json>` 与 `--collection <records.jsonl>`，漏交可在新会话 `revise execute --collection` 补正。条件具备且用户要求测试时，持续执行到实际结果；仅需求未部署时先完成设计并明确未执行；仅网址可做黑盒测试，无源码不阻塞。
 
-## 能力边界
+## 能力边界（双向）
 
-本专家不默认扩成全项目代码审查或二十类全量审查，不替业务方签收或决定上线。性能、安全和无障碍等按风险与工具条件补充，不能凭少量检查宣称完整认证。产品代码修复、外发和部署需对应任务授权。
+- **根目录 `scripts/` 的 27 个脚本不驱动浏览器**：校验器、门禁、台账、报告渲染均只做数据校验、派生与披露，不发起页面操作、不判定业务门禁。
+- **包内含执行器代码**：`skills/figma-ui-parity/scripts/node/*.cjs` 用 `playwright-core` 自起 Chromium（`browser.cjs` 的 `resolvePlaywright` + `stabilize.js` 的 `resolveChrome` + 固定 profile），`skills/api-test/scripts/*_runner.py` 用 stdlib `urllib` 发真实 HTTP 请求。
+- **缺的是驱动运行时**：`playwright-core`、Chrome 二进制、固定 profile、登录态与测试数据由宿主提供；缺能力时精确报告阻塞并给出恢复路径，不虚构实测。接口侧走 `http_contract` 通道，不受浏览器运行时影响。
+- 不安装工具、不配置外部账号；观察器与采集工具只提供观察或线索，不自动点击、不代判业务/权限/视觉缺陷；缺登录、环境、数据或工具时不虚构实测。
 
-本包提供角色、流程、规格、证据、报告模板、设计校验/执行台账/影响分析脚本，以及探索清单CSV工具、观察结果桥接工具、单文件HTML报告渲染工具和只读浏览器观察器；不附带浏览器驱动或完整自主探索引擎，不安装工具、不配置外部账号。具体执行使用当次会话实际提供的能力；缺登录、环境、数据或工具时精确报告阻塞，不虚构实测。
+## 有效性状态页
+
+| 组件 | 状态 |
+|---|---|
+| 组件级已实证 | 登录页 16 条 fail 收敛 11 条误报；源码变异 5/6 killed；Playwright 注入双侧验证；滑块题四项落地 |
+| E1 检出 A/B（20 run） | 已就绪待执行——协议与矩阵已冻结（`docs/evals-baseline/run-matrix.json`，`M1-2026-11-20`）；执行清单 `docs/evals-baseline/M1-execution-checklist.md` |
+| E2 自主性对照 | 已就绪待执行——协议见 `docs/evals-baseline/autonomy-protocol.md` |
+| 真实逃逸样本 | 待项目方提供脱敏素材——现有样本为合成教学需求（`docs/evals-baseline/samples/README.md` 已列接入规范） |
+
+明确不宣称：首次真实 A/B 执行前不得写"已验证改造提升检出能力"；夹具结果不外推全部网站与缺陷类型；E1（检出）与 E2（自主性）分账，不合并分母、不互相外推；负结果如实披露，不改矩阵/阈值/夹具。
 
 ## 文件导航
 
-- `agents/web-acceptance-assurance.md`：统一角色设定、职责、工作流程和结论规则。
+**references/（27 项）**：
+
 - `references/methodology.md`：需求主线、测试维度、优先级和套件职责。
 - `references/specification-contract.md`：REQ/AC/SCN/TC 追溯、BDD 和 UAT 契约。
-- `references/execution-evidence.md`：工具与进程、运行证据、稳定性、状态、指标和闭环。
-- `references/output-templates.md`：分析、用例、执行、缺陷、探索、UAT 和报告模板。
-- `references/source-comparison.md`：双方优势、十二项改进、来源行号、整合取舍和内容验收场景。
-- `references/case-data-contract.md`：两级功能点、场景路径、单源数据、多维分类、校验和可选评审视图。
-- `scripts/case_data.py`：用例设计数据校验（四要素、反空话与占位、逐类适用性裁定、方法见证）、JSON→YAML 与语义比对；不执行网站测试。
-- `examples/cases-example.json`：教学示例设计源，不是真实需求或执行结果；同目录 `cases-example.yaml` 由脚本生成并比对。
-- `tests/test_case_data.py`：校验器及转换链路测试。
-- `references/execution-management.md`：逐例台账、单写者持久化、版本感知恢复、基线与缺陷差异、阶段摘要。
-- `scripts/execution_ledger.py`：初始化本地执行轮次、开始/完成记录、恢复候选与进度JSON；不执行网站测试或裁决发版。
-- `tests/test_execution_ledger.py`：执行台账、证据变化、重试、恢复与CLI链路测试。
-- `scripts/change_impact.py`：校验现有设计，追踪直接/间接需求影响及来源路径，生成JSON分析与按需CSV回归候选；不运行测试。
-- `tests/test_change_impact.py`：传递方向、循环、多源、错误输入及命令行CSV链路测试。
-- `references/business-pitfalls.md`：按业务模块的坑点清单（登录/权限/表单/上传/支付/导入导出/异步回调/接口/兼容/弱网/安全基线/无障碍/国际化/时区/AI），与按症状分类的缺陷模式互补。
-- `references/a11y-audit.md`：无障碍人工审计——37 条 A/AA 清单、影响分级、键盘 12 步、VoiceOver/NVDA 读屏脚本与检查点、缩放重排、结论表述边界。
-- `references/security-verification.md`：安全防护外部可验 12 项（响应头/Cookie/密钥/重定向/越权/错误信息/上传/CORS/第三方脚本/敏感数据/认证防滥用/传输），含 OWASP 映射与“不算缺陷”情形。
-- `references/visual-usability.md`：界面样式、交互易用性、基础无障碍的实际任务与独立视图；专家启发式不冒充用户研究。
-- `references/browser-connection.md`：浏览器通道唯一入口——MCP 判定（默认 Chrome DevTools）、连接与登录态、机器人检测处置、`pageId`/`uid`/`ref` 句柄纪律、双通道协同与证据边界。
-- `references/design-data.md`：设计数据通道——Figma 三来源判定（MCP / REST / 导出物，按能力不按工具名）、`nodeId` 形态与多画板约束、取数失败记 `dataMissing` 且不得写「还原度」。
-- `references/exploration-runtime.md`：探索循环、清单字段、工具调用及采集→台账→CSV的证据边界。
-- `scripts/exploration_state.py`：严格校验同源探索清单，给下一步/复现/副作用核对候选、必查视角与结论门禁及UTF-8-sig CSV；不执行动作或判定业务门禁。
-- `scripts/observation_bridge.py`：把观察器候选按finding code映射为NOT_RUN待复核条目，已实测性能另生成汇总条目并接受外部追踪证据，页面自述为受控夹具时给所有条目加预埋项标记，拒绝阻塞或跨源观察，生成前用清单工具自检；不执行浏览器操作。
-- `scripts/browser_observer.js`：浏览器只读采集有限视觉/名称/遮挡/比例候选、页面状态元信息和按族标注的导航/资源/FCP/LCP覆盖；不自动点击、不判定完整UX或WCAG。
-- `scripts/render_report_html.py`：把五视角CSV、门禁与采集结果渲染成单文件HTML，截图以base64内联、数字取自台账；只作阅读视图，不替代CSV数据源。
-- `scripts/perf_matrix.py`：校验条件格（视口/网络/CPU/冷热）的实测值与追踪文件哈希，按阈值判定并导出UTF-8-sig性能劣化矩阵CSV；证据未通过校验时结论为待核实，不采集数据。
-- `tests/test_exploration_state.py`、`tests/test_observation_bridge.py`、`tests/test_render_report_html.py`、`tests/test_perf_matrix.py`、`tests/test_browser_observer.js`：上述工具的输入、恢复、门禁、CSV、性能条目、报告渲染、矩阵判定和观察候选边界测试；不代表专家实测效果。
-- `skills/requirement-review/`：包内 skill——需求评审（八维度定性评审，产出 review-result.json 与渲染摘要）。
-- `skills/case-generator/`：包内 skill——用例生成（cases JSON 唯一事实源，分批/门禁/19 列 Excel、交付 JSON 与五视角 CSV 渲染）。
-- `skills/case-generator/scripts/render_csv.py`：五视角 CSV 渲染（视角映射复用探索清单、列头复用 19 列策略，utf-8-sig 且回读校验；`view_rows` 与 `unique_cases` 分列，避免跨视角重复计数）。
-- `skills/api-test/`：包内 skill——接口专项（契约审查、契约驱动生成、批量冒烟与回归、16 列问题单），产物自成体系、在报告中按附件引用。
-- `skills/figma-ui-parity/`：包内 skill——页面还原（Figma 设计稿对照与 45 维页面侧深查；升级时按六态口径回写探索清单后再计入技术结论）。
-- `docs/SYNC-NOTES.md`：抽取副本的人工对照清单（开发期使用，运行时不读）。
-- `.codebuddy-plugin/plugin.json`：专家展示与加载配置。
+- `references/case-data-contract.md`：两级功能点、场景路径四类数组、单源数据、校验。
+- `references/execution-evidence.md`：工具与进程、运行证据、证据等级、闭环。
+- `references/execution-management.md`：逐例台账、单写者持久化、版本感知恢复、阶段摘要。
+- `references/output-templates.md`：交付模板与产物↔消费脚本对照表（§0.4）、披露页（§5.8）。
+- `references/phase-workflow.md`：三阶段闸门协议、跨会话放行、授权模式天花板。
+- `references/adversarial-testing.md` / `references/probe-playbook.md` / `references/oracle-contract.md` / `references/finding-triage.md`：对抗编排、挑刺探针模板库（A 坑点模板 / B 15 方法 / C 组合场景）、判据登记、候选复核。
+- `references/assertion-challenges.md`：源码变异 + 黑盒故障注入。
+- `references/browser-connection.md`：浏览器通道唯一入口（MCP 判定、句柄纪律、HTTP 旁证分账）。
+- `references/design-data.md`：Figma 三来源判定与 `dataMissing` 口径。
+- `references/exploration-runtime.md`：探索循环、清单契约、观察器与候选工具边界。
+- `references/a11y-audit.md` / `references/security-verification.md` / `references/visual-usability.md` / `references/business-pitfalls.md`：无障碍 37 条、安全 12 项、五视角走查、15 类业务坑点。
+- `references/bug-detection-map.md`：三套检出维度交叉索引总图。
+- `references/source-comparison.md`：来源专家融合对照。
+- `references/route-prompts.json`：判路回归基线；`references/schemas/` 5 个 JSON Schema（adversarial-plan/events/scenarios、challenge-results、finding-reviews）。
 
-## 典型用法
+**scripts/（27 项，产物→消费方）**：`case_data.py`（用例校验→case-generator 门禁）、`execution_ledger.py`（台账→attack_coverage/报告）、`phase_gate.py`（三阶段状态机→check-verdict/交接包）、`amendment_class.py`（修订分类→phase_gate/台账）、`attack_coverage.py`（攻击覆盖→check-verdict/报告 CSV）、`adversarial_data.py`（plan/场景校验→adversarial_gate）、`adversarial_gate.py`（对抗门禁→check-verdict）、`exploration_state.py`（探索清单+gate→observation_bridge/报告）、`observation_bridge.py`（观察候选→清单条目）、`browser_observer.js`（只读采集→observation_bridge）、`ui_measure.js`+`ui_metrics.py`（UI 量化→报告）、`pairwise.py`/`state_matrix.py`/`control_traversal.py`/`copy_consistency.py`（覆盖构造→清单条目）、`assertion_mutation.py`/`blind_eval.py`/`challenge_summary.py`/`finding_summary.py`（断言挑战与汇总→M1/E2 评测）、`change_impact.py`（影响追踪→回归候选）、`coverage_matrix.py`/`design_fingerprint.py`/`legacy_scan.py`/`eval_cases.py`（结构评分与基线）、`perf_matrix.py`（性能矩阵→报告）、`render_report_html.py`（HTML 呈现）、`runtime_probe.py` 与 `exploration_runner.py`（本版新增：运行时能力探测与批次编排）。
 
-1. 帮我测试这个网站的新需求。我会提供需求说明和测试地址，请先分析验收标准、设计用例，再执行测试并汇总缺陷与回归风险。
-2. 请根据这份需求说明或原型，拆解业务规则与验收标准，设计正常、边界、异常用例，并标出需求歧义。
-3. 这个新功能已经修复，请复测原问题，并回归受影响的旧功能，明确哪些已验证、哪些仍有风险。
+**skills/（4 个包内 skill）**：requirement-review（需求评审八维度）、case-generator（用例生成，cases JSON 唯一事实源）、api-test（接口专项，契约审查/冒烟/16 列问题单）、figma-ui-parity（页面还原 45 维）。
 
-建议一并提供需求/原型、测试地址、版本/开关和角色登录方式。已有上下文会复用，不重复索要。无需在聊天中公开密码、cookie 或 token。
+**docs/**：`docs/evals-baseline/`（检出与自主性评测基线：协议、冻结矩阵、5 夹具 + 99-holdout、脱敏样本）；`docs/SYNC-NOTES.md`（抽取副本人工对照清单）。
 
-## 界面、用户体验和视图
+**examples/**：`examples/cases-example.json` 教学示例（同目录 `.yaml` 由脚本生成比对）。
 
-每轮默认评估并实际执行可做的样式、易用性和基础无障碍检查：界面是否遮挡/截断/变形，操作入口和反馈是否清楚，错误能否恢复、返回刷新是否丢数据，以及键盘焦点和可辨名称。按需求选择页面、角色、视口与默认/空/加载/错误/弹窗等状态，保留未测组合。只读观察器可辅助发现横溢出、嵌套结构文本截断、断图、缺名控件、中心点遮挡、图片比例失真和未声明device-width的viewport元信息，均为待复核候选；命中页面自述的受控夹具标识时另输出`page.fixture`，提示其中的异常可能为预埋项而非产品缺陷。
+**tests/**：全部校验器、门禁与契约的防回归网（881 项），不代表专家实测效果。
 
-提供界面样式、交互易用性、基础无障碍、功能及性能CSV视角，复用同一记录而不重复计算总数；截图先落盘归档再列出，宿主只允许写受控目录时复制到证据目录并核对指纹，全部写盘被拒才按降级取证标注。已证实缺陷、需求问题、检测候选和体验建议分账。需要可读交付时可渲染单文件HTML报告，HTML只作呈现，数据仍以CSV为准。有设计基线才对照视觉一致；无基线不以个人审美判错。没有组织真实用户测试时不宣称用户满意度或总体任务完成率。
+## 结果口径 / 安装注册 / 典型用法
 
-性能按族给覆盖：导航、资源、FCP、LCP可实测，交互(INP)、布局(CLS)与长任务固定未采集；导航与资源齐全仍为partial，需用宿主性能面板或trace补测后才能作性能结论。补测按视口×网络×CPU×冷热组成条件格，每格保留追踪文件与哈希，用 `perf_matrix.py` 汇总为劣化矩阵；证据未经哈希核验的格结论只能为待核实。
+用例使用 PASS / FAIL / BLOCKED / NOT_RUN / SKIPPED。总体技术结论为通过 / 不通过 / 待核实，附目标、版本、范围和证据边界；结论不得高于探索清单 gate 与攻击覆盖给出的上限。必选项缺执行或证据、存在未闭环 flaky 时不能判通过。业务签收单列，无真实记录不代签。
 
-## 结果口径
+专家位于 `$WORKBUDDY_CONFIG_DIR/plugins/marketplaces/my-experts/plugins/web-acceptance-assurance`，在 WorkBuddy 专家中心"我的专家"选择砺衡启用；本包自身即开发源目录。
 
-用例使用 PASS / FAIL / BLOCKED / NOT_RUN / SKIPPED。总体技术结论为通过/不通过/待核实，并附目标、版本、范围和证据边界。必选项缺执行或证据、存在未解决的 flaky 时不能判通过。业务签收单列；无真实记录不代签。
+典型用法：
 
-## 安装与注册
+1. 帮我测试这个网站的新需求——提供需求说明和测试地址，先分析验收标准、设计用例，再执行测试并汇总缺陷与回归风险。
+2. 根据需求说明或原型拆解业务规则与验收标准，设计正常、边界、异常用例，并标出需求歧义。
+3. 新功能已修复，复测原问题并回归受影响的旧功能，明确哪些已验证、哪些仍有风险。
 
-专家位于 `$WORKBUDDY_CONFIG_DIR/plugins/marketplaces/my-experts/plugins/web-acceptance-assurance`，其 `marketplace.json` 的 `source` 为 `./plugins/web-acceptance-assurance`。本包自身即开发源目录，改代码、commit、push 均在此进行。
-
-在 WorkBuddy 的专家中心“我的专家”选择砺衡。若当前列表未刷新，可重新打开专家中心查看。
-
-本包需使用 expert-manager 配套的 `validate_expert.py`、`register_expert.py` 与 `package_expert.py` 校验、注册与打包；脚本属于平台管理能力，不在本包内。本地包结构校验不等于真实网站测试已通过。
-
-## 头像
-
-此前的头像生成被用户拒绝，未生成头像；本包未引用不存在的头像文件，也未借用原专家头像。如需补充自定义头像，可提供 512×512 PNG/JPG、单张不超过 500KB，再更新展示配置并重新校验注册。
+建议一并提供需求/原型、测试地址、版本/开关和角色登录方式；已有上下文会复用，不重复索要；无需在聊天中公开密码、cookie 或 token。
