@@ -32,6 +32,9 @@ const fs = require('fs');
 const path = require('path');
 const { stabilize, resolveChrome } = require('../stabilize.js');
 const { verifyPageIdentity } = require('./page_identity.cjs');
+// D 减法（v1.49.0）：Playwright 解析/启动/关闭的唯一来源是 browser.cjs，
+// 删除本文件自带的 resolvePlaywright 与重复启动逻辑（空 catch 静默吞失败的那份）。
+const { launch, closeAll } = require('./browser.cjs');
 
 function arg(name, def) {
   const i = process.argv.indexOf('--' + name);
@@ -70,15 +73,7 @@ const OBS_SRC = fs.readFileSync(path.join(__dirname, '..', 'runtime_observabilit
 
 if (!URL_ && require.main === module) { console.error('ERROR: --url is required'); process.exit(1); }
 
-/** 同步解析 Playwright（不用 stabilize 的 async 版本，原因同 run_state_scenarios.cjs） */
-function resolvePlaywright() {
-  const candidates = ['playwright-core', 'playwright',
-    path.join(process.cwd(), 'node_modules', 'playwright-core'),
-    path.join(process.cwd(), 'node_modules', 'playwright')];
-  if (process.env.PLAYWRIGHT_CORE_PATH) candidates.push(process.env.PLAYWRIGHT_CORE_PATH);
-  for (const c of candidates) { try { return require(c); } catch (e) { /* next */ } }
-  return null;
-}
+
 function loadAuth() {
   try { return require('./auth.cjs'); } catch (e) { return null; }
 }
@@ -457,15 +452,13 @@ async function main() {
     return;
   }
 
-  const pw = resolvePlaywright();
-  if (!pw) { console.error('ERROR: playwright-core not found. npm i playwright-core'); process.exit(1); }
-  const chrome = CHROME && fs.existsSync(CHROME) ? CHROME : resolveChrome();
-  if (!chrome) { console.error('ERROR: chrome.exe not found under ms-playwright'); process.exit(1); }
+  // D 减法（v1.49.0）：启动复用 browser.cjs 唯一来源——chrome 解析、profile/headed
+  // 分支与"失败带原因"兜底都在 launch 内，本地不再各写一份（原份会静默返回 null）。
+  const handle = await launch({ chrome: CHROME, headed: HEADED, profile: PROFILE || null });
+  if (handle.error) { console.error('ERROR: ' + handle.error); process.exit(1); }
+  const context = handle.context;
   const auth = loadAuth();
 
-  let context;
-  if (PROFILE) context = await pw.chromium.launchPersistentContext(PROFILE, { headless: !HEADED, executablePath: chrome, args: ['--no-sandbox'], viewport: { width: 1440, height: 900 } });
-  else { const b = await pw.chromium.launch({ headless: !HEADED, executablePath: chrome, args: ['--no-sandbox'] }); context = await b.newContext({ viewport: { width: 1440, height: 900 } }); }
   try {
     // 【F57】restoreAuth 现在会区分「没有登录态文件」（公开页面的正常情况）与
     // 「注入失败」。后者必须留痕：未登录状态下跑出的 findings 多半是登录页噪声。
@@ -669,7 +662,9 @@ async function main() {
       JSON.stringify({ url: URL_, findings: deduped, authRestore }, null, 2), 'utf8');
     console.log(JSON.stringify({ out: path.join(OUT, 'journeys.json'), ...payload.summary }, null, 2));
   } finally {
-    await context.close().catch(() => {});
+    // D 减法：closeAll 同时关 context 与 browser——原实现只关 context，
+    // chrome 子进程残留会让 node 不退出、管线等到超时（browser.cjs 注释所述缺陷）。
+    await closeAll(handle);
   }
 }
 
