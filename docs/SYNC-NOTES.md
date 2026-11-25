@@ -1514,7 +1514,7 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **问题**：升级 figma 只由「主体走查命中六类信号」触发。走得越粗，信号越不会出现；信号不出现就不升级，不升级就不用细看——自我闭封闭。产物上「检查后确认无需升级」与「压根没检查」完全无法区分，这是 v1.50 唯一未收口的口子。
 - **机制**：`exploration_state` 新增 `_signal_probe`。抽样池为本批次的页面×状态单元（仅含 visual/usability/accessibility 属性的条目，`EXP-SIG-` 自身排除以防自证）。无 figma 回写痕迹时，按 `sha256(站点 + 页面|状态)` 排序取前 `SIGNAL_SAMPLE_SIZE=2` 个作为必测样本——同站点同清单恒定，改清单顺序不换样本，主体不能自选。
 - **覆盖判定**：`EXP-SIG-` 条目状态 PASS/FAIL、`page_url|state` 命中抽样单元、且写了 `falsify_action`（"什么动作会让信号出现"，防纯 PASS 套话）才计覆盖；`observation` 要求写明六类信号逐条结论（人复核，不做字符串匹配以免逼出套话）。
-- **压档与免测**：`gate.signal_probe.missing` 非空且 schema 1.1 时上限压待核实，message 点名抽样单元与抽样依据。免测两条：`reason=deep_upgrade_recorded`（已有 `figma-ui-parity:7.` 回写，细查义务被升级吸收）、`reason=no_page_units`（纯接口批次）。schema 1.0 输出 `enforced=false`，只披露不追溯压档。
+- **压档与免测**：`gate.signal_probe.missing` 非空且 schema 1.1 时上限压待核实，message 点名抽样单元与抽样依据。免测两条：`reason=deep_upgrade_recorded`（已有 `figma-ui-parity:7.` 回写，细查义务被升级吸收）、`reason=no_page_units`（纯接口批次）。schema 1.0 输出 `enforced=false`，只披露不追溯压档。**（前一条 v1.52.0 已废除，改逐单元覆盖；后一条保留。）**
 - **接线**：`agents` 在「测量证据与键盘遍历」后补「未命中信号也要留复测痕迹」；`exploration-runtime.md` 新增「升级信号抽样复测（EXP-SIG-）」一节；`output-templates.md` 首屏限档项由三项扩到四项（增 `signal_probe.missing`），明确禁止概括成「已确认无需升级」。
 - **测试**：`tests/test_v150_coverage_fixes.py` 增 `SignalProbeTest` 6 例（缺复测压档、补条目闭合、figma 痕迹免测、纯接口免测、1.0 只披露、抽样与顺序无关）。
 - **版本**：plugin.json 1.50.0→1.51.0；本机全量 **963 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
@@ -1530,3 +1530,14 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **摘要缺字段不再静默（中）**：`phase_gate` 收到 `ceiling="通过"` 但摘要里没有 `signal_probe`（旧版或手写摘要）时，原逻辑完全不看这一维。现输出 `exploration_summary_incomplete` 警告（只披露不压档，兼容旧批次），让「门禁通过」不再可能纯靠自报。
 - **诚实性标注**：`gate.signal_probe.coverage_note` 写明「抽样是下限保证，非全站覆盖率」；message 与 `agents`/`exploration-runtime.md` 同步——50 页抽 2 页，不得据此写「全站无信号」。
 - **版本**：plugin.json 1.51.0→1.51.1；本机全量 **964 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
+
+### v1.52.0 · EXP-SIG- 逐单元化 + 严格缺口接进闸门（目的导向复核第二轮）
+
+- **全局免测废除（高）**：v1.51.x 只要清单里存在任意一条 figma 回写条目，整批抽样复测义务即消失。实测后果：在最容易的一页做一次升级，其余 49 页全部免测——恰好复现「不升级就不用细看」的反向版本。改为**逐单元认定**：某单元的 figma 回写只免该单元，其它抽中单元仍需 EXP-SIG-。`reason` 由 `deep_upgrade_recorded/no_upgrade_trace` 收敛为 `sampled`（整体免测只剩 `no_page_units`）；新增 `deep_covered` / `probed_covered` / `deep_ids` 供核对。
+- **复测条目不得建池（高）**：新实现一度把 EXP-SIG- 条目也纳入抽样池，等于另编两个页面写两条复测就能挤掉真样本。现 EXP-SIG- 只计入所在单元的覆盖、不建池；指向未盘点单元的复测列进 `orphan_probed` 并写进 `coverage_note`。
+- **盘点过薄显形（中）**：`pool_exhausted`（页面×状态单元数 ≤ 抽样量）为真时，抽样即全量，缺口在**盘点**而非抽样——`coverage_note` 与压档 message 直接点名，避免「抽中单元全部复测过」被读成「全站无信号」。
+- **phase_gate 白名单补齐（高，本轮最实质）**：`_exploration_check_one` 原先只核对 `ready_pending`/`missing_views`/`thin_views`/`failed_items`/`traversal_recorded`/`mandatory_attributes`。v1.50 的 `measurement_gaps`、`keyboard_recorded` 与 v1.51 的 `signal_probe.missing` **从未进 gaps**——上游自报 `verdict_ceiling=通过` 时，「自相矛盾从严」那道防线看不见它们，三项 1.1 规则整块静默。现三项并入 gaps 并原样带出；键盘项只在 `input_schema_version=1.1` 且未裁 `accessibility=not_applicable` 时压档，旧批次与手写摘要（无该标记）行为不变。
+- **摘要标记与告警纠偏（中）**：gate 新增 `input_schema_version`（1.0/1.1）；v1.51.1 那条 `exploration_summary_incomplete` 判据是 `"signal_probe" not in explor`，而 `explor` 存的是 `_exploration_check_one` 的返回值、从不带该键——**每批次都会误报**。现按标记缺失 + 自报通过判定，并在 `REASON_POLICY` 注册为 disclose 档（补 remedy，与 `inventory_unregistered` 同构）。
+- **多份分域清单合并（中）**：合并结果聚合 `measurement_gaps`、`keyboard_recorded`（取最严）、`signal_probe.missing`（带 `[n]` 域标）与 `input_schema_version`（任一份为 1.1 即 1.1），防止跨域批次把严格缺口洗成通过。
+- **测试**：`SignalProbeTest` 增逐单元与诚实性 6 例（升级只免本页、深度痕迹须为前缀、ghost 页面不建池、无 falsify_action/纯 functional/BLOCKED 的复测条目不计覆盖）；新增 `ExplorationStrictGapTest` 5 例锁住闸门接线（信号/测量缺口顶不住自报通过、键盘仅 1.1 压档、未标记摘要只披露）；新增 `SignalProbeDocContractTest` 3 例锁文档口径。
+- **版本**：plugin.json 1.51.1→1.52.0；本机全量 **978 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。

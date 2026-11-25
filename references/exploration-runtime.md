@@ -93,11 +93,13 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 主体五视角走查只在命中六类信号（键盘走不通、对比度不足、焦点不可见、CLS 异常、首响 ≥2000ms、断点溢出）时才升级 figma 页面侧链路。问题在「一个都没命中」与「压根没看」在产物上完全一样：走得越粗，信号越不会出现，于是越不需要细看——不升级成了自我实现的结论，「检查后无需升级」与「没检查」无法区分。
 
-schema 1.1 给「没有升级」加一个机械前提：本批次只要有界面/易用/无障碍条目（即存在页面×状态单元），且清单里没有任何 `source=figma-ui-parity:7` 开头的 PASS/FAIL 条目（回写契约的前缀形态；任意位置出现不算，防顺手写一句话就免测），就必须对抽样单元各留一条 `EXP-SIG-` 条目。抽样由脚本定：按 `sha256(站点 + 版本 + 页面|状态)` 排序取前 2 个（不足 2 个则全取）——同一版本内恒定、主体挑不掉好测的单元，版本一变就换样本，避免每轮都复测同一页。抽样池只排除 `EXP-SIG-` 自身（否则一条复测条目能覆盖自己）；`EXP-TRAV-`（控件遍历）与 `EXP-KBD-`（键盘遍历）**仍在池内**：它们的 observation 是控件清单，不是六类信号结论，替代不了信号复测；若把它们排除，把页面条目改名成 `EXP-TRAV-` 就能让池为空，等于开一条免测捷径。抽样是**下限保证，不是全站覆盖率**——50 个页面只抽 2 个，只能说这两页细看过，其余仍可能是没看，报告不得据此写「全站无信号」。
+schema 1.1 给「没有升级」加一个机械前提：本批次只要有界面/易用/无障碍条目（即存在页面×状态单元），就必须对抽样单元各留一条 `EXP-SIG-` 条目，除非**该单元自己**有 figma 回写。抽样由脚本定：按 `sha256(站点 + 版本 + 页面|状态)` 排序取前 2 个（不足 2 个则全取）——同一版本内恒定、主体挑不掉好测的单元，版本一变就换样本，避免每轮都复测同一页。抽样池只排除 `EXP-SIG-` 条目（它们计入所在单元的覆盖，但**不建池**——否则另编两个页面写两条复测就能挤掉真样本；指向池外单元的单列 `orphan_probed` 披露）；`EXP-TRAV-`（控件遍历）与 `EXP-KBD-`（键盘遍历）**仍在池内**：它们记的是控件清单，不是六类信号结论，替代不了信号复测；若把它们排除，把页面条目改名成 `EXP-TRAV-` 就能让池为空，等于开一条免测捷径。
 
-复测条目的要求：状态 PASS/FAIL、带证据、**必须写 `falsify_action`**（说明什么动作会让信号出现），`observation` 写明六类信号逐条结论（键盘/对比度/焦点可见/CLS/首响/断点）。抽样单元未被覆盖时 `gate.signal_probe.missing` 列出缺口，上限压待核实；`required=false` 时 `reason` 说明免测依据。
+复测条目的要求：状态 PASS/FAIL、带证据、**必须写 `falsify_action`**（说明什么动作会让信号出现）、属性含 visual/usability/accessibility 之一（纯 functional 条目不算看过界面），`observation` 写明六类信号逐条结论（键盘/对比度/焦点可见/CLS/首响/断点）。抽样单元未被覆盖时 `gate.signal_probe.missing` 列出缺口，上限压待核实；`reason=no_page_units`（`required=false`）是唯一整体免测，只发生在清单没有界面/易用/无障碍条目时。`gate.signal_probe` 另出 `sampled/covered/deep_covered/probed_covered/pool_exhausted/orphan_probed/coverage_note`。
 
-两条免测出口都不要求造假：**已升级**——存在 figma 7.xx 回写条目，细查义务已被升级吸收（`reason=deep_upgrade_recorded`）；**纯接口批次**——清单无界面/易用/无障碍条目（`reason=no_page_units`）。schema 1.0 清单只披露（`enforced=false`），不追溯压档。
+覆盖判定是**逐单元**的，不是全批次开关：某页有以 `source=figma-ui-parity:7` 开头的 PASS/FAIL 回写条目（回写契约形态；字样出现在句中任意位置不算），该页免复测；其它页照常抽。这样「在最容易的一页升级一次」洗不掉整批义务——之前全局免测正是这条门禁最大的绕过口。抽样是**下限保证而非全站覆盖率**：50 页抽 2 页只能说这 2 页细看过；若 `pool_exhausted` 为真（盘点单元 ≤ 抽样量），缺口在**盘点**而不是抽样，`coverage_note` 会点名，报告不得写成「全站无信号」。
+
+schema 1.0 清单只披露（`enforced=false`），不追溯压档。下游 `phase_gate._exploration_check_one` 把 `measurement_gaps`、1.1 的 `keyboard_recorded=false`（`accessibility=not_applicable` 除外）与 `signal_probe.missing` 三项并入 gaps——**自报 `verdict_ceiling=通过` 压不住这些缺口**，按缺口从严回到待核实；摘要既没有 `input_schema_version` 标记又自报通过时，另出 `exploration_summary_incomplete` 警告（只披露不压档）：三项 1.1 规则是否被应用过无从核对，这种情况下的「门禁通过」属于自报，报告首屏须如实标注。
 
 摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/executed_views/skipped_views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
 

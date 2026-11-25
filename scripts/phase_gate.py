@@ -618,6 +618,16 @@ def _exploration_check(gate):
         return {"state": "provided", "ceiling": ceiling,
                 "traversal_recorded": all(item["traversal_recorded"] for item in checked),
                 "mandatory_attributes": merged_attrs, "gaps": gaps,
+                # 合并后的严格字段：任一份是 1.1 即按 1.1 看待，缺口逐项合并
+                "input_schema_version": "1.1" if any(item.get("input_schema_version") == "1.1"
+                                                     for item in checked) else "1.0",
+                "measurement_gaps": [x for item in checked for x in item.get("measurement_gaps") or []],
+                "keyboard_recorded": all(bool(item.get("keyboard_recorded")) for item in checked),
+                "signal_probe": {"missing": [f"[{i + 1}] {u}" for i, item in enumerate(checked)
+                                             for u in (item.get("signal_probe") or {}).get("missing") or []],
+                                 "page_units": sum((item.get("signal_probe") or {}).get("page_units", 0)
+                                                   for item in checked),
+                                 "merged": True},
                 "message": "多份分域探索清单合并判定：" + "；".join(
                     f"[{i + 1}{':' + labels[i] if labels[i] else ''}]{item['ceiling']}"
                     for i, item in enumerate(checked)),
@@ -679,6 +689,17 @@ def _exploration_check_one(gate):
                   if v not in ("covered", "not_applicable")]
     if unresolved:
         gaps.append("mandatory_attributes 未闭合=" + ",".join(unresolved))
+    # schema 1.1 的三项结构化缺口（v1.50/v1.51 新增）必须进 gaps：否则上游自报
+    # ceiling=通过 时「自相矛盾从严」看不到它们，测量证据/键盘遍历/信号复测三关
+    # 形同虚设。用字段存在性判定，旧版与手写摘要（无这些键）行为不变。
+    if gate.get("measurement_gaps"):
+        gaps.append("缺结构化测量产物=" + ",".join(str(x) for x in gate["measurement_gaps"][:6]))
+    if gate.get("input_schema_version") == "1.1" and gate.get("keyboard_recorded") is False \
+            and (gate.get("mandatory_attributes") or {}).get("accessibility") != "not_applicable":
+        gaps.append("未记录 EXP-KBD- 键盘遍历条目")
+    probe = gate.get("signal_probe") or {}
+    if probe.get("missing"):
+        gaps.append("未做 EXP-SIG- 抽样复测=" + ",".join(str(x) for x in probe["missing"][:4]))
     if ceiling != "通过" and not gaps:
         # 兜底：上游给出了待核实/不通过却没透出可核对缺口时，把原文带出来，不允许空白原因
         gaps.append(str(gate.get("message") or "gate 判定非通过（原因见 gate.message）"))
@@ -689,6 +710,11 @@ def _exploration_check_one(gate):
     return {"state": "provided", "ceiling": ceiling,
             "traversal_recorded": bool(gate.get("traversal_recorded")),
             "mandatory_attributes": gate.get("mandatory_attributes") or {},
+            # 原样带出三项严格字段，供 check_verdict 的告警与报告首屏核对
+            "input_schema_version": gate.get("input_schema_version"),
+            "measurement_gaps": list(gate.get("measurement_gaps") or []),
+            "keyboard_recorded": gate.get("keyboard_recorded"),
+            "signal_probe": gate.get("signal_probe") or {},
             "gaps": gaps,
             "message": gate.get("message"),
             "reasons": [] if ceiling == "通过" else
@@ -1449,6 +1475,11 @@ REASON_POLICY = {
                              "remedy": None},
     "inventory_unregistered": {"mode": "disclose", "needs_human": False,
                                "remedy": "规划阶段补交 submit --inventory <inventory.json>（不传只披露，不压档）"},
+    "exploration_summary_incomplete": {"mode": "disclose", "needs_human": False,
+                                       "label": "探索摘要严格规则未核对",
+                                       "remedy": "用 exploration_state.py summarize 重新生成 gate 摘要"
+                                                 "（新版摘要自带 input_schema_version，1.1 会核对测量证据、"
+                                                 "键盘遍历与 EXP-SIG- 抽样复测）"},
     "inventory_unconsumed": {"mode": "downgrade", "needs_human": False,
                              "remedy": "为盘点中 unconsumed_input 的材料登记 consumed_by，或 declined+理由后重交 --inventory"},
     "inventory_declined_without_reason": {"mode": "downgrade", "needs_human": False,
@@ -1530,12 +1561,14 @@ def check_verdict(state, assumptions=None, regression=None):
             detail = [message]
         reasons.extend(_hit_each(hits, "exploration_not_met",
                                  detail or ["探索清单不达标，结论上限压待核实"]))
-    elif "signal_probe" not in explor:
-        # 摘要只写 ceiling 不写 signal_probe（旧版摘要或手写摘要）时，升级信号复测
-        # 从未被核对——不压档（兼容旧批次），但必须可见，否则"门禁通过"是自报的。
+    elif explor.get("input_schema_version") not in ("1.0", "1.1") \
+            and explor.get("ceiling") == "通过":
+        # 摘要自报「通过」却没有 schema 标记：无从判断测量证据/键盘遍历/信号复测
+        # 三项 1.1 规则是否被应用过（旧版摘要或手写摘要）。不压档（兼容旧批次），
+        # 但必须可见——否则"门禁通过"可以是纯自报的。
         warnings.append({"code": "exploration_summary_incomplete",
-                         "message": "探索 gate 摘要缺 signal_probe 字段：升级信号抽样复测未经核对"
-                                    "（旧版摘要或手写摘要），仅披露"})
+                         "message": "探索 gate 摘要无 input_schema_version 标记且自报通过："
+                                    "测量证据/键盘遍历/升级信号复测三项 1.1 规则是否应用无从核对，仅披露"})
     # 采集合规（v1.48.4）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
     # 不拒绝历史批次（旧状态文件没有该字段），但把缺口写进原因与上限。
     collection = (state["phases"].get("execute") or {}).get("collection")

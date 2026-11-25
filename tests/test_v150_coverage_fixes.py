@@ -291,12 +291,17 @@ class SignalProbeTest(MeasurementEvidenceTest):
         self.assertEqual(gate["signal_probe"]["missing"], [])
         self.assertEqual(gate["signal_probe"]["covered"], sampled)
 
-    def test_figma_trace_waives_probe(self):
+    def test_deep_entry_covers_only_its_unit(self):
+        # 逐单元认定：抽中单元若恰是被升级那页则免复测，未被升级的单元仍需 EXP-SIG-
         data = self._data("1.1")
         data["items"][0]["observation"] = "source=figma-ui-parity:7.41 对比度不足"
         probe = self.exp.summarize(data)["gate"]["signal_probe"]
-        self.assertFalse(probe["required"])
-        self.assertEqual(probe["reason"], "deep_upgrade_recorded")
+        self.assertTrue(probe["required"])
+        self.assertEqual(probe["reason"], "sampled")
+        target = "https://example.invalid/app/v1|打开"
+        if target in probe["sampled"]:
+            self.assertIn(target, probe["deep_covered"])
+        self.assertEqual(set(probe["covered"]) | set(probe["missing"]), set(probe["sampled"]))
 
     def test_api_only_batch_waives_probe(self):
         base = "https://example.invalid/app"
@@ -327,9 +332,25 @@ class SignalProbeTest(MeasurementEvidenceTest):
         # 任意位置出现 figma 字样不算升级痕迹，只有回写契约的前缀形态才算
         data = self._data("1.1")
         data["items"][0]["observation"] = "参考 source=figma-ui-parity:7.41 的历史结论"
-        self.assertTrue(self.exp.summarize(data)["gate"]["signal_probe"]["required"])
+        self.assertEqual(self.exp.summarize(data)["gate"]["signal_probe"]["deep_ids"], [])
         data["items"][0]["observation"] = "source=figma-ui-parity:7.41 对比度不足"
-        self.assertFalse(self.exp.summarize(data)["gate"]["signal_probe"]["required"])
+        self.assertEqual(self.exp.summarize(data)["gate"]["signal_probe"]["deep_ids"],
+                         ["EXP-V-1"])
+
+    def test_probe_entries_on_fresh_pages_cannot_displace_sample(self):
+        # 另编两个页面写两条 EXP-SIG- 不得挤掉真样本：复测条目不建池
+        data = self._data("1.1")
+        before = self.exp.summarize(data)["gate"]["signal_probe"]["sampled"]
+        for index, page in enumerate(("ghost1", "ghost2"), 1):
+            entry = self._item(f"EXP-SIG-{index}", ["visual"], self.measure,
+                               f"https://example.invalid/{page}", "看渲染")
+            entry["falsify_action"] = "切 320px 视口"
+            data["items"].append(entry)
+        probe = self.exp.summarize(data)["gate"]["signal_probe"]
+        self.assertEqual(probe["sampled"], before)
+        self.assertEqual(sorted(probe["orphan_probed"]),
+                         ["https://example.invalid/ghost1|打开",
+                          "https://example.invalid/ghost2|打开"])
 
     def test_1_0_only_discloses(self):
         gate = self.exp.summarize(self._data("1.0"))["gate"]
@@ -343,6 +364,63 @@ class SignalProbeTest(MeasurementEvidenceTest):
         data["items"] = list(reversed(data["items"]))
         second = self.exp.summarize(data)["gate"]["signal_probe"]["sampled"]
         self.assertEqual(first, second)
+
+    def _batch(self, entries, site="https://example.invalid/app"):
+        return self.exp.summarize({
+            "schema_version": "1.1",
+            "context": {"target_url": site, "application_version": "b1",
+                        "environment": "test"},
+            "items": entries})["gate"]["signal_probe"]
+
+    def _paged(self, ident, page, state, attrs=("visual",), status="PASS",
+               observation="实测", falsify=None):
+        item = self._item(ident, list(attrs), self.measure, page, "看渲染", status)
+        item["state"] = state
+        item["observation"] = observation
+        if status == "BLOCKED":
+            item["blocked_reason"] = "环境不可达"
+        if falsify:
+            item["falsify_action"] = falsify
+        return item
+
+    def test_upgrade_waives_only_its_own_unit(self):
+        # 单条 figma 回写只免它自己那一页：全局免测会让「在最容易的页升级一次」
+        # 洗掉整批义务，正是本条门禁要堵的口子
+        probe = self._batch([
+            self._paged("EXP-D-1", "https://example.invalid/p1", "打开",
+                        observation="source=figma-ui-parity:7.41 对比度不足"),
+            self._paged("EXP-D-2", "https://example.invalid/p2", "打开")])
+        self.assertTrue(probe["required"])
+        self.assertEqual(probe["deep_covered"], ["https://example.invalid/p1|打开"])
+        self.assertEqual(probe["missing"], ["https://example.invalid/p2|打开"])
+
+    def test_deep_covered_unit_needs_no_probe_entry(self):
+        probe = self._batch([self._paged(
+            "EXP-D-1", "https://example.invalid/p1", "打开",
+            observation="source=figma-ui-parity:7.43 焦点逃逸")])
+        self.assertEqual(probe["missing"], [])
+        self.assertTrue(probe["pool_exhausted"])
+        self.assertIn("抽样即全量", probe["coverage_note"])
+
+    def test_probe_without_falsify_action_does_not_cover(self):
+        probe = self._batch([
+            self._paged("EXP-D-1", "https://example.invalid/p1", "打开"),
+            self._paged("EXP-SIG-1", "https://example.invalid/p1", "打开")])
+        self.assertIn("https://example.invalid/p1|打开", probe["missing"])
+
+    def test_functional_only_probe_does_not_cover(self):
+        probe = self._batch([
+            self._paged("EXP-D-1", "https://example.invalid/p1", "打开"),
+            self._paged("EXP-SIG-1", "https://example.invalid/p1", "打开",
+                        attrs=("functional",), falsify="切视口看溢出")])
+        self.assertIn("https://example.invalid/p1|打开", probe["missing"])
+
+    def test_blocked_probe_does_not_cover(self):
+        probe = self._batch([
+            self._paged("EXP-D-1", "https://example.invalid/p1", "打开"),
+            self._paged("EXP-SIG-1", "https://example.invalid/p1", "打开",
+                        status="BLOCKED", falsify="切视口看溢出")])
+        self.assertIn("https://example.invalid/p1|打开", probe["missing"])
 
 
 class HighRiskAbsentDisclosureTest(unittest.TestCase):
@@ -372,6 +450,86 @@ class HighRiskAbsentDisclosureTest(unittest.TestCase):
         result = self._run({"SURF-01": "high", "SURF-02": "medium"})
         codes = [notice["code"] for notice in result["notices"]]
         self.assertNotIn("high_risk_surface_absent", codes)
+
+
+class ExplorationStrictGapTest(PhaseGateTestBase):
+    """v1.52 审核补强：自报 ceiling=通过 洗不掉 schema 1.1 的结构化缺口。
+
+    此前 _exploration_check_one 的缺口白名单只认 ready_pending / missing_views /
+    traversal_recorded / mandatory_attributes，测量证据、键盘遍历、信号复测三项
+    全靠 ceiling 自报——上游写「通过」就整块静默，"自相矛盾从严"那道防线看不到它们。
+    """
+
+    SIX = ("security", "compatibility", "content", "visual", "usability", "accessibility")
+
+    def _gate(self, **over):
+        gate = {"verdict_ceiling": "通过", "input_schema_version": "1.1",
+                "traversal_recorded": True, "keyboard_recorded": True,
+                "mandatory_attributes": {a: "covered" for a in self.SIX},
+                "measurement_gaps": [], "signal_probe": {"missing": []}}
+        gate.update(over)
+        return gate
+
+    def test_signal_missing_presses_despite_pass_claim(self):
+        checked = self.pg._exploration_check_one(
+            self._gate(signal_probe={"missing": ["https://e.invalid/p2|打开"]}))
+        self.assertEqual(checked["ceiling"], "待核实")
+        self.assertTrue(any("EXP-SIG-" in gap for gap in checked["gaps"]))
+
+    def test_measurement_gaps_press_despite_pass_claim(self):
+        checked = self.pg._exploration_check_one(
+            self._gate(measurement_gaps=["EXP-V-1", "EXP-V-2"]))
+        self.assertEqual(checked["ceiling"], "待核实")
+        self.assertTrue(any("结构化测量产物" in gap for gap in checked["gaps"]))
+
+    def test_keyboard_missing_presses_for_1_1_only(self):
+        pressed = self.pg._exploration_check_one(self._gate(keyboard_recorded=False))
+        self.assertEqual(pressed["ceiling"], "待核实")
+        self.assertTrue(any("EXP-KBD-" in gap for gap in pressed["gaps"]))
+        legacy = self.pg._exploration_check_one(
+            self._gate(keyboard_recorded=False, input_schema_version="1.0"))
+        self.assertEqual(legacy["ceiling"], "通过")
+        self.assertEqual([g for g in legacy["gaps"] if "EXP-KBD-" in g], [])
+
+    def test_unmarked_summary_discloses_but_does_not_press(self):
+        self.finish_phase("plan")
+        gate = self._gate()
+        gate.pop("input_schema_version")
+        self.state["phases"]["execute"]["exploration"] = self.pg._exploration_check_one(gate)
+        check = self.pg.check_verdict(self.state)
+        self.assertTrue(any(w["code"] == "exploration_summary_incomplete"
+                            for w in check["warnings"]))
+        self.assertNotIn("exploration_summary_incomplete",
+                         [item["code"] for item in check["limitations"]])
+
+    def test_marked_summary_carries_fields_without_warning(self):
+        checked = self.pg._exploration_check_one(self._gate())
+        self.assertEqual(checked["ceiling"], "通过")
+        self.assertEqual(checked["input_schema_version"], "1.1")
+        self.assertIn("signal_probe", checked)
+
+
+class SignalProbeDocContractTest(unittest.TestCase):
+    """文档必须与 v1.52 的逐单元语义同口径（旧的全局免测口径不得回潮）。"""
+
+    def test_runtime_doc_declares_per_unit_fields(self):
+        text = EXPLORATION_RUNTIME.read_text(encoding="utf-8")
+        for token in ("deep_covered", "probed_covered", "pool_exhausted", "orphan_probed"):
+            self.assertIn(token, text, f"exploration-runtime.md 未说明 gate 字段 {token}")
+        # 全局免测已废除：文档若还写这个取值，执行者会以为升级一次就整批免测
+        self.assertNotIn("deep_upgrade_recorded", text)
+
+    def test_agents_declares_wiring_and_limits(self):
+        text = AGENT_MD.read_text(encoding="utf-8")
+        self.assertIn("signal_probe.missing", text)
+        self.assertIn("一条升级只免它自己那一页", text)
+        self.assertNotIn("deep_upgrade_recorded", text)
+
+    def test_gate_emits_documented_fields(self):
+        exp = load_module(ROOT / "scripts" / "exploration_state.py", "exp_v152_fields")
+        keys = set(exp._signal_probe([], "https://x.invalid", True))
+        self.assertTrue({"deep_ids", "sampled", "covered", "missing",
+                         "enforced", "reason"} <= keys)
 
 
 if __name__ == "__main__":

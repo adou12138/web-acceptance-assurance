@@ -177,7 +177,6 @@ SIGNAL_SAMPLE_SIZE = 2
 PAGE_ATTRS = {"visual", "usability", "accessibility"}
 
 
-
 def _has_measurement_keys(node):
     return isinstance(node, dict) and any(key in node for key in MEASUREMENT_KEYS)
 
@@ -214,47 +213,63 @@ def _acknowledged(row):
 
 
 def _signal_probe(rows, salt, strict):
-    """升级信号的抽样复测登记：返回必测单元、已覆盖、缺口与免测理由。
+    """升级信号的抽样复测登记：返回必测单元、已覆盖、缺口与诚实性标注。
 
-    抽样池是本批次的页面×状态单元（含界面/易用/无障碍属性的条目），只排除
-    EXP-SIG- 自身——否则一条复测条目就能覆盖自己。控件遍历与键盘遍历条目**不排除**
-    出池：它们的 observation 是控件清单，不是六类信号结论，不能替代信号复测；且
-    "把页面条目都改名成 EXP-TRAV-" 会让池为空，等于给出一条免测捷径。
+    抽样池是本批次的页面×状态单元（含界面/易用/无障碍属性的条目）。`EXP-SIG-` 条目
+    **不建池**，只计入它所在单元的复测痕迹——否则另编两个页面写两条 EXP-SIG- 就能
+    挤掉真样本；指向池外单元的复测单列为 orphan_probed。控件遍历与键盘遍历条目**留在池内**
+    ——它们的 observation 是控件清单，不是六类信号结论，替代不了复测；若排除，把页面条目
+    改名成 EXP-TRAV- 就能让池为空，等于开一条免测捷径。
     抽样按 sha256(站点 + 版本 + 单元) 排序取前 SIGNAL_SAMPLE_SIZE 个：同版本内恒定、
     主体改不掉；版本一变就换样本，避免每批次都复测同一页。
-    免测只认两种证据：清单里有以 `source=figma-ui-parity:7` 开头的 PASS/FAIL 条目
-    （回写契约的前缀形态，任意位置出现不算，防顺手写一句话就免测），或池为空。
+    覆盖按**逐单元**认定：该单元有 figma 7.xx 回写条目（observation 以
+    `source=figma-ui-parity:7` 开头）或带 falsify_action 的 EXP-SIG- 条目才算已覆盖。
+    一条回写只免它自己那一页——全局免测会让"在最容易的页做一次升级"洗掉整批义务。
     """
-    page_units = sorted({f'{row["page_url"]}|{row["state"]}' for row in rows
-                         if set(row["attributes"]) & PAGE_ATTRS
-                         and not str(row["id"]).startswith(SIGNAL_PREFIX)})
-    deep = [row["id"] for row in rows
-            if row["status"] in {"PASS", "FAIL"}
-            and not str(row["id"]).startswith(SIGNAL_PREFIX)
-            and str(row["observation"]).strip().startswith(SIGNAL_DEPTH_MARK)]
+    pool, probed, deep_ids = {}, {}, []
+    for row in rows:
+        if not set(row["attributes"]) & PAGE_ATTRS:
+            continue
+        unit, ident = f'{row["page_url"]}|{row["state"]}', str(row["id"])
+        if ident.startswith(SIGNAL_PREFIX):
+            # 复测条目**不建池**：否则另编两个页面写两条 EXP-SIG- 就能挤掉真样本。
+            # 指向池外单元的复测单列为 orphan，让"对着没盘点过的页面交差"可见。
+            if row["status"] in {"PASS", "FAIL"} and str(row.get("falsify_action") or "").strip():
+                probed.setdefault(unit, []).append(ident)
+            continue
+        slot = pool.setdefault(unit, [])
+        if row["status"] in {"PASS", "FAIL"} \
+                and str(row["observation"]).strip().startswith(SIGNAL_DEPTH_MARK):
+            # 回写契约形态的 figma 结论，按**它自己的单元**计入，不作全局免测
+            slot.append(ident)
+            deep_ids.append(ident)
+    page_units = sorted(pool)
     base = {"enforced": strict, "page_units": len(page_units),
-            "sampled": [], "covered": [], "missing": []}
+            "sampled": [], "covered": [], "missing": [], "deep_ids": sorted(deep_ids)}
     if not page_units:
         return dict(base, required=False, reason="no_page_units",
+                    orphan_probed=sorted(probed),
                     detail="清单无界面/易用/无障碍条目，按纯接口批次处理，不要求信号复测")
-    if deep:
-        # 已有 figma 回写 = 已经细查过，复测义务被升级吸收
-        return dict(base, required=False, reason="deep_upgrade_recorded",
-                    deep_ids=deep,
-                    detail="已存在 figma 7.xx 回写条目，视为已完成深度检查，免抽样复测")
     picked = sorted(page_units,
                     key=lambda unit: hashlib.sha256(f"{salt}\x00{unit}".encode("utf-8")).hexdigest())[:SIGNAL_SAMPLE_SIZE]
-    covered = [unit for unit in picked
-               if any(f'{row["page_url"]}|{row["state"]}' == unit
-                      and row["status"] in {"PASS", "FAIL"}
-                      and set(row["attributes"]) & PAGE_ATTRS
-                      and str(row.get("falsify_action") or "").strip()
-                      for row in rows if str(row["id"]).startswith(SIGNAL_PREFIX))]
+    deep_covered = [unit for unit in picked if pool[unit]]
+    probed_covered = [unit for unit in picked if not pool[unit] and unit in probed]
+    covered = [unit for unit in picked if unit in deep_covered or unit in probed_covered]
     missing = [unit for unit in picked if unit not in covered]
-    return dict(base, required=True, reason="no_upgrade_trace", sampled=picked,
+    orphan = sorted(unit for unit in probed if unit not in pool)
+    exhausted = len(page_units) <= SIGNAL_SAMPLE_SIZE
+    note = "抽样为下限保证，非全站覆盖率；报告不得据此写「全站无信号」"
+    if exhausted:
+        note += (f"；本批次只登记了 {len(page_units)} 个页面×状态单元，抽样即全量——"
+                 "这说明盘点只有这些单元，若被测站点页面更多，缺口在盘点而非抽样")
+    if orphan:
+        note += "；存在指向未盘点单元的复测条目：" + "、".join(orphan)
+    return dict(base, required=True, reason="sampled", sampled=picked,
                 covered=covered, missing=missing, sample_size=len(picked),
-                coverage_note="抽样为下限保证，非全站覆盖率；报告不得据此写「全站无信号」",
-                detail="未命中升级信号且无 figma 回写痕迹：须对抽样单元各留一条 EXP-SIG- 复测条目")
+                deep_covered=deep_covered, probed_covered=probed_covered,
+                pool_exhausted=exhausted, orphan_probed=orphan, coverage_note=note,
+                detail="未命中升级信号的批次须对抽样单元留 EXP-SIG- 复测条目，"
+                       "或由该单元的 figma 7.xx 回写覆盖（逐单元计，一条回写只免它自己那页）")
 
 
 def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None,
@@ -385,7 +400,9 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
                    + f"（从 {probe['page_units']} 个页面×状态单元按站点+版本哈希抽 "
                    f"{probe['sample_size']} 个，主体不可自选；抽样是下限保证，不是全站覆盖率）；"
                    "须对抽中单元各留一条 EXP-SIG- 复测条目（PASS/FAIL + falsify_action，"
-                   "observation 写明六类信号逐条结论），或留下 figma 7.xx 回写痕迹")
+                   "observation 写明六类信号逐条结论），或让该单元出现 figma 7.xx 回写条目"
+                   + ("；注意本批次只登记了 " + str(probe["page_units"])
+                      + " 个单元，抽样即全量——先核对盘点是否漏页" if probe["pool_exhausted"] else ""))
     elif failed:
         ceiling = "待核实"
         message = f"存在{len(failed)}项FAIL条目：不得写“通过”，须按缺陷必选性与闭环状态判为“不通过”或“待核实”"
@@ -397,6 +414,9 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         message = "无未消费候选、必查视角均有记录且含控件遍历条目；仍须按缺陷、断言和证据判定，不代表已通过"
     ready_set = set(ready)
     report_gate = {
+        # 下游（phase_gate）据此区分「1.1 严格批次的缺口」与「旧版/手写摘要」——
+        # 没有这个标记，收尾只带 ceiling 时无法判断哪些 1.1 字段本应被核对。
+        "input_schema_version": "1.1" if strict else "1.0",
         "ready_pending": len(ready),
         "ready_pending_ids": ready,
         "ready_high_risk": sum(1 for row in rows if row["id"] in ready_set and row["risk"] == "high"),
