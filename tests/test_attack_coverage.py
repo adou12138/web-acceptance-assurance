@@ -161,6 +161,17 @@ class CliContract(unittest.TestCase):
         self.assertIn("UTF-8", "UTF-8")  # CSV 编码由 BOM 保证，见下方读取校验
         self.assertTrue(out_csv.read_bytes().startswith(b"\xef\xbb\xbf"))
 
+    def test_csv_exports_combo_and_surface_path_sections(self):
+        """C2（5.8 披露第 8/9 项）：combo 计数与逐面攻击路径随 CSV 导出（零 JSON 契约改动）。"""
+        ledger = self.dir / "l2.jsonl"
+        rows = [json.dumps(rec(0, "combo")), json.dumps(rec(1, "exception"))]
+        ledger.write_text("\n".join(rows), encoding="utf-8")
+        out_csv = self.dir / "out2.csv"
+        ac.main(["--ledger", str(ledger), "--emit-csv", str(out_csv)])
+        text = out_csv.read_text(encoding="utf-8-sig").replace(" ", "")
+        self.assertIn("path_type,combo,1", text)
+        self.assertIn("surface_path,SURF-01,combo、exception", text)
+
 
 class AttackDimensionBreadth(unittest.TestCase):
     """界面/文案/易用性/无障碍/一致性/回归是合法攻击维度，不能被挤出记录。

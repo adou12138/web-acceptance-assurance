@@ -1565,6 +1565,13 @@ def _emit_csv(result, path):
         rows.append({"section": "gap", "metric": gap["code"], "value": gap["message"]})
     for notice in result.get("notices") or []:
         rows.append({"section": "notice", "metric": notice["code"], "value": notice["message"]})
+    # C2（5.8 披露第 9 项）：高风险面攻击路径分布——逐面列已执行 path_type，
+    # 报告 5.8 取数不必回读 JSON。result.get 兜底旧产物：缺该键时整段跳过，不崩。
+    for sid, info in sorted((result.get("surface_coverage") or {}).items()):
+        paths = (info or {}).get("paths") or []
+        if paths:
+            rows.append({"section": "surface_path", "metric": sid,
+                         "value": "、".join(paths)})
     with Path(path).open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=["section", "metric", "value"])
         writer.writeheader()
