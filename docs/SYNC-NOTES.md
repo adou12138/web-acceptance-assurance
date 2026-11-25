@@ -1487,3 +1487,10 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 | §0.4 对照表 | output-templates.md §0.4 增「对抗场景」行（adversarial-scenarios.json → adversarial_data/adversarial_gate --scenarios） | 同上 |
 | 回链示例 | examples/cases-example.json SCN-01.goal 补 SCN-ADV-01- 前缀回链示例；yaml 镜像同步重新生成（to-yaml） | test_case_data 33 例绿 |
 | **偏离登记** | 计划 C3 原文「与一个夹具各补一处回链示例」中的「一个夹具」未执行：检测夹具含答案（hidden_answers）且 E1 未实跑，改题面破坏盲测纯净性并改动冻结哈希；回链示例由 yaml 镜像承担 | 夹具哈希未变（git diff 为空） |
+
+### C1/C2 · 探针补充与披露细化
+
+| 条目 | 落点 | 验证 |
+|---|---|---|
+| C1 | probe-playbook B 节表尾补 3 行（payload 级状态机规避/双写覆盖/旧快照回读），登记 method 时映射既有稳定 ID，METHOD_IDS/tool_version 不变（git diff 零改动） | 引用守卫+全量绿 |
+| C2 | 5.8 披露页七项→九项：combo 路径数（零脚本改动）+ 高风险面攻击路径分布（attack_coverage.py _emit_csv 追加 section=surface_path，result.get 兜底旧产物）；JSON 契约与 TOOL_VERSION 未变 | test_csv_exports_combo_and_surface_path_sections（撤段变红） |
