@@ -1530,6 +1530,12 @@ def check_verdict(state, assumptions=None, regression=None):
             detail = [message]
         reasons.extend(_hit_each(hits, "exploration_not_met",
                                  detail or ["探索清单不达标，结论上限压待核实"]))
+    elif "signal_probe" not in explor:
+        # 摘要只写 ceiling 不写 signal_probe（旧版摘要或手写摘要）时，升级信号复测
+        # 从未被核对——不压档（兼容旧批次），但必须可见，否则"门禁通过"是自报的。
+        warnings.append({"code": "exploration_summary_incomplete",
+                         "message": "探索 gate 摘要缺 signal_probe 字段：升级信号抽样复测未经核对"
+                                    "（旧版摘要或手写摘要），仅披露"})
     # 采集合规（v1.48.4）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
     # 不拒绝历史批次（旧状态文件没有该字段），但把缺口写进原因与上限。
     collection = (state["phases"].get("execute") or {}).get("collection")

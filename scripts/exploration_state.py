@@ -31,7 +31,8 @@ CSV 是派生检查视图，每项可出现在多个视角，整体 planned/coun
 security/data/recovery/compatibility；性能=performance。数组/证据用 JSON 单元格保存。
 CSV 中疑似公式的文本单元格添加前导单引号，防止表格应用执行；JSON 摘要及源
 内容保留原文。输出必须为 .csv，父目录已存在，拒绝覆盖。摘要含 gate：仍有可执行
-未执行项、必查视角无记录或缺控件遍历条目（EXP-TRAV-）时 verdict_ceiling 为待核实，限制报告结论上限；门禁不
+未执行项、必查视角无记录、缺控件遍历条目（EXP-TRAV-）或缺 EXP-SIG- 抽样复测
+（schema 1.1，见 _signal_probe）时 verdict_ceiling 为待核实，限制报告结论上限；门禁不
 替代缺陷与证据判定。摘要只表达已提供的清单进度，不判定业务或总体门禁；正式结论
 仍需断言与证据内容复核。仅有 ID/记录绝不等于业务通过。
 """
@@ -171,12 +172,10 @@ KEYBOARD_PREFIX = "EXP-KBD-"
 # （已升级=已细查），要么对按站点哈希抽出的页面×状态单元各登记一条 EXP-SIG- 复测
 # 条目。抽样由脚本定，主体不能挑好测的单元。
 SIGNAL_PREFIX = "EXP-SIG-"
-SIGNAL_DEPTH_MARK = "figma-ui-parity:7."
+SIGNAL_DEPTH_MARK = "source=figma-ui-parity:7"
 SIGNAL_SAMPLE_SIZE = 2
 PAGE_ATTRS = {"visual", "usability", "accessibility"}
-# 抽样池排除已属"细看"痕迹的条目：控件遍历与键盘遍历本身逐项记录过，
-# EXP-SIG- 又是复测产物——把它们留在池里会让同一单元被重复要求两遍。
-PROBE_EXEMPT_PREFIXES = (SIGNAL_PREFIX, KEYBOARD_PREFIX, "EXP-TRAV-")
+
 
 
 def _has_measurement_keys(node):
@@ -217,17 +216,22 @@ def _acknowledged(row):
 def _signal_probe(rows, salt, strict):
     """升级信号的抽样复测登记：返回必测单元、已覆盖、缺口与免测理由。
 
-    抽样池是本批次的页面×状态单元（只取含界面/易用/无障碍属性的条目，EXP-SIG-
-    自身排除，避免一条复测条目自证通过）。抽样按 sha256(站点 + 单元) 排序取前
-    SIGNAL_SAMPLE_SIZE 个：同一站点同一份清单永远抽到同一批，主体改不掉。
-    命中阈值刻意低——只要求"抽中单元有 PASS/FAIL 且写了 falsify_action"，
-    不比对观察文案，避免逼出套话；六类信号逐条结论写在 observation 里由人复核。
+    抽样池是本批次的页面×状态单元（含界面/易用/无障碍属性的条目），只排除
+    EXP-SIG- 自身——否则一条复测条目就能覆盖自己。控件遍历与键盘遍历条目**不排除**
+    出池：它们的 observation 是控件清单，不是六类信号结论，不能替代信号复测；且
+    "把页面条目都改名成 EXP-TRAV-" 会让池为空，等于给出一条免测捷径。
+    抽样按 sha256(站点 + 版本 + 单元) 排序取前 SIGNAL_SAMPLE_SIZE 个：同版本内恒定、
+    主体改不掉；版本一变就换样本，避免每批次都复测同一页。
+    免测只认两种证据：清单里有以 `source=figma-ui-parity:7` 开头的 PASS/FAIL 条目
+    （回写契约的前缀形态，任意位置出现不算，防顺手写一句话就免测），或池为空。
     """
     page_units = sorted({f'{row["page_url"]}|{row["state"]}' for row in rows
                          if set(row["attributes"]) & PAGE_ATTRS
-                         and not str(row["id"]).startswith(PROBE_EXEMPT_PREFIXES)})
+                         and not str(row["id"]).startswith(SIGNAL_PREFIX)})
     deep = [row["id"] for row in rows
-            if row["status"] in {"PASS", "FAIL"} and SIGNAL_DEPTH_MARK in row["observation"]]
+            if row["status"] in {"PASS", "FAIL"}
+            and not str(row["id"]).startswith(SIGNAL_PREFIX)
+            and str(row["observation"]).strip().startswith(SIGNAL_DEPTH_MARK)]
     base = {"enforced": strict, "page_units": len(page_units),
             "sampled": [], "covered": [], "missing": []}
     if not page_units:
@@ -243,16 +247,18 @@ def _signal_probe(rows, salt, strict):
     covered = [unit for unit in picked
                if any(f'{row["page_url"]}|{row["state"]}' == unit
                       and row["status"] in {"PASS", "FAIL"}
+                      and set(row["attributes"]) & PAGE_ATTRS
                       and str(row.get("falsify_action") or "").strip()
                       for row in rows if str(row["id"]).startswith(SIGNAL_PREFIX))]
     missing = [unit for unit in picked if unit not in covered]
     return dict(base, required=True, reason="no_upgrade_trace", sampled=picked,
                 covered=covered, missing=missing, sample_size=len(picked),
+                coverage_note="抽样为下限保证，非全站覆盖率；报告不得据此写「全站无信号」",
                 detail="未命中升级信号且无 figma 回写痕迹：须对抽样单元各留一条 EXP-SIG- 复测条目")
 
 
 def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None,
-          measurement_gaps=None, strict=False, target_url=None):
+          measurement_gaps=None, strict=False, target_url=None, version=None):
     """按已提供清单计算执行门禁：未消费候选、必查视角覆盖不足、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
     SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
@@ -269,6 +275,8 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     view_scope = view_scope or {}
     executed_cells = executed_cells or {view: set() for view in VIEWS}
     ready = [row["id"] for row in rows if row["status"] == "NOT_RUN" and not row["side_effect_pending"] and not row["blocked_reason"].strip() and not _acknowledged(row)]
+    # 升级信号抽样复测（v1.51）：行内说明见 _signal_probe；此处只负责把缺口并入
+    # 上限判定与 gate 字段，避免"没升级"被当成"确认无需升级"。
     # 如实登记"看到可疑但还没设计探针"不该被罚：实测中同一份清单只把 3 条观察写成
     # NOT_RUN，结论就从「通过」掉到「待核实」——等于"写下我还没查就自己降级"。
     # 带 next_action + owner 的承认项单列跟踪，不计入 ready_pending；缺字段仍计入。
@@ -305,7 +313,7 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     keyboard_items = [row for row in rows if str(row.get("id", "")).startswith(KEYBOARD_PREFIX)]
     keyboard_pending = sum(1 for row in keyboard_items if row["status"] == "NOT_RUN")
     keyboard_recorded = bool([row for row in keyboard_items if row["status"] != "NOT_RUN"])
-    probe = _signal_probe(rows, str(target_url or ""), strict)
+    probe = _signal_probe(rows, f"{target_url or ''}\x00{version or ''}", strict)
     failed = [row["id"] for row in rows if row["status"] == "FAIL"]
     # 必选义务（v3 G08）：副作用未决、必选质量属性被阻塞/未执行、必选页面未遍历，
     # 都不能因其余视角已有 PASS 而放行结论上限。非必选项仍只披露不阻断。
@@ -374,8 +382,8 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     elif strict and probe["missing"]:
         ceiling = "待核实"
         message = ("未命中升级信号却无抽样复测记录：" + "、".join(probe["missing"])
-                   + f"（从 {probe['page_units']} 个页面×状态单元按站点哈希抽 "
-                   f"{probe['sample_size']} 个，主体不可自选）；"
+                   + f"（从 {probe['page_units']} 个页面×状态单元按站点+版本哈希抽 "
+                   f"{probe['sample_size']} 个，主体不可自选；抽样是下限保证，不是全站覆盖率）；"
                    "须对抽中单元各留一条 EXP-SIG- 复测条目（PASS/FAIL + falsify_action，"
                    "observation 写明六类信号逐条结论），或留下 figma 7.xx 回写痕迹")
     elif failed:
@@ -587,7 +595,8 @@ def summarize(data):
     report["gate"] = _gate(rows, report["executed_views"],
                            {view: set(cells) for view, cells in report["executed_cells"].items()},
                            data.get("attribute_rulings"), data.get("view_scope"),
-                           measurement_gaps, strict_measurement, context["target_url"])
+                           measurement_gaps, strict_measurement,
+                           context["target_url"], context["application_version"])
     return report
 
 

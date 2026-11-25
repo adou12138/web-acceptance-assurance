@@ -310,8 +310,8 @@ class SignalProbeTest(MeasurementEvidenceTest):
         self.assertFalse(probe["required"])
         self.assertEqual(probe["reason"], "no_page_units")
 
-    def test_traversal_only_batch_waives_probe(self):
-        # 遍历与键盘条目本身已是细看痕迹，不构成抽样池
+    def test_traversal_entries_stay_in_pool(self):
+        # 遍历/键盘条目不能替代信号复测：否则把页面条目改名成 EXP-TRAV- 就能免测
         base = "https://example.invalid/app"
         items = [self._item("EXP-TRAV-1", ["usability"], self.measure, f"{base}/t1", "遍历控件"),
                  self._item("EXP-KBD-1", ["usability"], self.measure, f"{base}/k1", "Tab 走主流程")]
@@ -320,8 +320,16 @@ class SignalProbeTest(MeasurementEvidenceTest):
                             "environment": "test"},
                 "items": items}
         probe = self.exp.summarize(data)["gate"]["signal_probe"]
-        self.assertFalse(probe["required"])
-        self.assertEqual(probe["reason"], "no_page_units")
+        self.assertTrue(probe["required"])
+        self.assertTrue(probe["missing"])
+
+    def test_depth_mark_must_be_prefix(self):
+        # 任意位置出现 figma 字样不算升级痕迹，只有回写契约的前缀形态才算
+        data = self._data("1.1")
+        data["items"][0]["observation"] = "参考 source=figma-ui-parity:7.41 的历史结论"
+        self.assertTrue(self.exp.summarize(data)["gate"]["signal_probe"]["required"])
+        data["items"][0]["observation"] = "source=figma-ui-parity:7.41 对比度不足"
+        self.assertFalse(self.exp.summarize(data)["gate"]["signal_probe"]["required"])
 
     def test_1_0_only_discloses(self):
         gate = self.exp.summarize(self._data("1.0"))["gate"]

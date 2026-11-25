@@ -1518,3 +1518,15 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **接线**：`agents` 在「测量证据与键盘遍历」后补「未命中信号也要留复测痕迹」；`exploration-runtime.md` 新增「升级信号抽样复测（EXP-SIG-）」一节；`output-templates.md` 首屏限档项由三项扩到四项（增 `signal_probe.missing`），明确禁止概括成「已确认无需升级」。
 - **测试**：`tests/test_v150_coverage_fixes.py` 增 `SignalProbeTest` 6 例（缺复测压档、补条目闭合、figma 痕迹免测、纯接口免测、1.0 只披露、抽样与顺序无关）。
 - **版本**：plugin.json 1.50.0→1.51.0；本机全量 **963 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
+
+### v1.51.1 · 以项目目的为准的审核修复（EXP-SIG- 收口）
+
+审核标准：这条门禁是否真的让「该细看的页面被看过」。逐条找绕过路径，五处修复：
+
+- **撤销上一版自己引入的绕过通道（高）**：v1.51.0 把 `EXP-TRAV-`/`EXP-KBD-` 排除出抽样池，理由是「避免重复劳动」。但这给了捷径——控件遍历本来就该每页一条，把页面条目改名成 `EXP-TRAV-` 即可让池为空，直接免测。更关键的是语义不成立：遍历的 observation 是控件清单，不是六类信号结论，替代不了信号复测。现只排除 `EXP-SIG-` 自身（防自证），遍历/键盘条目留在池内。
+- **升级痕迹收紧为前缀（中高）**：原判定用 `in`，任意位置出现 `figma-ui-parity:7.` 就算已升级，顺手在 observation 里抄一句即可免测。现改为 `strip()` 后**以 `source=figma-ui-parity:7` 开头**（回写契约的前缀形态），并排除 `EXP-SIG-` 条目参与该判定。
+- **抽样种子加入版本（中）**：原种子只有站点，同一站点每批次都抽同两页——若那两页恰好最不容易出信号，复测等于长期复读。现种子为「站点 + application_version」：同版本内恒定、可比；版本一变就换样本。
+- **复测条目必须带页面属性（中）**：原覆盖判定只认状态与单元命中，`attributes=["functional"]` 的条目也算覆盖。现要求至少含 visual/usability/accessibility 之一。
+- **摘要缺字段不再静默（中）**：`phase_gate` 收到 `ceiling="通过"` 但摘要里没有 `signal_probe`（旧版或手写摘要）时，原逻辑完全不看这一维。现输出 `exploration_summary_incomplete` 警告（只披露不压档，兼容旧批次），让「门禁通过」不再可能纯靠自报。
+- **诚实性标注**：`gate.signal_probe.coverage_note` 写明「抽样是下限保证，非全站覆盖率」；message 与 `agents`/`exploration-runtime.md` 同步——50 页抽 2 页，不得据此写「全站无信号」。
+- **版本**：plugin.json 1.51.0→1.51.1；本机全量 **964 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
