@@ -166,6 +166,8 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
 
 **收尾消费**：`complete execute --collection <records.jsonl>` 把上述禁令接入执行阶段收尾——有违规即拒绝收尾（修正后再交）。三态口径：提供且合规记 `provided`；文件为空（0 条记录）记 `empty`，与 `not_provided` 同样在裁决终检压「待核实」并留痕（空清单不构成"已校验通过"）；收尾未提供记 `not_provided`，保留受限交付能力。旧批次状态文件无该字段时按原契约披露，不拒绝。
 
+**漏交的补正入口**：采集缺口会无条件阻断裁决（`check_verdict` 的 `allowed=not reasons`），而 `complete` 只能调一次——漏交必须能用 `revise execute --collection <records.jsonl>` 补登，否则是永久死路。补正走与 `complete` 同一套 `scan-collection` 校验（脏记录照拒、空文件照记 `empty`），只解除「采集未校验」这一条阻断，不改变 attack/exploration 各自算出的上限。交接包的 `pending_inputs` 会点名该缺口并给出补正命令。
+
 ## 4. 阶段三纪律：只依据实际观察裁决
 
 裁决必须给出：分类、证据引用、依据类型、证据等级。合法依据类型只有观测类：

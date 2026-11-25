@@ -1445,3 +1445,19 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 - 复审同时核对的**非缺陷**项：旧状态文件兼容（collection 键缺失走「披露不拒绝」分支，实测留痕文案正确）；`scan_collection_records` 自 v1.38.0 已存在，本次是接进收尾主链路非新造；revise 不覆盖 collection 补正——旧状态文件本就压级、新状态空文件有 empty 态，升级依赖是重跑 complete 的正当流程，不构成解锁旁路（记录为已知设计边界）。
 - 过程教训：**批量补丁脚本中途 `git checkout -- <test file>` 会把同文件内的新增测试一并冲掉**。跨会话/多轮补丁后必须 `grep` 点名核对每个声称的测试类/函数真实存在，再跑全量——"Ran N tests OK" 不能证明目标测试在其中。
+
+## v1.48.6（2026-11-25）：v1.48.5 复审——采集漏交死路封堵与交接前置补全
+
+对 v1.48.4/v1.48.5 两轮改动做第三轮审核（从 diff 与实测重推，含对真实项目 `D:/TestCase/liheng-slider-20261124` 状态文件的兼容实测）。上一版把「revise 不覆盖 collection」判为「不构成解锁旁路的设计边界」，本轮实测**该判断是错的**：`check_verdict` 的 `allowed = not reasons` 意味着采集缺口是**硬阻断裁决**（不只是压上限），而 `complete` 只能调一次——漏交即永久死路，没有任何补救入口。
+
+| 条目 | 发现（实测坐实） | 修复 | 回归 |
+|---|---|---|---|
+| **采集漏交死路** | execute 收尾漏交 `--collection` → `state=not_provided` → `check_verdict` 追加 reason → `allowed=False`；`revise` 只认 attack_coverage/exploration，无法补正 ⇒ 该项目永远无法给出裁决结论 | `revise` 增 `collection` 参数（CLI `--collection`）：走与 complete 同一套 scan-collection 校验（脏记录照拒、空文件照记 empty），只解除「采集未校验」这一条阻断，不触碰 attack/exploration 各自上限 | `test_revise_collection_unblocks_verdict` / `..._rejects_dirty_records` / `..._empty_not_disguised` 3 例 |
+| **交接包不提示采集前置** | `_pending_verdict_inputs` 只列 assumptions/regression，交接包明写「下一会话须先补齐再给技术结论」，却不提会硬阻断的采集缺口——下一会话开工即撞墙 | 交接包 `pending_inputs` 增采集缺口条目，附补正命令 `revise execute --collection` | `test_handoff_lists_collection_gap_as_pending_input` / `..._omits_..._when_provided` 2 例（撤该分支测试变红） |
+| **契约冲突回归** | 既有 `test_registration_clears_pending_list` 断言「前置全部登记后交接包不再出现前置清单段」变红——新逻辑在采集未交时又加一条，该段仍现。该断言本身正确（锁的是「全登记即清空」语义），冲突源于其 fixture 用旧契约未交采集 | 按新契约补 fixture（`collection=clean_collection_file()`）；**不改测试意图** | 全量 881 passed |
+| **CLI 与文档接线** | `revise --help` 无 collection；`phase-workflow.md` 未写补正入口；agent 主文档 §165「采集收尾必交」只提攻击覆盖，不提采集（会漏做） | 三处补齐：CLI help、phase-workflow 收尾段增「漏交的补正入口」、agent §165 增 `--collection` 必交与补正路径 | 文档回链 grep 命中 |
+
+- 影响面实测（真实旧项目副本，不动原文件）：旧状态文件无 `collection` 键时新增 reason **不改变**结论——v1.48.4 与 v1.48.6 对 `liheng-slider-20261124` 均得 `allowed=False / ceiling=待核实 / 5 条 reasons`，零差异；模拟 `not_provided` 后 `revise --collection` 能解除采集 reason（allowed 仍 False 因该项目另有真实缺口，属正确行为）。
+- 变异验证：撤 `revise` 的 collection 分支 → 3 例变红；撤交接包提示 → 1 例变红；还原后全绿。
+- 影响面清点：全仓仅 `phase_gate.py` 读写 `phases[...]`，`render_report_html.py`/`finding_summary.py`/`blind_eval.py` 均不消费阶段状态，无遗漏消费者；`scan_collection_records` 输入容忍度实测（字符串数组/None/空数组/空对象）均按预期返回违规或空。
+- 准出：全量 **881 passed**；注册守卫 3 例绿（旧缓存 1.47.5 已禁活）。新键 `collection.revised` 与 `empty` 态已进入 complete/revise 两条写入路径，`check_verdict` 三分支（缺失/empty/非 provided）各自有独立文案与测试。

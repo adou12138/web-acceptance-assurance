@@ -716,35 +716,37 @@ def _attack_check(coverage):
             "reasons": reasons}
 
 
-def revise(state, phase, attack_coverage=None, exploration=None, note=None, session=None,
-           allow_relax=False):
+def revise(state, phase, attack_coverage=None, exploration=None, collection=None,
+           note=None, session=None, allow_relax=False):
     """对已完成阶段的机械结论做**补正**（不改阶段状态、不改 completed_at）。
 
-    存在目的：execute 在 S2 收尾时冻结 attack_coverage / exploration 快照；交接包明写
-    「下一阶段补 SURF-xx」，S3 补齐后重跑门禁得「通过」，却因 complete 只能调一次而
-    无法回写——check-verdict 永远读过期快照，报「不达标」而实际已达标。实测代价：一轮
-    完整验收的最终门禁结论被锁在过期快照上。
+    存在目的：execute 在 S2 收尾时冻结 attack_coverage / exploration / collection 快照；
+    交接包明写「下一阶段补 SURF-xx」，S3 补齐后重跑门禁得「通过」，却因 complete 只能调
+    一次而无法回写——check-verdict 永远读过期快照，报「不达标」而实际已达标。实测代价：
+    一轮完整验收的最终门禁结论被锁在过期快照上。
 
     约束（缺一即拒）：
-    1. 只有 execute 阶段有这两个字段——check_verdict 也只读 execute，写到别的阶段等于
+    1. 只有 execute 阶段有这三个字段——check_verdict 也只读 execute，写到别的阶段等于
        制造门禁看不见的死数据，且可被误当作"已补正"的凭据。
     2. 不得把未通过的结论**升级为「通过」**：那是自行解锁验收。补正的正当用途是"补齐探针
        后重新机械判定"，重跑既可能抬升也可能压低，但抬到「通过」这一步意味着报告可以收尾，
        必须留一个人能看到的开关。确需如此时带 allow_relax=True，并在 note 写明依据。
        「不通过 ↔ 待核实」之间的调整不拦——那是缺陷归因变化的正常产物，拦住会把合法补正
-       一起堵死。
+       一起堵死。collection 无 ceiling 概念：补正到 provided 只是解除"采集未校验"这一条
+       阻断，不改变 attack/exploration 各自算出的上限，故不受 allow_relax 约束。
     3. 必须留痕：history 记 revise 事件，其中 transitions 记下每次 ceiling 迁移。
     """
     session = _require_session(state, session)
     if phase != "execute":
-        raise ValueError(f"revise 只支持 execute 阶段的机械结论（attack_coverage / exploration）；"
+        raise ValueError("revise 只支持 execute 阶段的机械结论"
+                         "（attack_coverage / exploration / collection）；"
                          f"当前 phase={phase}：check_verdict 只读 execute，写到其他阶段是死数据")
     entry = _entry(state, phase)
     if entry["status"] != "done":
         raise ValueError(f"阶段 {phase} 尚未完成（status={entry['status']}）："
                          "revise 只用于补正已完成阶段的机械结论")
-    if attack_coverage is None and exploration is None:
-        raise ValueError("revise 至少要提供 --attack-coverage 或 --exploration 之一")
+    if attack_coverage is None and exploration is None and collection is None:
+        raise ValueError("revise 至少要提供 --attack-coverage / --exploration / --collection 之一")
 
     changed, relaxed = [], {}
     for field, given, checker in (("attack_coverage", attack_coverage, _attack_check),
@@ -766,6 +768,28 @@ def revise(state, phase, attack_coverage=None, exploration=None, note=None, sess
         checked["revised"] = True
         entry[field] = checked
         changed.append(field)
+
+    if collection is not None:
+        # 与 complete 同一套校验口径：脏记录拒收正、空文件记 empty 而非 provided。
+        # 存在目的：execute 收尾漏交采集会让 check_verdict 无条件阻断裁决（allowed=False），
+        # 而 complete 只能调一次——没有补正入口就是永久死路，本轮复审实测坐实。
+        records = _load_records(collection)
+        violations = scan_collection_records(records)
+        if violations:
+            raise ValueError(
+                f"采集记录存在 {len(violations)} 处结构违规，未补正："
+                f"{violations[0].get('code')}（{violations[0].get('message', '')[:80]}）；"
+                "修正采集记录后重新 revise")
+        old_state = (entry.get("collection") or {}).get("state")
+        entry["collection"] = ({"state": "empty", "records": 0, "violations": [],
+                                "checked_at": _now()} if not records
+                               else {"state": "provided", "records": len(records),
+                                     "violations": [], "checked_at": _now()})
+        new_state = entry["collection"]["state"]
+        if old_state and old_state != new_state:
+            relaxed["collection"] = f"{old_state} -> {new_state}"
+        entry["collection"]["revised"] = True
+        changed.append("collection")
 
     _record(state, "revise", phase, {"fields": changed, "note": note,
                                      "session": session, "transitions": relaxed})
@@ -867,6 +891,13 @@ def _pending_verdict_inputs(state):
                          for phase in PHASES)
         if not registered:
             pending.append(label)
+    # 采集缺口：execute 收尾未交/交了空清单会无条件阻断裁决（allowed=False），
+    # 补正入口是 revise --collection。交接包必须点名，否则下一会话开工即撞墙。
+    execute_collection = (state["phases"].get("execute") or {}).get("collection")
+    if execute_collection is not None and execute_collection.get("state") != "provided":
+        pending.append("采集合规（revise execute --collection <records.jsonl>）："
+                       f"当前 state={execute_collection.get('state')}，"
+                       "未补正前裁决结论不允许给出")
     return pending
 
 
@@ -1570,6 +1601,10 @@ def main(argv=None):
     p.add_argument("--exploration", action="append",
                    help="补正用的 exploration gate（或整份报告，自动取 gate）；"
                         "可重复传多份分域清单的文件路径（取最严 ceiling、缺口合并）")
+    p.add_argument("--collection",
+                   help="补正用的采集记录 JSONL/JSON 数组路径：re-run scan-collection 后"
+                        "回写 provided/empty。用于 execute 收尾漏交采集（会无条件阻断裁决）"
+                        "时解除阻断——不传则 collection 保持原状")
     p.add_argument("--allow-relax", action="store_true",
                    help="允许把未通过结论升级为「通过」。默认禁止；仅在补齐探针后重跑门禁"
                         "确实得「通过」时使用，note 须写明依据——history 的 transitions 字段留痕")
@@ -1663,6 +1698,7 @@ def main(argv=None):
             revise(state, args.phase,
                    attack_coverage=_read_json_arg(args.attack_coverage),
                    exploration=_read_exploration_args(args.exploration),
+                   collection=args.collection,
                    note=args.note, session=args.session,
                    allow_relax=args.allow_relax)
         elif args.command == "amend":

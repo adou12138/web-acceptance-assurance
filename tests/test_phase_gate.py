@@ -540,6 +540,63 @@ class CollectionClosureTests(PhaseGateTestBase):
                              collection=self.clean_collection_file())
         self.assertIn("--collection", str(ctx.exception))
 
+    def test_revise_collection_unblocks_verdict(self):
+        """漏交采集是死路：complete 只能调一次，必须有 revise --collection 补正入口。
+
+        复审实测坐实：旧版 revise 只认 attack_coverage/exploration，execute 收尾漏交采集后
+        check_verdict 因 collection!=provided 无条件 allowed=False，永久无法补正。
+        """
+        self._close_all_after_execute(collection=None)
+        blocked = self.check()
+        self.assertFalse(blocked["verdict_allowed"])
+        self.assertTrue(any("未提供采集记录" in r for r in blocked["reasons"]))
+        adjudicate_session = self.session_for("adjudicate")
+        self.pg.revise(self.state, "execute",
+                       collection=self.clean_collection_file(),
+                       note="补齐上一会话漏交的采集记录", session=adjudicate_session)
+        self.assertEqual(self.state["phases"]["execute"]["collection"]["state"], "provided")
+        unblocked = self.check()
+        self.assertNotIn("未提供采集记录", " ".join(unblocked["reasons"]))
+
+    def test_revise_collection_rejects_dirty_records(self):
+        """补正不是后门：脏采集照样拒收。"""
+        self._close_all_after_execute(collection=None)
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.revise(self.state, "execute", collection=self._dirty_file(),
+                           note="补正", session=self.session_for("adjudicate"))
+        self.assertIn("结构违规", str(ctx.exception))
+
+    def test_revise_collection_empty_not_disguised(self):
+        """空文件补正同样登记 empty，不得洗成 provided。"""
+        empty = self.folder / "empty2.jsonl"
+        empty.write_text("", encoding="utf-8")
+        self._close_all_after_execute(collection=None)
+        self.pg.revise(self.state, "execute", collection=str(empty),
+                       note="补正空采集", session=self.session_for("adjudicate"))
+        self.assertEqual(self.state["phases"]["execute"]["collection"]["state"], "empty")
+        self.assertTrue(any("采集记录为空" in r for r in self.check()["reasons"]))
+
+    def test_handoff_lists_collection_gap_as_pending_input(self):
+        """交接包必须点名采集缺口，否则下一会话开工即撞墙。"""
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self._finish_execute(collection=None)
+        handoff = json.loads(
+            (self.handoff_dir / "handoff-execute.json").read_text(encoding="utf-8"))
+        self.assertTrue(any("采集" in item for item in handoff["pending_inputs"]))
+
+    def test_handoff_omits_collection_gap_when_provided(self):
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self._finish_execute(collection=self.clean_collection_file())
+        handoff = json.loads(
+            (self.handoff_dir / "handoff-execute.json").read_text(encoding="utf-8"))
+        self.assertFalse(any("采集" in item for item in handoff["pending_inputs"]))
+
 
 class AdjudicationHonestyTests(PhaseGateTestBase):
     def valid(self, **overrides):
