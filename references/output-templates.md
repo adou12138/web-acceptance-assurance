@@ -83,6 +83,7 @@
 |---|---|---|---|
 | 采集 | `collection.jsonl` / 台账 `events.jsonl` | 只写观察，禁止判定字段 | `phase_gate.py scan-collection`、`attack_coverage.py --ledger` |
 | 对抗计划 | `adversarial-plan.json` | `SURF-` 风险面与 `hypothesis` | `attack_coverage.py --plan` |
+| 对抗场景 | `adversarial-scenarios.json` | `SCN-ADV-` 三类（cross_module/operation_sequence/state_bypass）、`sequence≥2`、cross_module≥2 SURF；id/note 带设计场景 ID 前缀作回链（约定见 case-data-contract.md「对抗场景回链」） | `adversarial_data.py --scenarios`、`adversarial_gate.py --scenarios` |
 | 攻击覆盖结论 | `attack-coverage.json` | `verdict_ceiling` / `gaps` / `notices` | `phase_gate.py complete --attack-coverage` |
 | 残余风险声明 | `residual-declaration.json` | `items:[{id,status}]`，status∈unbroken/broken/not_verified | `attack_coverage.py --residual-declaration` |
 | 探索清单 | `exploration.json` | `schema_version` / `context` / `items[]` / `attribute_rulings` | `exploration_state.py`、`phase_gate.py complete --exploration` |

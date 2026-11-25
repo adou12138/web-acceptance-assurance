@@ -41,6 +41,13 @@ ID 跨所有节点全局唯一，引用按 ID；名称修改不影响关联。�
 
 `paths` 固定含 positive/boundary/exception/permission 四个数组。每条路径为 id/description。空数组须在 `not_applicable` 对应键写**对象形态**的具体举证：`{reason, business_object, checked_at}`——reason 写清该场景为何无此类路径（页面入口、规则依据等可核查事实），business_object 给出该场景的业务对象且须出现在 reason 文本或场景名中，checked_at 为核对日期。豁免理由**不得跨场景复用**：同一 kind 下两场景出现相同理由判 error（模板化批量豁免是把异常/权限这类 bug 高发区整块让渡，机器必须拦截）。字符串形态仍被接受但降级为 warning 提示升级对象举证（向后兼容；`--strict` 下视为失败）。缺理由产生告警。复杂流程每个 TC 指定 scenario_id 和 path_id，路径必须属于该场景，TC所关联FP须在场景的feature_ids中。无 TC 的路径和叶子产生覆盖告警；告警不得静默忽略，修复或在 manifest 记录原因，严格校验将其视为失败。
 
+## 对抗场景回链（C3 约定，纯文档口径，零 schema 改动）
+
+`scenarios[].id` 是设计侧唯一标识。对抗批次登记的 `SCN-ADV-` 场景（形态见 `schemas/adversarial-scenarios.schema.json`，校验 `adversarial_data.py --scenarios`）在**其 `id` 或 `note` 中带所对应设计场景的 ID 前缀**作回链（如 `SCN-ADV-01-…` 对应设计场景 `SCN-01`）。两条纪律：
+
+- **cases JSON 是设计唯一事实源**：不把对抗场景结构复制进 cases JSON，也不另建第二套场景库；对抗场景伴随文件 `adversarial-scenarios.json` 与 cases JSON 通过 ID 前缀互相定位。
+- **四类路径完备填表 ≠ 组合场景已登记**：paths 四类数组齐备且豁免举证合规，只证明单点路径覆盖；`SCN-ADV-` 三类组合场景（跨模块/操作序列反常/状态机规避链）是否登记由 `adversarial_gate.py --scenarios` 机械核查，两者不可互相替代。
+
 ## 用例字段
 
 | 字段 | 约定 |

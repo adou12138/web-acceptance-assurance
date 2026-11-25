@@ -74,7 +74,8 @@ A 节模板与 B 节方法都是**横切维度**：回答"单点打什么、用�
 - 场景的 `sequence` 至少两步，**不得退化为单点输入**（单点属 A 节模板范畴）；
 - 场景必须有 `expected_basis`（预期依据来源），否则只能产出观察，不能判 PASS/FAIL；
 - 场景通过 `obligation_refs` 关联到承载它的 ADV 探针——**场景不直接等于缺陷**，仍走 `finding-triage.md` 候选流程；
-- 组合类缺陷常与单点缺陷**不同根因**，不得因单点已测就跳过组合场景（参考 `finding-triage.md` 的"同文案不同原因不合并"）。
+- 组合类缺陷常与单点缺陷**不同根因**，不得因单点已测就跳过组合场景（参考 `finding-triage.md` 的"同文案不同原因不合并"）；
+- 对抗场景与设计侧用例资产的回链：`SCN-ADV-` 场景在其 `id` 或 `note` 中带所对应设计场景的 ID 前缀（约定见 `case-data-contract.md`「对抗场景回链」）；**四类路径完备填表 ≠ 组合场景已登记**——cases JSON 的 paths 四类数组齐备只证明单点覆盖，本节三类组合场景是否登记由下节机械校验另行核查。
 
 **机械校验（不是自觉）**：场景文件经 `scripts/adversarial_data.py --scenarios <文件>` 校验，强制 `sequence ≥ 2` 步、`cross_module` 至少关联两条 SURF、ID 以 `SCN-ADV-` 开头；`scenario_gaps()` 把"零场景""缺跨模块组合""高风险面未被任何场景覆盖"列为覆盖缺口，并由 `adversarial_gate.py --scenarios` 压入结论上限——**不登记场景，结论最高只能到"待核实"**。
 

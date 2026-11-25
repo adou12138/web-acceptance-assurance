@@ -45,7 +45,8 @@
 "scenarios":
 - "id": "SCN-01"
   "name": "编辑者修改并重新查看名称"
-  "goal": "验证名称修改和拒绝非法修改后的持久化结果"
+  "goal": "验证名称修改和拒绝非法修改后的持久化结果。回链示例：对应该场景的对抗组合场景登记为 SCN-ADV-01-…（id 前缀回链到本设计场景 SCN-01），约定见\
+    \ case-data-contract.md「对抗场景回链」"
   "feature_ids":
   - "FP-01"
   "paths":
@@ -58,8 +59,14 @@
     "exception": []
     "permission": []
   "not_applicable":
-    "exception": "示例未列接口失败，真实测试需按风险补充"
-    "permission": "示例仅编辑者；真实测试需另行评估角色"
+    "exception":
+      "reason": "示例未列接口失败，真实测试需按风险补充"
+      "business_object": "接口失败"
+      "checked_at": "2026-11-17"
+    "permission":
+      "reason": "示例仅编辑者；真实测试需另行评估角色"
+      "business_object": "角色"
+      "checked_at": "2026-11-17"
 "testcases":
 - "id": "TC-NAME-001"
   "title": "合法名称保存后重开读回"
@@ -157,6 +164,12 @@
   "reliability":
     "state": "not_applicable"
     "reason": "示例不涉及外部依赖、异步计算、重试或数据恢复要求"
+  "usability":
+    "state": "insufficient_evidence"
+    "reason": "示例未声明任务反馈、防重与恢复要求，无法给出可观测判据"
+  "content":
+    "state": "insufficient_evidence"
+    "reason": "示例未提供文案与术语基线，仅演示字段与校验"
 "decisions":
 - "topic": "范围"
   "reason": "此文件仅演示字段与校验，不是完整边界用例或真实业务验收"
