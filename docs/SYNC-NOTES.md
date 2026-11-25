@@ -1464,46 +1464,22 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 ## v1.49.0（2026-11-25）：裁决语义解耦 + 评测协议挂载 + 执行自主性加强
 
-### B1 · check_verdict 声明式 reason 分层（F-04 根因）
+### B1（F-04）· check_verdict 声明式分层｜B2（F-06）· 旧状态补正｜B3（F-07）· note 留痕｜B4 · 文案收编
 
-| 条目 | 发现（实测坐实） | 修复 | 回归 |
-|---|---|---|---|
-| **压档与拒绝出具结论被实现成同一件事** | `allowed = not reasons`（原 1352 行）+ `phase_ceiling: None if allowed else ceiling`：`verdict_allowed=True + ceiling=待核实` 不可表达；缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）与造假/越权同档硬阻断 | 新增单一注册表 `REASON_POLICY`（18 code × {mode, remedy, needs_human}），登记全部现有判定来源，**不新增判断条件**；`verdict_allowed = not blocking_reasons`（仅 block 档：阶段未完成/未批范围变更/交接未消费），downgrade 档允许出具但 `phase_ceiling` 取最严（上游「不通过」不降级）；schema 升 `phase-verdict-check/2`，新增 `blocking_reasons[]` / `limitations[]`（code/message/remedy/needs_human）/ `policy_version`，reasons 全集保留 | `tests/test_verdict_policy.py` 8 例；test_phase_gate 13 处 downgrade 断言随语义改写（断言 True+待核实+limitations.code）；全量 889 passed |
-| 四处接线 | 旧口径「`allowed=not reasons`/直接拦/无条件阻断裁决」散落文档 | CLI `check-verdict --help`、`phase-workflow.md` 补正入口段、agents §165 采集卡口、`output-templates.md` §0.3 限档口径——统一为「缺证据 → 待核实 + 未覆盖范围 + 补正命令」；`remedy` 单一来源（注册表），不再各处手写 | grep 旧口径零残留；引用守卫 + 全量绿 |
+- **B1 根因**：`allowed = not reasons`（原 1352 行）把"压档"与"拒绝出具结论"实现成同一件事，`verdict_allowed=True + ceiling=待核实` 不可表达，缺证据类缺口与造假/越权同档硬阻断。**修复**：单一注册表 `REASON_POLICY`（18 code × {mode, remedy, needs_human}，不新增判断条件）；`verdict_allowed = not blocking_reasons`（仅 block 档：阶段未完成/未批范围变更/交接未消费），downgrade 档允许出具但上限取最严（上游「不通过」不降级）；schema 升 `phase-verdict-check/2`，新增 `blocking_reasons[]`/`limitations[]`（code/message/remedy/needs_human）/`policy_version`，reasons 全集保留。**回归**：`test_verdict_policy.py` 8 例 + test_phase_gate 13 处 downgrade 断言改写；变异（撤 block 归类）6 红。接线四处（CLI help / phase-workflow 补正入口段 / agents §165 / output-templates §0.3），grep 旧口径零残留。
+- **B2**：`_pending_verdict_inputs` 的 `is not None` 让旧状态文件（无 collection 键）逃过点名 → 改「字段缺失或 state!=provided」一视同仁，remedy 取注册表；pending_inputs 只影响交接包文本，check-verdict 零差异。回归：`test_pending_inputs_cover_legacy_state_without_collection_key`（撤分支变红）。
+- **B3**：`revise --collection` 无 approval 无 note 即可自解锁 → 不引入人工审批，`--note` 必填，事件记 `{auto:true, basis}`，不占 approval，文档明写「留痕供人核对，不防有意伪造」。回归：`test_revise_collection_requires_note`/`..._records_auto_basis`（撤校验变红）。
+- **B4**：pending 的 assumptions/regression 手写 label 收编进注册表（`label` 字段，`{label}：{remedy}` 单一来源）；采集 pending 前缀改「采集缺口」，`grep -c '采集合规'` 3→2。回归：v147 交接包名称断言先红后修复（label 保留名称）；全量 892 OK。
 
-### B2/B3/B4 · 旧状态补正 + revise note 留痕 + 文案收编
+### C 路 · 回链 + 探针补充 + 披露细化（纯文档/派生视图，零 schema 与 TOOL_VERSION 改动）
 
-| 条目 | 发现（实测坐实） | 修复 | 回归 |
-|---|---|---|---|
-| **B2 旧状态漏点名（F-06）** | `_pending_verdict_inputs` 的 `is not None` 判断：旧状态文件无 collection 键时交接包不点名、不给补正命令，下一会话开工即撞墙 | 改为「字段缺失或 state!=provided」一视同仁；remedy 取 REASON_POLICY；`pending_inputs` 只影响交接包文本，不改 check-verdict 结论（旧项目副本零差异口径不变） | `test_pending_inputs_cover_legacy_state_without_collection_key`（撤分支变红） |
-| **B3 revise 自解锁无痕（F-07）** | `revise --collection` 无 approval、无 note 约束即可解除采集缺口 | 不引入人工审批；`--collection` 时 `--note` 必填，事件记 `{auto:true, basis}`；不占 approval；文档明写「留痕供人核对，不防有意伪造」 | `test_revise_collection_requires_note` / `..._records_auto_basis`（撤 note 校验变红） |
-| **B4 文案收编（C-1）** | pending 的 assumptions/regression 手写 label 与注册表 remedy 重复；'采集合规' 3 处手写 | labels 收编：注册表加 `label` 字段，pending = `{label}：{remedy}` 单一来源；采集 pending 前缀改「采集缺口」 | v147 交接包名称断言先红后修复（label 保留名称）；`grep -c '采集合规'` 3→2；全量 892 OK |
+- **C3 回链**：case-data-contract.md 增「对抗场景回链」节（SCN-ADV- 的 id/note 带设计场景 ID 前缀；四类路径完备填表 ≠ 组合场景已登记）；probe-playbook C 节补纪律；§0.4 增「对抗场景」行；cases-example.json goal 补 SCN-ADV-01- 回链示例（yaml 镜像同步 to-yaml）。**偏离登记**：C3「一个夹具补示例」未执行——检测夹具含答案且 E1 未实跑，改题面破坏盲测纯净性并改冻结哈希，由 yaml 镜像承担（夹具哈希未变）。
+- **C1 探针**：probe-playbook B 节补 3 行（payload 级状态机规避/双写覆盖/旧快照回读），登记 method 映射既有稳定 ID，METHOD_IDS 未变。
+- **C2 披露**：5.8 七项→九项：combo 路径数（零脚本改动）+ 高风险面攻击路径分布（`_emit_csv` 追加 `section=surface_path`，result.get 兜底旧产物）；JSON 契约与 TOOL_VERSION 未变。回归：`test_csv_exports_combo_and_surface_path_sections`（撤段变红）。
 
-### C3 · 设计资产 ↔ 对抗场景回链（纯文档约定，零 schema 改动）
+### D 路 · 执行自主性加强（L4 阶段闸门保留不动；maxTurns 未改）
 
-| 条目 | 落点 | 验证 |
-|---|---|---|
-| 回链约定 | case-data-contract.md 增「对抗场景回链」节（SCN-ADV- 的 id/note 带设计场景 ID 前缀；cases JSON 是设计唯一事实源；四类路径完备填表 ≠ 组合场景已登记）；probe-playbook.md C 节使用纪律补对应一句 | 引用守卫绿 |
-| §0.4 对照表 | output-templates.md §0.4 增「对抗场景」行（adversarial-scenarios.json → adversarial_data/adversarial_gate --scenarios） | 同上 |
-| 回链示例 | examples/cases-example.json SCN-01.goal 补 SCN-ADV-01- 前缀回链示例；yaml 镜像同步重新生成（to-yaml） | test_case_data 33 例绿 |
-| **偏离登记** | 计划 C3 原文「与一个夹具各补一处回链示例」中的「一个夹具」未执行：检测夹具含答案（hidden_answers）且 E1 未实跑，改题面破坏盲测纯净性并改动冻结哈希；回链示例由 yaml 镜像承担 | 夹具哈希未变（git diff 为空） |
-
-### C1/C2 · 探针补充与披露细化
-
-| 条目 | 落点 | 验证 |
-|---|---|---|
-| C1 | probe-playbook B 节表尾补 3 行（payload 级状态机规避/双写覆盖/旧快照回读），登记 method 时映射既有稳定 ID，METHOD_IDS/tool_version 不变（git diff 零改动） | 引用守卫+全量绿 |
-| C2 | 5.8 披露页七项→九项：combo 路径数（零脚本改动）+ 高风险面攻击路径分布（attack_coverage.py _emit_csv 追加 section=surface_path，result.get 兜底旧产物）；JSON 契约与 TOOL_VERSION 未变 | test_csv_exports_combo_and_surface_path_sections（撤段变红） |
-
-### D减法 · run_journeys.cjs 接回 browser.cjs（C-1 兑现点）
-
-- 删本地 resolvePlaywright 定义与启动逻辑（原 74-81/460-468 行，空 catch 静默吞失败）；launch/closeAll 复用 browser.cjs 唯一来源；finally 清理从只关 context 改为 closeAll(handle)，顺带修复 browser 句柄泄漏（原缺陷：chrome 子进程残留、node 不退出）。净删 5 行、冗余删除 17 行（硬指标「既有冗余删除 >0 行」达成）。
-- **验收口径（P1 修正 b）**：本文件不再自带 resolvePlaywright（grep 命中仅减法说明注释）；其余 4 个自带定义的驱动（capture_aria.js/run_state_scenarios.cjs/run_official_extraction.cjs/run_button_audit.cjs）登记为后续减法项，不在本版范围。
-
-### D1/D2/D3 · 执行自主性加强
-
-| 条目 | 落点 | 验证 |
-|---|---|---|
-| D1 runtime_probe.py | 五通道三态（http_contract 恒具备依赖/available 取决于 manifest——X-07；auth_state 只查 profile 存在可写不做读回；browser_mcp 恒 unprobed 会话内判定）+ runtime-manifest/1 校验；消费四落点见 §0.4，adversarial_gate 本版未改（X-03） | 19 例（撤 manifest 依赖判断变红）；无 playwright 环境返回结构化三态不崩 |
-| D2 exploration_runner.py | 只编排不执行；ready_queue 复用 summarize() 不另建排序；X-02 自动续批走 classify+is_blocking 双层（record 内嵌 declaration 供第二层凭据复验），三种反向凭据 requires_human；X-13 honest_exits 只登记条目 ID；writeback_commands 为发射模板（P3）；预算账本 budget-consumption/1 | 14 例（三反向凭据用例全绿；classify/is_blocking 上线前 grep 确认在位——防御纵深无行为差异，变异不适用） |
-| D3 runtime_diagnostics | 交接包独立字段（batch_count/probes_consumed/budget_remaining/blocked_by_capability），派生可重建；不落 state 顶层、不进 pending_inputs、phase-handoff/1 不升版（X-06）；CLI checkpoint --budget-ledger/--capabilities | 2 例（派生正确性 + 缺省 None 不渲染）；maxTurns 未改 |
+- **D 减法（C-1 兑现）**：run_journeys.cjs 删本地 resolvePlaywright+启动逻辑（空 catch 静默吞失败），launch/closeAll 接回 browser.cjs 唯一来源，finally 改 closeAll 顺带修复 browser 句柄泄漏；冗余删除 17 行。**验收口径（审核 P1 修正 b）**：本文件不再自带 resolvePlaywright；其余 4 个自带定义驱动（capture_aria/run_state_scenarios/run_official_extraction/run_button_audit）登记为后续减法项。
+- **D1 runtime_probe.py**：五通道三态纯探测（http_contract 依赖恒具备/available 取决于 manifest——X-07；auth_state 只查 profile 存在可写不做读回；browser_mcp 恒 unprobed 会话内判定）+ runtime-manifest/1 校验；消费四落点见 §0.4；adversarial_gate 本版未改（X-03）。回归：19 例（撤 manifest 依赖判断变红）；无 playwright 环境返回结构化三态不崩。
+- **D2 exploration_runner.py**：只编排不执行；ready_queue 复用 summarize() 不另建排序；X-02 自动续批走 classify+is_blocking 双层（record 内嵌 declaration 供第二层凭据复验），三种反向凭据 requires_human；X-13 honest_exits 只登记条目 ID；writeback_commands 为发射模板（审核 P3）；预算账本 budget-consumption/1。回归：14 例（三反向凭据全绿；classify/is_blocking 为防御纵深，无行为差异，验收按 §19 以 grep 在位确认）。
+- **D3 runtime_diagnostics**：交接包独立字段（batch_count/probes_consumed/budget_remaining/blocked_by_capability）派生可重建；不落 state 顶层、不进 pending_inputs、phase-handoff/1 不升版（X-06）；CLI checkpoint --budget-ledger/--capabilities。回归：2 例；不自动 resume、不自动放行。

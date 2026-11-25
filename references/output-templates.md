@@ -90,6 +90,10 @@
 | 探索门禁结论 | 探索清单输出的整份报告（含顶层 `gate`） | `gate.verdict_ceiling` / `missing_views` / `thin_views` / `view_cells` | `phase_gate.py complete --exploration`、`render_report_html.py --dataset` |
 | 裁决条目 | `findings.jsonl` | `classification` / `evidence_grade` / `page_observed` / `observed_*` | `phase_gate.py check-adjudication` |
 | 候选复核记录 | `reviews.jsonl` | `finding_id` / `verdict`（accepted/rejected/unresolved），须配 `--events` | `finding_summary.py --reviews` |
+| 运行时能力探测 | `runtime-capabilities.json` | 五通道三态 + `reason`/`recovery`（`runtime-capabilities/1`） | `exploration_runner.py` 队列过滤；探索清单 `blocked_reason` 依据；报告「能力边界」段；交接包 `runtime_diagnostics` |
+| 运行时 manifest | `runtime-manifest.json` | 已存在资源声明 + `read_only_budget`（`runtime-manifest/1`）；环境声明不是放行凭据，不写进 `approval` | `runtime_probe.py`、`exploration_runner.py` |
+| 批次编排计划 | `batch-plan.json` | `ready_queue`/`budget`/`stop_conditions`/`reconcile_items`/`writeback_commands`（发射模板）/`honest_exits`（`batch-plan/1`） | Agent 批次执行、报告「未探索前沿」 |
+| 预算账本 | `budget-consumption.json` | 三口径累计 + `auto_approval` 事件（`budget-consumption/1`） | 交接包 `runtime_diagnostics`、`autonomy-result.md` 指标源 |
 | 风险假设清算 | `assumptions.json` | `reviewed` / `items[].result`∈confirmed/refuted/open | `phase_gate.py check-verdict --assumptions` |
 | 回归影响面 | `regression.json` | `changed_areas` / `candidates[].basis` / `no_impact_reason` | `phase_gate.py check-verdict --regression` |
 
