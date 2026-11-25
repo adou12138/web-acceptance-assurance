@@ -1494,3 +1494,8 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 |---|---|---|
 | C1 | probe-playbook B 节表尾补 3 行（payload 级状态机规避/双写覆盖/旧快照回读），登记 method 时映射既有稳定 ID，METHOD_IDS/tool_version 不变（git diff 零改动） | 引用守卫+全量绿 |
 | C2 | 5.8 披露页七项→九项：combo 路径数（零脚本改动）+ 高风险面攻击路径分布（attack_coverage.py _emit_csv 追加 section=surface_path，result.get 兜底旧产物）；JSON 契约与 TOOL_VERSION 未变 | test_csv_exports_combo_and_surface_path_sections（撤段变红） |
+
+### D减法 · run_journeys.cjs 接回 browser.cjs（C-1 兑现点）
+
+- 删本地 resolvePlaywright 定义与启动逻辑（原 74-81/460-468 行，空 catch 静默吞失败）；launch/closeAll 复用 browser.cjs 唯一来源；finally 清理从只关 context 改为 closeAll(handle)，顺带修复 browser 句柄泄漏（原缺陷：chrome 子进程残留、node 不退出）。净删 5 行、冗余删除 17 行（硬指标「既有冗余删除 >0 行」达成）。
+- **验收口径（P1 修正 b）**：本文件不再自带 resolvePlaywright（grep 命中仅减法说明注释）；其余 4 个自带定义的驱动（capture_aria.js/run_state_scenarios.cjs/run_official_extraction.cjs/run_button_audit.cjs）登记为后续减法项，不在本版范围。
