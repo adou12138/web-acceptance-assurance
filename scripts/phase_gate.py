@@ -747,6 +747,12 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
                          "revise 只用于补正已完成阶段的机械结论")
     if attack_coverage is None and exploration is None and collection is None:
         raise ValueError("revise 至少要提供 --attack-coverage / --exploration / --collection 之一")
+    # B3/F-07：--collection 补正可在无人工放行的情况下解除采集缺口，必须 --note 留痕。
+    # 不引入人工审批（避免新增人机往返）；留痕供人核对，不防有意伪造——与诚实边界一致。
+    if collection is not None and not (isinstance(note, str) and note.strip()):
+        raise ValueError("revise --collection 必须带 --note 写明补正依据："
+                         "该入口无需人工放行即可解除采集缺口，留痕供人核对"
+                         "（不防有意伪造，防线是停会话/新开会话这两个人工控制点）")
 
     changed, relaxed = [], {}
     for field, given, checker in (("attack_coverage", attack_coverage, _attack_check),
@@ -791,8 +797,14 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
         entry["collection"]["revised"] = True
         changed.append("collection")
 
-    _record(state, "revise", phase, {"fields": changed, "note": note,
-                                     "session": session, "transitions": relaxed})
+    revise_payload = {"fields": changed, "note": note,
+                      "session": session, "transitions": relaxed}
+    if "collection" in changed:
+        # B3：collection 补正无需人工放行，事件里显式记 auto 留痕 + basis（note 原文），
+        # 供台账摘要与人工核对识别"自动解除采集缺口"的批次；不占 approval（后者只记人工放行）。
+        revise_payload["auto"] = True
+        revise_payload["basis"] = (note or "").strip()
+    _record(state, "revise", phase, revise_payload)
     return state
 
 
@@ -1699,7 +1711,7 @@ def main(argv=None):
                         "scan-collection 结构校验，有违规即拒绝收尾（修正后重试）；"
                         "空文件记 empty、未提供记 not_provided，两者都在裁决终检压待核实")
 
-    p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）")
+    p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）；--collection 补正必须 --note 写明依据（无人工放行，留痕供人核对，不防有意伪造）")
     p.add_argument("state")
     p.add_argument("--phase", required=True,
                    help="仅支持 execute：check_verdict 只读该阶段的机械结论")

@@ -600,6 +600,38 @@ class CollectionClosureTests(PhaseGateTestBase):
         self.assertEqual(self.state["phases"]["execute"]["collection"]["state"], "empty")
         self.assertTrue(any("采集记录为空" in r for r in self.check()["reasons"]))
 
+    def test_revise_collection_requires_note(self):
+        """B3/F-07：--collection 补正无需人工放行即可解除缺口，必须 --note 留痕。
+
+        note 校验先于记录校验（缺 note 连脏记录都进不了补正流程）；
+        脏记录 + 带 note 的拒绝理由属结构违规，由 test_revise_collection_rejects_dirty_records 覆盖。
+        """
+        self._close_all_after_execute(collection=None)
+        with self.assertRaises(ValueError) as ctx:
+            self.pg.revise(self.state, "execute",
+                           collection=self.clean_collection_file(),
+                           session=self.session_for("adjudicate"))
+        self.assertIn("--note", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx2:
+            self.pg.revise(self.state, "execute",
+                           collection=self._dirty_file(), note=None,
+                           session=self.session_for("adjudicate"))
+        self.assertIn("--note", str(ctx2.exception),
+                      "note 缺失的拦截先于记录内容校验，一视同仁")
+
+    def test_revise_collection_records_auto_basis(self):
+        """B3：collection 补正事件记 auto=true + basis=note 原文，供人工核对识别自动解除。"""
+        self._close_all_after_execute(collection=None)
+        note = "补齐上一会话漏交的采集记录（依据：交接包 pending_inputs 点名）"
+        self.pg.revise(self.state, "execute", collection=self.clean_collection_file(),
+                       note=note, session=self.session_for("adjudicate"))
+        events = [h for h in self.state["history"] if h.get("action") == "revise"]
+        self.assertEqual(len(events), 1)
+        detail = events[0]["detail"]
+        self.assertTrue(detail["auto"])
+        self.assertEqual(detail["basis"], note)
+        self.assertIn("collection", detail["fields"])
+
     def test_handoff_lists_collection_gap_as_pending_input(self):
         """交接包必须点名采集缺口，否则下一会话开工即撞墙。"""
         self.pg.start(self.state, "plan", "SESS-1")
