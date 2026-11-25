@@ -1461,3 +1461,12 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - 变异验证：撤 `revise` 的 collection 分支 → 3 例变红；撤交接包提示 → 1 例变红；还原后全绿。
 - 影响面清点：全仓仅 `phase_gate.py` 读写 `phases[...]`，`render_report_html.py`/`finding_summary.py`/`blind_eval.py` 均不消费阶段状态，无遗漏消费者；`scan_collection_records` 输入容忍度实测（字符串数组/None/空数组/空对象）均按预期返回违规或空。
 - 准出：全量 **881 passed**；注册守卫 3 例绿（旧缓存 1.47.5 已禁活）。新键 `collection.revised` 与 `empty` 态已进入 complete/revise 两条写入路径，`check_verdict` 三分支（缺失/empty/非 provided）各自有独立文案与测试。
+
+## v1.49.0（2026-11-25）：裁决语义解耦 + 评测协议挂载 + 执行自主性加强
+
+### B1 · check_verdict 声明式 reason 分层（F-04 根因）
+
+| 条目 | 发现（实测坐实） | 修复 | 回归 |
+|---|---|---|---|
+| **压档与拒绝出具结论被实现成同一件事** | `allowed = not reasons`（原 1352 行）+ `phase_ceiling: None if allowed else ceiling`：`verdict_allowed=True + ceiling=待核实` 不可表达；缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）与造假/越权同档硬阻断 | 新增单一注册表 `REASON_POLICY`（18 code × {mode, remedy, needs_human}），登记全部现有判定来源，**不新增判断条件**；`verdict_allowed = not blocking_reasons`（仅 block 档：阶段未完成/未批范围变更/交接未消费），downgrade 档允许出具但 `phase_ceiling` 取最严（上游「不通过」不降级）；schema 升 `phase-verdict-check/2`，新增 `blocking_reasons[]` / `limitations[]`（code/message/remedy/needs_human）/ `policy_version`，reasons 全集保留 | `tests/test_verdict_policy.py` 8 例；test_phase_gate 13 处 downgrade 断言随语义改写（断言 True+待核实+limitations.code）；全量 889 passed |
+| 四处接线 | 旧口径「`allowed=not reasons`/直接拦/无条件阻断裁决」散落文档 | CLI `check-verdict --help`、`phase-workflow.md` 补正入口段、agents §165 采集卡口、`output-templates.md` §0.3 限档口径——统一为「缺证据 → 待核实 + 未覆盖范围 + 补正命令」；`remedy` 单一来源（注册表），不再各处手写 | grep 旧口径零残留；引用守卫 + 全量绿 |

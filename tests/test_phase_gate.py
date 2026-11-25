@@ -181,20 +181,27 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.assertEqual(ids, ["SESS-1", "SESS-2", "SESS-3"])
 
     def test_fail_ceiling_from_upstream_propagates_not_downgraded_to_pending(self):
-        """上游已算出「不通过」时，phase_ceiling 必须保留「不通过」，不得恒压成待核实。"""
+        """上游已算出「不通过」时，phase_ceiling 必须保留「不通过」，不得恒压成待核实。
+
+        B1 后该缺口属 downgrade 档：允许出具结论，但档位仍取上游更严的「不通过」。
+        """
         self.finish_all()
         self.state["phases"]["execute"]["attack_coverage"]["ceiling"] = "不通过"
         check = self.check()
-        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "不通过")
+        self.assertTrue(any(l["code"] == "attack_coverage_not_met"
+                            for l in check["limitations"]))
 
     def test_explore_fail_ceiling_propagates_not_downgraded_to_pending(self):
         """探索清单上游判「不通过」时，档位同样保留，不被恒压成待核实。"""
         self.finish_all()
         self.state["phases"]["execute"]["exploration"]["ceiling"] = "不通过"
         check = self.check()
-        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "不通过")
+        self.assertTrue(any(l["code"] == "exploration_not_met"
+                            for l in check["limitations"]))
 
     def test_sessions_record_actual_models(self):
         self.finish_all()
@@ -228,13 +235,17 @@ class PhaseMachineTests(PhaseGateTestBase):
         self.assertEqual(self.state["amendments"][0]["status"], "approved")
 
     def test_routing_mismatch_blocks_until_acknowledged(self):
+        """路由误配属 downgrade 档：允许出具结论但压待核实；ack 后缺口清空、上限解除。"""
         self.finish_all(model_classes={"plan": self.pg.ROUTING["execute"]["model_class"]})
         check = self.check()
-        self.assertFalse(check["verdict_allowed"], "规划用快模型属路由误配，须压上限")
+        self.assertTrue(check["verdict_allowed"], "B1 后误配允许受限交付")
+        self.assertEqual(check["phase_ceiling"], "待核实", "规划用快模型属路由误配，须压上限")
+        self.assertTrue(any(l["code"] == "routing_mismatch" for l in check["limitations"]))
         self.assertTrue(any(w["code"] == "routing_mismatch" for w in check["warnings"]))
         self.pg.acknowledge_routing(self.state, "plan", "本会话仅有快模型可用，已在报告中披露")
         check = self.check()
         self.assertTrue(check["verdict_allowed"], check["reasons"])
+        self.assertIsNone(check["phase_ceiling"])
 
     def test_state_persists_and_reloads(self):
         self.finish_all()
@@ -356,7 +367,7 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         self.assertIsNone(self.state["awaiting_session_for"])
 
     def test_same_session_approve_caps_verdict(self):
-        """同会话放行是兼容路径：能走完流程，但结论上限只能待核实。"""
+        """同会话放行是兼容路径：能走完流程，但结论上限只能待核实（B1 downgrade 档）。"""
         for phase in self.pg.PHASES:
             if phase != "plan":
                 self.submit_phase(phase)
@@ -364,9 +375,12 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
             self.pg.start(self.state, phase, self.session_for("plan"))
             self.pg.complete(self.state, phase, session=self.session_for("plan"))
         check = self.check()
-        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(check["verdict_allowed"])
         self.assertEqual(check["phase_ceiling"], "待核实")
         self.assertTrue(any("同会话放行" in reason for reason in check["reasons"]))
+        items = [l for l in check["limitations"] if l["code"] == "same_session_approval"]
+        self.assertTrue(items)
+        self.assertTrue(items[0]["needs_human"], "重走跨会话放行需要人，remedy 须指向人工动作")
 
 
 class CollectionRecordTests(PhaseGateTestBase):
@@ -506,12 +520,16 @@ class CollectionClosureTests(PhaseGateTestBase):
                          "provided")
 
     def test_missing_collection_closes_and_presses_ceiling(self):
-        """收尾不交采集 = 受限交付：可完成，但 check_verdict 留痕压待核实。"""
+        """收尾不交采集 = 受限交付（B1 downgrade 档）：可出具结论，压待核实并给补正入口。"""
         check = self._close_all_after_execute(collection=None)
         self.assertEqual(self.state["phases"]["execute"]["collection"]["state"],
                          "not_provided")
-        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(check["verdict_allowed"])
+        self.assertEqual(check["phase_ceiling"], "待核实")
         self.assertTrue(any("未提供采集记录" in r for r in check["reasons"]))
+        items = [l for l in check["limitations"] if l["code"] == "collection_not_provided"]
+        self.assertTrue(items)
+        self.assertIn("revise execute --collection", items[0]["remedy"])
 
     def test_empty_collection_file_not_disguised_as_provided(self):
         """空清单登记 empty：拿 0 条记录冒充"已校验通过"必须可区分。"""
@@ -521,8 +539,11 @@ class CollectionClosureTests(PhaseGateTestBase):
         entry = self.state["phases"]["execute"]["collection"]
         self.assertEqual(entry["state"], "empty")
         self.assertEqual(entry["records"], 0)
-        self.assertFalse(check["verdict_allowed"])
+        self.assertTrue(check["verdict_allowed"])
+        self.assertEqual(check["phase_ceiling"], "待核实")
         self.assertTrue(any("采集记录为空" in r for r in check["reasons"]))
+        self.assertTrue(any(l["code"] == "collection_empty"
+                            for l in check["limitations"]))
 
     def test_legacy_state_without_collection_field_disclosed(self):
         """旧批次状态文件没有 collection 字段：不拒绝，但按原契约披露留痕。"""
@@ -548,8 +569,11 @@ class CollectionClosureTests(PhaseGateTestBase):
         """
         self._close_all_after_execute(collection=None)
         blocked = self.check()
-        self.assertFalse(blocked["verdict_allowed"])
+        self.assertTrue(blocked["verdict_allowed"], "B1 后漏交采集允许受限交付")
+        self.assertEqual(blocked["phase_ceiling"], "待核实")
         self.assertTrue(any("未提供采集记录" in r for r in blocked["reasons"]))
+        self.assertTrue(any(l["code"] == "collection_not_provided"
+                            for l in blocked["limitations"]))
         adjudicate_session = self.session_for("adjudicate")
         self.pg.revise(self.state, "execute",
                        collection=self.clean_collection_file(),
@@ -893,18 +917,30 @@ class HandoffArtifactValidation(PhaseGateTestBase):
 
 
 class AssumptionAndRegressionGate(PhaseGateTestBase):
-    """风险假设必须逐条证伪，回归影响面必须被评估——两者缺一即压上限。"""
+    """风险假设必须逐条证伪，回归影响面必须被评估——两者缺一即压上限。
+
+    B1（phase-verdict-check/2）：以下缺口均属 downgrade 档——允许出具结论
+    （verdict_allowed=True），但 phase_ceiling 压「待核实」，limitations[].code
+    逐条可定位且必须带 remedy 补正入口。
+    """
 
     def finished(self):
         self.finish_all()
         return self.check()
+
+    def assert_downgraded(self, check, code):
+        self.assertTrue(check["verdict_allowed"])
+        self.assertEqual(check["phase_ceiling"], "待核实")
+        items = [l for l in check["limitations"] if l["code"] == code]
+        self.assertTrue(items, check["limitations"])
+        self.assertTrue(all(l["remedy"] for l in items))
 
     def test_missing_assumptions_blocks(self):
         self.finish_all()
         check = self.pg.check_verdict(
             self.state, assumptions=None,
             regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "assumptions_missing")
         self.assertTrue(any("风险假设" in reason for reason in check["reasons"]))
 
     def test_empty_assumptions_need_reviewed_flag(self):
@@ -912,7 +948,7 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
         check = self.pg.check_verdict(
             self.state, assumptions={"items": []},
             regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "assumptions_not_reviewed")
         self.assertTrue(any("reviewed" in reason for reason in check["reasons"]))
 
     def test_open_assumption_blocks(self):
@@ -924,14 +960,14 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
                 "basis": "产品口头说明", "falsify_action": "发布后刷新列表核对",
                 "result": "open"}]},
             regression={"changed_areas": [], "candidates": [], "no_impact_reason": "夹具"})
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "assumptions_gap")
         self.assertTrue(any("ASM-01" in reason for reason in check["reasons"]))
 
     def test_missing_regression_blocks(self):
         self.finish_all()
         check = self.pg.check_verdict(
             self.state, assumptions={"reviewed": True, "items": []}, regression=None)
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "regression_missing")
         self.assertTrue(any("回归影响面" in reason for reason in check["reasons"]))
 
     def test_changed_area_without_candidates_blocks(self):
@@ -939,7 +975,7 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
         check = self.pg.check_verdict(
             self.state, assumptions={"reviewed": True, "items": []},
             regression={"changed_areas": ["主页整页替换"], "candidates": []})
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "regression_gap")
         self.assertTrue(any("回归候选" in reason for reason in check["reasons"]))
 
     def test_candidate_without_basis_blocks(self):
@@ -947,7 +983,7 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
         check = self.pg.check_verdict(
             self.state, assumptions={"reviewed": True, "items": []},
             regression={"changed_areas": ["主页"], "candidates": [{"id": "RG-01"}]})
-        self.assertFalse(check["verdict_allowed"])
+        self.assert_downgraded(check, "regression_gap")
         self.assertTrue(any("basis" in reason for reason in check["reasons"]))
 
     def test_full_declaration_allows_verdict(self):
@@ -961,6 +997,10 @@ class AssumptionAndRegressionGate(PhaseGateTestBase):
             regression={"changed_areas": ["主页整页替换"],
                         "candidates": [{"id": "RG-01", "basis": "旧会话列表渲染依赖主页配置"}]})
         self.assertTrue(check["verdict_allowed"], check["reasons"])
+        self.assertEqual(check["schema"], "phase-verdict-check/2")
+        self.assertIsNone(check["phase_ceiling"])
+        self.assertEqual(check["blocking_reasons"], [])
+        self.assertEqual(check["limitations"], [])
 
 
 class ExplorationGateWiringTests(PhaseGateTestBase):

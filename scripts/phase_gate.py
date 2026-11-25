@@ -1205,61 +1205,66 @@ def _routing_warnings(state):
     return warnings
 
 
-def _assumption_reasons(payload, structure_only=False):
-    """风险假设清算：假设必须逐条给出证伪动作与结果，未证伪的必须留成显式风险。
-
-    只有需求可疑点有机械门禁是不够的——「应该没问题」「暂不涉及」这类判断如果不需要
-    落成可证伪条目，就会一直停在文字里，既不验证也不登记缺口。空清单允许，但必须
-    显式声明 reviewed=true，避免"没写"与"没有"被混为一谈。
+def _assumption_reasons(payload, structure_only=False, hits=None):
+    """风险假设清算：空清单也要显式声明已审阅，result=open 只压上限不报错。
 
     structure_only=True 时只校验结构（字段齐备、result 取值合法），不因 result=open
     报错——那是「假设尚未证伪」的内容状态，允许提前登记，但会压结论上限。
+    hits 非 None 时逐条登记进 REASON_POLICY 归类（B1），文本原样保留。
     """
     if payload is None:
         if structure_only:
             return []
-        return ["未提供风险假设清算（check-verdict --assumptions）："
-                "无法区分「本来没有假设」与「没审」"]
+        return [_hit(hits, "assumptions_missing",
+                    "未提供风险假设清算（check-verdict --assumptions）："
+                    "无法区分「本来没有假设」与「没审」")]
     if not isinstance(payload, dict):
         raise ValueError("assumptions 必须为 JSON 对象")
     if payload.get("reviewed") is not True:
-        return ["风险假设清单未声明 reviewed=true：空数组不等于已审阅"]
+        return [_hit(hits, "assumptions_not_reviewed",
+                    "风险假设清单未声明 reviewed=true：空数组不等于已审阅")]
     items = payload.get("items")
     if not isinstance(items, list):
         raise ValueError("assumptions.items 必须为数组（无假设时给空数组）")
     reasons = []
     for index, item in enumerate(items):
         if not isinstance(item, dict):
-            reasons.append(f"assumptions.items[{index}] 不是对象")
+            reasons.append(_hit(hits, "assumptions_gap",
+                                f"assumptions.items[{index}] 不是对象"))
             continue
         missing = [k for k in ("id", "assumption", "basis", "falsify_action", "result")
                    if not str(item.get(k) or "").strip()]
         if missing:
-            reasons.append(f"assumptions.items[{index}] 缺 {'/'.join(missing)}")
+            reasons.append(_hit(hits, "assumptions_gap",
+                                f"assumptions.items[{index}] 缺 {'/'.join(missing)}"))
             continue
         result = item["result"]
         if result == "open":
             if structure_only:
                 continue
-            reasons.append(f"风险假设 {item['id']} 仍未证伪（result=open）：{item['assumption']}")
+            reasons.append(_hit(hits, "assumptions_gap",
+                                f"风险假设 {item['id']} 仍未证伪（result=open）：{item['assumption']}"))
         elif result not in {"confirmed", "refuted"}:
-            reasons.append(f"风险假设 {item['id']} 的 result 必须为 confirmed/refuted/open")
+            reasons.append(_hit(hits, "assumptions_gap",
+                                f"风险假设 {item['id']} 的 result 必须为 confirmed/refuted/open"))
     return reasons
 
 
-def _regression_reasons(payload, structure_only=False):
+def _regression_reasons(payload, structure_only=False, hits=None):
     """回归影响面：有变更就得有回归候选，或者写明为什么认为无影响。
 
     变更 → 依赖 → 旅程 → 用例这条链此前只存在于文档：不生成回归清单也能拿到"通过"。
 
     structure_only=True 时只校验结构（候选带依据），不因"有变更面却无候选"报错——
     那是内容缺口，允许提前登记，但会在裁决终检压结论上限。
+    hits 非 None 时逐条登记进 REASON_POLICY 归类（B1），文本原样保留。
     """
     if payload is None:
         if structure_only:
             return []
-        return ["未提供回归影响面结论（check-verdict --regression）："
-                "「本次改动是否破坏旧功能」没有机械要求"]
+        return [_hit(hits, "regression_missing",
+                    "未提供回归影响面结论（check-verdict --regression）："
+                    "「本次改动是否破坏旧功能」没有机械要求")]
     if not isinstance(payload, dict):
         raise ValueError("regression 必须为 JSON 对象")
     changed = payload.get("changed_areas", [])
@@ -1270,92 +1275,188 @@ def _regression_reasons(payload, structure_only=False):
     if changed and not candidates and not reason:
         if structure_only:
             return []
-        return [f"声明了 {len(changed)} 个变更面但回归候选为空，且未写 no_impact_reason："
-                "影响面未被评估"]
+        return [_hit(hits, "regression_gap",
+                    f"声明了 {len(changed)} 个变更面但回归候选为空，且未写 no_impact_reason："
+                    "影响面未被评估")]
     if changed and candidates:
         empty_basis = [str(c.get("id") or "?") for c in candidates
                        if not isinstance(c, dict) or not str(c.get("basis") or "").strip()]
         if empty_basis:
             # 候选缺依据是结构问题：两种口径下都阻断登记
-            return [f"回归候选缺依据（basis，指向依赖/旅程来源）：{empty_basis[:5]}"]
+            return [_hit(hits, "regression_gap",
+                         f"回归候选缺依据（basis，指向依赖/旅程来源）：{empty_basis[:5]}")]
     if not changed and not reason:
         if structure_only:
             return []
-        return ["未声明变更面（changed_areas 空）且未写 no_impact_reason"]
+        return [_hit(hits, "regression_gap",
+                    "未声明变更面（changed_areas 空）且未写 no_impact_reason")]
     return []
 
 
+REASON_POLICY_VERSION = "reason-policy/1"
+# 裁决结论的单一语义注册表（B1/F-04）：只登记 check_verdict 的**现有**判定来源，
+# 不新增判断条件。mode 决定缺口如何影响结论：
+#   block     —— 拒绝出具结论（verdict_allowed=False）：造假/越权/未批范围变更/阶段未完成/交接未消费；
+#   downgrade —— 允许出具结论但压上限（phase_ceiling 取最严）：缺证据/缺校验类缺口；
+#   disclose  —— 仅留痕不压档。
+# remedy 是该缺口的唯一补正文案来源：limitations[]、_pending_verdict_inputs 与文档接线共用，
+# 不再各处手写（B4 减法的收编落点）。
+REASON_POLICY = {
+    "phase_not_done": {"mode": "block", "needs_human": False,
+                       "remedy": "完成该阶段全部动作后执行 complete"},
+    "amendment_unapproved": {"mode": "block", "needs_human": True,
+                             "remedy": "由人工批准或驳回该范围变更修订申请（approve-amendment），先批后动"},
+    "handoff_unconsumed": {"mode": "block", "needs_human": True,
+                           "remedy": "结束本会话，新会话凭交接包确认文本 resume 后再推进"},
+    "same_session_approval": {"mode": "downgrade", "needs_human": True,
+                              "remedy": "按交接包停会话、换模型，新会话凭确认码重走该阶段放行"},
+    "attack_coverage_missing": {"mode": "downgrade", "needs_human": False,
+                                "remedy": "执行收尾补交 --attack-coverage <attack_coverage.json>"},
+    "attack_coverage_not_met": {"mode": "downgrade", "needs_human": False,
+                                "remedy": "按 attack_coverage.json 的 gaps 补探针后重新收尾，或 revise execute 更新结论"},
+    "exploration_missing": {"mode": "downgrade", "needs_human": False,
+                            "remedy": "执行收尾补交 --exploration <exploration.json>"},
+    "exploration_not_met": {"mode": "downgrade", "needs_human": False,
+                            "remedy": "按探索清单 gate 的 ready_pending/missing_views 补执行后重新收尾"},
+    "collection_unregistered": {"mode": "downgrade", "needs_human": False,
+                                "remedy": "新会话执行 revise execute --collection <records.jsonl> 补正"},
+    "collection_empty": {"mode": "downgrade", "needs_human": False,
+                         "remedy": "补实际采集记录后 revise execute --collection（空文件不算采集）"},
+    "collection_not_provided": {"mode": "downgrade", "needs_human": False,
+                                "remedy": "新会话执行 revise execute --collection <records.jsonl> 补正"},
+    "assumptions_missing": {"mode": "downgrade", "needs_human": False,
+                            "remedy": "补交 check-verdict --assumptions <assumptions.json>（空清单也须声明 reviewed）"},
+    "assumptions_not_reviewed": {"mode": "downgrade", "needs_human": False,
+                                 "remedy": "在 assumptions.json 声明 reviewed=true（空数组不等于已审阅）"},
+    "assumptions_gap": {"mode": "downgrade", "needs_human": False,
+                        "remedy": "按 limitations 中逐条假设完成证伪或修正字段后重交 --assumptions"},
+    "regression_missing": {"mode": "downgrade", "needs_human": False,
+                           "remedy": "补交 check-verdict --regression <regression.json>"},
+    "regression_gap": {"mode": "downgrade", "needs_human": False,
+                       "remedy": "补回归候选（带 basis）或写明 no_impact_reason 后重交 --regression"},
+    "routing_mismatch": {"mode": "downgrade", "needs_human": True,
+                         "remedy": "确认实际模型类别后执行 ack-routing 记录误配理由，并在报告范围限制中披露"},
+    "routing_undeclared": {"mode": "disclose", "needs_human": False,
+                           "remedy": "声明实际模型类别（--model-class）"},
+    "routing_acknowledged": {"mode": "disclose", "needs_human": False,
+                             "remedy": None},
+}
+
+
+def _hit(hits, code, message):
+    """登记判定来源并原样返回文本：reasons 全集文本不变，注册表只归类不新增条件。"""
+    if hits is not None:
+        hits.append((code, message))
+    return message
+
+
+def _hit_each(hits, code, messages):
+    """批量登记同一 code 下的多条来源文本（外部产物 reasons 的消费点）。"""
+    messages = list(messages)
+    if hits is not None:
+        hits.extend((code, m) for m in messages)
+    return messages
+
+
 def check_verdict(state, assumptions=None, regression=None):
-    """裁决前置检查：返回是否允许给技术结论，以及阶段层面的结论上限。"""
-    reasons, warnings = [], []
+    """裁决前置检查：返回是否允许给技术结论，以及阶段层面的结论上限。
+
+    B1 语义（phase-verdict-check/2）：verdict_allowed 仅由 block 档决定；
+    downgrade 档不拒绝出具结论，但 phase_ceiling 取最严（缺证据 → 待核实 +
+    limitations[].remedy 补正入口）。reasons 全集保留，旧消费者不受影响。
+    """
+    reasons, warnings, hits = [], [], []
     for phase in PHASES:
         status = state["phases"][phase]["status"]
         if status != "done":
-            reasons.append(f"{phase}（{PHASE_LABELS[phase]}）状态为 {status}，未完成")
+            reasons.append(_hit(hits, "phase_not_done",
+                                f"{phase}（{PHASE_LABELS[phase]}）状态为 {status}，未完成"))
     for amendment in state["amendments"]:
         # 只读观察不阻断裁决——它凭据齐备即可执行；
         # 未批准的范围变更（awaiting_approval）阻断，保留先批后动。
         # 判定走分类契约单一事实源，与 start/checkpoint/resume 及台账摘要同口径。
         if _AMD.is_blocking(amendment):
-            reasons.append(f"阶段修订申请 {amendment['id']} 未获批准"
-                           f"（分类：{amendment.get('kind') or 'scope_change'}）：{amendment['note']}")
+            reasons.append(_hit(hits, "amendment_unapproved",
+                                f"阶段修订申请 {amendment['id']} 未获批准"
+                                f"（分类：{amendment.get('kind') or 'scope_change'}）：{amendment['note']}"))
     # 同会话放行：无法换模型，也没有独立的“人看过交接包”环节
     same_session_phases = [phase for phase in PHASES
                            if ((state["phases"][phase].get("approval") or {}).get("mode")
                                == "same_session")]
     for phase in same_session_phases:
-        reasons.append(f"{phase}（{PHASE_LABELS[phase]}）为同会话放行：未跨会话交接，"
-                       "不满足「每阶段停止会话、新会话换模型续跑」的要求")
+        reasons.append(_hit(hits, "same_session_approval",
+                            f"{phase}（{PHASE_LABELS[phase]}）为同会话放行：未跨会话交接，"
+                            "不满足「每阶段停止会话、新会话换模型续跑」的要求"))
     if state.get("awaiting_session_for"):
-        reasons.append(f"交接未消费：阶段 {state['awaiting_session_for']} 仍等新会话 resume，"
-                       "本会话不得继续推进")
+        reasons.append(_hit(hits, "handoff_unconsumed",
+                            f"交接未消费：阶段 {state['awaiting_session_for']} 仍等新会话 resume，"
+                            "本会话不得继续推进"))
     # 攻击覆盖率：执行阶段必须交出机械结论，否则“铺得全”会当成“打得深”过门
     attack = (state["phases"].get("execute") or {}).get("attack_coverage") or {}
     if attack.get("state") != "provided":
-        reasons.append("execute 阶段未提供攻击覆盖结论（attack_coverage）："
-                       "无法区分“用例铺得全”与“攻击面打得深”，结论上限压待核实")
+        reasons.append(_hit(hits, "attack_coverage_missing",
+                            "execute 阶段未提供攻击覆盖结论（attack_coverage）："
+                            "无法区分“用例铺得全”与“攻击面打得深”，结论上限压待核实"))
     elif attack.get("ceiling") != "通过":
-        reasons.extend(attack.get("reasons") or ["攻击覆盖不达标，结论上限压待核实"])
+        reasons.extend(_hit_each(hits, "attack_coverage_not_met",
+                                 attack.get("reasons") or ["攻击覆盖不达标，结论上限压待核实"]))
     # 探索清单：SKILL 写成硬前置却长期没有检查点（DEV-1119-08）。缺失只告警不拒绝，
     # 但缺失与「做了且通过」必须在结论上可区分——否则规则仍是纸面的。
     explor = (state["phases"].get("execute") or {}).get("exploration") or {}
     if explor.get("state") != "provided":
-        reasons.append("execute 阶段未提供探索清单 gate 结论："
-                       "missing_views / mandatory_attributes / EXP-TRAV- 未经机械检查，"
-                       "已测类结论上限压待核实")
+        reasons.append(_hit(hits, "exploration_missing",
+                            "execute 阶段未提供探索清单 gate 结论："
+                            "missing_views / mandatory_attributes / EXP-TRAV- 未经机械检查，"
+                            "已测类结论上限压待核实"))
     elif explor.get("ceiling") != "通过":
-        reasons.extend(explor.get("reasons") or ["探索清单不达标，结论上限压待核实"])
+        reasons.extend(_hit_each(hits, "exploration_not_met",
+                                 explor.get("reasons") or ["探索清单不达标，结论上限压待核实"]))
     # 采集合规（v1.48.4）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
     # 不拒绝历史批次（旧状态文件没有该字段），但把缺口写进原因与上限。
     collection = (state["phases"].get("execute") or {}).get("collection")
     if collection is None:
-        reasons.append("execute 阶段未登记采集合规结论（旧批次状态文件，按原契约披露，"
-                       "本轮采集未经 scan-collection 校验）")
+        reasons.append(_hit(hits, "collection_unregistered",
+                            "execute 阶段未登记采集合规结论（旧批次状态文件，按原契约披露，"
+                            "本轮采集未经 scan-collection 校验）"))
     elif collection.get("state") == "empty":
-        reasons.append("execute 阶段收尾登记的采集记录为空（0 条）：采集未实际发生，"
-                       "裁决复核与「轨迹为准」缺少输入，结论上限压待核实")
+        reasons.append(_hit(hits, "collection_empty",
+                            "execute 阶段收尾登记的采集记录为空（0 条）：采集未实际发生，"
+                            "裁决复核与「轨迹为准」缺少输入，结论上限压待核实"))
     elif collection.get("state") != "provided":
-        reasons.append("execute 阶段收尾未提供采集记录（--collection）：采集事实未经校验，"
-                       "裁决复核与「轨迹为准」缺少输入，结论上限压待核实")
-    reasons.extend(_assumption_reasons(assumptions))
-    reasons.extend(_regression_reasons(regression))
+        reasons.append(_hit(hits, "collection_not_provided",
+                            "execute 阶段收尾未提供采集记录（--collection）：采集事实未经校验，"
+                            "裁决复核与「轨迹为准」缺少输入，结论上限压待核实"))
+    reasons.extend(_assumption_reasons(assumptions, hits=hits))
+    reasons.extend(_regression_reasons(regression, hits=hits))
     routing_warnings = _routing_warnings(state)
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
-        reasons.append("存在未确认的模型路由误配：阶段质量前提不成立，结论上限压待核实")
+        reasons.append(_hit(hits, "routing_mismatch",
+                            "存在未确认的模型路由误配：阶段质量前提不成立，结论上限压待核实"))
     # 未放行时至少压到「待核实」；若上游已算出更严的「不通过」，不得降级成待核实。
     ceiling = "待核实"
     if attack.get("ceiling") in CEILINGS:
         ceiling = _strictest(ceiling, attack["ceiling"])
     if explor.get("ceiling") in CEILINGS:
         ceiling = _strictest(ceiling, explor["ceiling"])
-    allowed = not reasons
+    # B1 归类（不新增判断条件）：block 档拒绝出具结论；downgrade 档允许出具但压上限。
+    blocking_reasons = [message for code, message in hits
+                        if REASON_POLICY[code]["mode"] == "block"]
+    limitations = [{"code": code, "message": message,
+                    "remedy": REASON_POLICY[code]["remedy"],
+                    "needs_human": REASON_POLICY[code]["needs_human"]}
+                   for code, message in hits
+                   if REASON_POLICY[code]["mode"] in ("block", "downgrade")]
+    allowed = not blocking_reasons
     return {
-        "schema": "phase-verdict-check/1",
+        "schema": "phase-verdict-check/2",
+        "policy_version": REASON_POLICY_VERSION,
         "task": state.get("task"),
         "verdict_allowed": allowed,
-        "phase_ceiling": None if allowed else ceiling,
+        "phase_ceiling": ceiling if (blocking_reasons or limitations) else None,
         "reasons": reasons,
+        "blocking_reasons": blocking_reasons,
+        "limitations": limitations,
         "warnings": warnings,
         "phases": {phase: {"label": PHASE_LABELS[phase],
                            "status": state["phases"][phase]["status"],
@@ -1633,7 +1734,7 @@ def main(argv=None):
     p = sub.add_parser("status", help="查看阶段状态与下一步动作")
     p.add_argument("state")
 
-    p = sub.add_parser("check-verdict", help="裁决前置检查（未通过则结论上限待核实）")
+    p = sub.add_parser("check-verdict", help="裁决前置检查：block 档拒绝出具结论（rc 1）；缺证据类缺口允许受限交付，结论上限压待核实并在 limitations 给补正入口")
     p.add_argument("state")
     p.add_argument("--assumptions",
                    help="风险假设清算 JSON（reviewed + items[id/assumption/basis/falsify_action/result]）")

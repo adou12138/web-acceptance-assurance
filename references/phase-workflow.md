@@ -166,7 +166,7 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
 
 **收尾消费**：`complete execute --collection <records.jsonl>` 把上述禁令接入执行阶段收尾——有违规即拒绝收尾（修正后再交）。三态口径：提供且合规记 `provided`；文件为空（0 条记录）记 `empty`，与 `not_provided` 同样在裁决终检压「待核实」并留痕（空清单不构成"已校验通过"）；收尾未提供记 `not_provided`，保留受限交付能力。旧批次状态文件无该字段时按原契约披露，不拒绝。
 
-**漏交的补正入口**：采集缺口会无条件阻断裁决（`check_verdict` 的 `allowed=not reasons`），而 `complete` 只能调一次——漏交必须能用 `revise execute --collection <records.jsonl>` 补登，否则是永久死路。补正走与 `complete` 同一套 `scan-collection` 校验（脏记录照拒、空文件照记 `empty`），只解除「采集未校验」这一条阻断，不改变 attack/exploration 各自算出的上限。交接包的 `pending_inputs` 会点名该缺口并给出补正命令。
+**漏交的补正入口**：采集缺口属 downgrade 档（B1 起允许受限交付、结论上限压「待核实」），而 `complete` 只能调一次——漏交必须能用 `revise execute --collection <records.jsonl>` 补登，否则补正无门。补正走与 `complete` 同一套 `scan-collection` 校验（脏记录照拒、空文件照记 `empty`），只解除「采集未校验」这一档缺口，不改变 attack/exploration 各自算出的上限。交接包的 `pending_inputs` 会点名该缺口并给出补正命令（`remedy` 文案与 `check-verdict` 输出的 `limitations[].remedy` 同源，单一注册表 `REASON_POLICY` 承担）。裁决语义口径（`phase-verdict-check/2`）：`verdict_allowed` 仅由 block 档决定（阶段未完成/未批范围变更/交接未消费）；缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）允许出具结论但上限压「待核实」，`blocking_reasons` 与 `limitations[]`（code/message/remedy/needs_human）分账呈现。
 
 ## 4. 阶段三纪律：只依据实际观察裁决
 
