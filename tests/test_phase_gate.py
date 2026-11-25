@@ -621,6 +621,27 @@ class CollectionClosureTests(PhaseGateTestBase):
             (self.handoff_dir / "handoff-execute.json").read_text(encoding="utf-8"))
         self.assertFalse(any("采集" in item for item in handoff["pending_inputs"]))
 
+    def test_pending_inputs_cover_legacy_state_without_collection_key(self):
+        """B2/F-06：旧批次状态文件没有 collection 键时，交接包同样点名并给 revise 补正命令。
+
+        v1.48.6 的 `is not None` 判断让旧状态文件逃过点名——下一会话开工即撞墙。
+        B2 改为「字段缺失或 state != provided」一视同仁；remedy 取 REASON_POLICY 单一来源。
+        """
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1")
+        self._finish_execute(collection=self.clean_collection_file())
+        del self.state["phases"]["execute"]["collection"]
+        pending = self.pg._pending_verdict_inputs(self.state)
+        self.assertTrue(any("采集" in item for item in pending), pending)
+        self.assertTrue(any("revise execute --collection" in item for item in pending))
+        # 补正后采集条目消失（assumptions/regression 本场景未登记，按既有语义保留）
+        self.pg.revise(self.state, "execute", collection=self.clean_collection_file(),
+                       note="补齐旧批次缺口", session=self.session_for("execute"))
+        pending = self.pg._pending_verdict_inputs(self.state)
+        self.assertFalse(any("采集" in item for item in pending), pending)
+
 
 class AdjudicationHonestyTests(PhaseGateTestBase):
     def valid(self, **overrides):
