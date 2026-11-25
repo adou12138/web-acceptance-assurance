@@ -891,13 +891,20 @@ def _pending_verdict_inputs(state):
                          for phase in PHASES)
         if not registered:
             pending.append(label)
-    # 采集缺口：execute 收尾未交/交了空清单会无条件阻断裁决（allowed=False），
-    # 补正入口是 revise --collection。交接包必须点名，否则下一会话开工即撞墙。
+    # 采集缺口：execute 收尾未交/交了空清单/旧状态文件无该字段，交接包都必须点名（B2/F-06）：
+    # 补正入口是 revise --collection，交接包不点名则下一会话开工即撞墙。
+    # pending_inputs 只影响交接包文本，不改 check-verdict 结论；remedy 取 REASON_POLICY 单一来源。
     execute_collection = (state["phases"].get("execute") or {}).get("collection")
-    if execute_collection is not None and execute_collection.get("state") != "provided":
-        pending.append("采集合规（revise execute --collection <records.jsonl>）："
-                       f"当前 state={execute_collection.get('state')}，"
-                       "未补正前裁决结论不允许给出")
+    if execute_collection is None or execute_collection.get("state") != "provided":
+        if execute_collection is None:
+            code = "collection_unregistered"
+            state_label = "旧批次状态文件未登记该字段"
+        else:
+            state_label = f"当前 state={execute_collection.get('state')}"
+            code = ("collection_empty" if execute_collection.get("state") == "empty"
+                    else "collection_not_provided")
+        pending.append(f"采集合规（{REASON_POLICY[code]['remedy']}）：{state_label}，"
+                       "未补正前裁决结论压待核实")
     return pending
 
 
