@@ -1161,6 +1161,15 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                                 "文件内容形如 {\"SURF-01\": \"不复打理由\"}"})
 
 
+    # v1.50 披露项：plan 有风险面却零 high，可能是整体定级下调以绕开高风险义务
+    # （可证伪预测、单一方法复打）。按既定口径「密度/配比只披露」，只留痕不压档。
+    if plan_risks and not required_surfaces:
+        notices.append({
+            "code": "high_risk_surface_absent",
+            "message": f"对抗 plan 登记了 {len(plan_risks)} 个风险面但没有任何 risk=high："
+                       "高风险面强制义务（可证伪预测 / 单一方法复打）本轮不会触发；"
+                       "若属整体定级下调，请在报告中说明定级依据（仅披露，不作压档依据）"})
+
     if not gaps and not (isinstance(residual_note, str) and residual_note.strip()) \
             and not isinstance(residual_note, (dict, list)):
         gaps.append({"code": "residual_note_missing",

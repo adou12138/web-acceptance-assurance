@@ -183,6 +183,10 @@ maxTurns: 100
 
 **交接路径约定**：评审与生成产物固定落 `<task>/`（`review-result.json` / `cases-<short>.json` / `batches.json` / 门禁报告）；跨跳引用一律用绝对路径；schema 以各 skill 契约文件为准，不手抄键名。
 
+**缺输入不得静默**：需求或被测对象明显需要某类材料而未提供（页面需求无设计稿、接口需求无契约、被测对象是 Agent 却未走专项），须登记 `source=req_issue` 的 ORC 并进评审待确认清单，写明缺什么、影响哪类判据；不得只让对应能力块静默不启动。规则见 `references/oracle-contract.md` 的「缺输入也是需求可疑点」。
+
+**有输入先盘点**：材料到手后先跑 `python scripts/input_inventory.py --inputs <文件或目录…> --out input-inventory.json`（可加 `--capabilities runtime-capabilities.json`，把「有材料但取不到」与「有材料但没用」分开），再在 execute 阶段 `phase_gate submit --inventory input-inventory.json` 登记。`unconsumed_input`（手里有材料却没消费）与 `declined_without_reason`（声明不用却没写理由）会压结论上限；未登记只在 warnings 披露。脚本只认 Figma URL/导出物、OpenAPI/Swagger、`.har` 三类，ShowDoc/Confluence 等登录态材料仍靠人工登记——不得因脚本没识别到就当作材料不存在。
+
 ### 执行归属（layer 五类）
 
 - `ui` / `component` / `integration` → 主体浏览器台账（`execution_ledger`，单写者）；
@@ -208,13 +212,17 @@ maxTurns: 100
 
 ## 批次结论门禁与反馈对账
 
-**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`failed_items` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）、`mandatory_attributes` 中安全/兼容/文案三类均为 `covered` 或 `not_applicable`；任一不满足，技术结论上限为待核实，不得写“通过”。三类必选属性用清单根 `attribute_rulings` 逐类裁定（`applicable`/`not_applicable`+理由/`blocked`），**整类不出现不等于不适用**，写法见 `references/exploration-runtime.md`。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。`failed_items` 非空时按缺陷必选性与闭环状态判为“不通过”或“待核实”，不得因其余视角通过而写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
+**门禁硬前置**：每个产出技术结论的批次，必须先跑 `scripts/exploration_state.py` 的 gate 摘要并核对：`ready_pending=0`、`missing_views` 为空、`failed_items` 为空、`traversal_recorded` 为真（清单含至少一条已记录的 `EXP-TRAV-` 控件遍历条目，约定见 `exploration-runtime.md` 的「控件遍历条目（EXP-TRAV-）」）、`mandatory_attributes` 中安全/兼容/文案/界面样式/交互易用性/基础无障碍六类均为 `covered` 或 `not_applicable`；任一不满足，技术结论上限为待核实，不得写“通过”。六类必选属性用清单根 `attribute_rulings` 逐类裁定（`applicable`/`not_applicable`+理由/`blocked`），**整类不出现不等于不适用**，写法见 `references/exploration-runtime.md`。`missing_views` 按**实测记录**（`executed_views`，仅 PASS/FAIL）计算，`SKIPPED`/`BLOCKED` 只在 `skipped_views` 留痕，**不计覆盖**；无实测的必查视角须补执行或写明不适用理由并保留缺口。`failed_items` 非空时按缺陷必选性与闭环状态判为“不通过”或“待核实”，不得因其余视角通过而写“通过”。从未生成 exploration.json 的批次不得给出已测类结论。
 
 **攻击面门禁（与探索门禁并列，不可替代）**：跑 `scripts/attack_coverage.py --ledger <台账> --plan <对抗 plan> --residual-note "<未破的攻击面>" --enforce`。压上限的是：`path_type`/`method` 缺失、全为 positive、`independent` 拿不出通道与证据、一条独立判据都没有、高风险风险面没有任何可证伪预测、结论将达「通过」却未声明未破攻击面、未提交 ATK（含提交为空）且未说明理由、假设空话不可核对（已 broken 的只披露）、高风险面单一方法且全部 held 既未复打也无理由、通过档残余声明仍是自由文本。**密度、方法多样性整体、计划外风险面、风险面关联率只作披露**（单一方法的 N6 例外见上一段）。——配额能被凑，构造凑不出来；计划外发现（`surfaces_beyond_plan`）计为产出，但须 `--amend-note` 纳入后续计划，否则发现会被丢掉。**路径类型不限于功能**：`ui_content`（界面与文案）、`usability`（操作逻辑）、`accessibility`（无障碍）、`data_consistency`（三通道对账）、`regression`（影响面回归）都是合法攻击维度，如实登记不得被压上限。字段要能被机械核对——`surf_id` 须与 plan 风险面清单一致、`oracle_source=independent` 须点名独立通道并带证据、`method` 须落方法库枚举，填一个占位字符不算做过。台账若为自建格式而无法被 `execution_ledger` 校验，报告中必须明写“未走台账门禁”并接受上限限制。**用例数与通过率不作为结论依据**。产物自带 `schema` 与 `tool_version`（判据口径版本，改判定 `verdict_ceiling`/`gaps` 的改动必须 +1）：同一份台账跨版本可能得到不同上限，归档引用时须写明是哪一版判的，`summary` 的首屏会把该版本带进攻击覆盖项的说明里——版本缺失即视为"跨版本重判差异无法归因"，不得当作风平浪静的通过。
+
+**独立专项须登记 high SURF**：声明本轮要做接口专项、figma 45 维还原或 Agent 专项时，必须在对抗 plan 里为该专项登记一条 `risk=high` 的 SURF 面（声明即重要性断言；不重要的应裁不适用/阻塞并写理由，不得标 medium 躲义务）。理由：这三类产物不在探索清单内，不登记 high 则 `attack_coverage` 的 `required_surfaces` 看不到它，"说了要做却没做"没有机械后果。规则见 `references/adversarial-testing.md` 的「独立专项的义务登记」。
 
 **风险假设与回归影响面（均为裁决前置，缺一压上限）**：风险假设写进 `assumptions.json`（`reviewed` + 每条 `assumption/basis/falsify_action/result`），空清单也要显式声明已审阅，`result=open` 的项必须复测或转成风险条目；回归影响面写进 `regression.json`（`changed_areas` + 带 `basis` 的候选，或 `no_impact_reason`），有变更却零候选同样压上限。两者由 `phase_gate.py check-verdict --assumptions --regression` 机械校验。
 
 **视角覆盖按页面×状态计数**：必查视角的“已覆盖”是指至少 2 个不同 `(page_url, state)` 单元，不是“有一条 PASS”。界面样式、易用性、无障碍已纳入必选属性——截一张首页图不能清空整个视角，整类不出现也不等于不适用。
+
+**测量证据与键盘遍历（schema 1.1）**：清单用 `schema_version: "1.1"` 时，视觉/无障碍的 PASS 必须挂结构化测量产物（`ui_measure.js` 记录或 `ui_metrics.py` 判定），且至少一条已记录的 `EXP-KBD-` 键盘遍历条目；缺失分别进 `gate.measurement_gaps` / `gate.keyboard_recorded=false` 并压待核实。理由是这两类信号量化仪器测不出、截图也证明不了「看过了」——「没升级」可能只是「没看」。测不了走 `not_evaluable`/BLOCKED 诚实出口，不伪造测量 JSON；纯接口批次裁 `accessibility=not_applicable` 后免键盘遍历。`1.0` 清单只披露不压档（旧批次兼容）。
 
 **反馈对账**：拿到外部反馈/缺陷列表时，先按“类别 → 落在哪个测试维度（positive/boundary/exception/permission/combo/ui_content/usability/accessibility/data_consistency/regression）”做对账表：每条反馈标注“本轮已覆盖（对应 TC/PATH）或未覆盖（归因：路径豁免/控件未盘点/模式未列）”；对账结果并入本批次设计决策——未覆盖高发区按 `methodology.md` 的「异常路径构造四问」「bug 高发模式补集」「支撑设施控件盘点」补设计，或按 `case-data-contract.md` 的 not_applicable 对象形态补举证。报告中呈现时按 `output-templates.md` 的「报告歧义对账」节输出。
 

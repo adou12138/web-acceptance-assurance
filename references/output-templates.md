@@ -69,6 +69,8 @@
 | 必查项状态 | `headline.required_checks[]` | 逐项列出（label/status/detail），状态三取值：通过 / 受限 / 缺失（均由台账事实机械判定，不设"未知"；detail 里写明「未单独提供、由三阶段闸门承担」的条目属通过，但该说明须原样保留） |
 | 限档原因 | `headline.limitation_reasons[]` | 逐条列出 code 与说明，一条不许省 |
 
+- **输入盘点与测量证据缺口也要上首屏**：`inventory_unconsumed`（材料在场但未登记处置）属限档原因，须逐条列出；探索 gate 的 `measurement_gaps`（视觉/无障碍 PASS 缺结构化测量产物）与 `keyboard_recorded=false`（缺 `EXP-KBD-` 键盘遍历）同样列入。三者不得被概括成「已做 UI 检查 / 材料已核对」——它们恰恰表示没做或没测。
+
 - `headline.completion_scope.can_claim_readonly_complete` 为 true 时**方可**写「只读范围内已完成」；为 false 时不得写——授权限制不能替代未完成的必查项。
 - **摘要缺 `headline` 字段**（旧摘要）时，首屏须显式标注「台账摘要缺首屏事实字段，限制因素由报告渲染器推断」，并按渲染器推断口径给出；不得静默按推断口径出首屏。
 - **限档原因的档位口径（B1，`phase-verdict-check/2`）**：缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）呈现为「结论上限压待核实 + 未覆盖范围 + 补正命令」——补正命令取 `check-verdict` 输出 `limitations[].remedy`，不另手写；只有 block 档（阶段未完成/未批范围变更/交接未消费）才呈现为「拒绝出具结论」（`blocking_reasons`）。两类在报告中分账，不得混写成一种。

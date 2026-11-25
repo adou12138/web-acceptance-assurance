@@ -79,6 +79,16 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 控件遍历是对本次需求触达的每个页面/弹窗做一次系统性控件清点（输入项、按钮、开关、链接、下拉），逐个记录可交互性与当前态，ID 使用 `EXP-TRAV-` 前缀以便门禁识别。属性用 `functional+visual+usability` 组合（遍历同时服务功能可用性、界面样式与交互易用性三个视角）。每个产出技术结论的批次，清单中必须至少有一条已记录（非 NOT_RUN）的遍历条目：没有时 `gate.traversal_recorded` 为假，`verdict_ceiling` 上限为待核实；仍为 NOT_RUN 的遍历条目数单列在 `gate.traversal_pending`。确无控件可遍历（如纯接口批次）时写一条 SKIPPED 遍历条目并给出原因，不静默缺席。遍历条目是观察记录，不替代逐控件断言用例，也不把“清点过”当作“测过”。
 
+## 键盘遍历条目（EXP-KBD-）
+
+量化仪器测不出「键盘走不通」与「焦点不可见」——这两类只能靠真的按 Tab。schema 1.1 清单要求至少一条 `EXP-KBD-` 条目（状态非 NOT_RUN），记录 Tab 顺序、焦点是否可见、有无焦点陷阱；缺失时 `gate.keyboard_recorded` 为假、上限压待核实。纯接口批次在 `attribute_rulings` 裁 `accessibility=not_applicable` 后可省略。schema 1.0 清单只披露、不压档（兼容旧批次）。
+
+## 测量证据（schema 1.1）
+
+视觉、无障碍的 PASS 不能只挂截图：截图既证明不了「测过」，也证明不了「没测到信号」——「没升级」可能只是「没看」。schema 1.1 清单要求这两类属性的 PASS 至少挂一份结构化测量产物（`ui_measure.js` 记录或 `ui_metrics.py` 判定，JSON 内含 `kind` / `viewport_width_px` / `scroll_width_px` 之一）；不足时 `gate.measurement_gaps` 列出条目 ID，上限压待核实。
+
+测不了的仍走既有诚实出口：背景为图片/渐变记 `not_evaluable` 转人工视觉通道，环境跑不了仪器记 BLOCKED 带理由——两者都不要求伪造测量 JSON。schema 1.0 清单只披露，不追溯压档。
+
 摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/executed_views/skipped_views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
 
 `gate.next_actions` 是把上述排序落成可执行的换路视图：`ordered`（可执行项，按风险→异常跟进→ID 排序——与 FAIL 条目同 case_id 的待执行项标记 `linked_fail` 并排前，把"发现异常后补测能区分解释的取值"提到普通待执行之前）、`recheck`（BLOCKED 条目及其复查条件）、`next_focus`（清单首项，执行遇阻时的显式切换目标）、`fail_candidates`。某条链路受阻（等待审核、环境不可达）时按 `next_focus` 切换，而不是空等或就地收尾；清单只呈现排序与依据，选择仍由专家负责并在台账留痕。

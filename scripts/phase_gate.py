@@ -306,8 +306,13 @@ def _prior_done(state, phase):
 
 
 def submit(state, phase, artifacts=None, model_class=None, model_name=None, note=None,
-           session=None):
-    """申请放行某阶段（由**上一阶段所在会话**在 checkpoint 前调用）。"""
+           session=None, inventory=None):
+    """申请放行某阶段（由**上一阶段所在会话**在 checkpoint 前调用）。
+
+    inventory：可选，`scripts/input_inventory.py` 的输出路径。登记后 check_verdict
+    才能核对「手里有材料却没消费」（unconsumed_input）与「声明不用却没理由」；
+    不传则该维度只在 warnings 披露，不参与压档。
+    """
     _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] not in {"pending", "rejected"}:
@@ -332,6 +337,24 @@ def submit(state, phase, artifacts=None, model_class=None, model_name=None, note
             raise ValueError(f"阶段 {phase} 的交接产物缺 {detail}："
                              "规划阶段的状态流转不能代替评审/用例/对抗 plan 三件产物")
     entry["artifacts"] = artifacts
+    # v1.50 输入盘点：传入则校验结构并登记 gaps；不传只留痕（旧批次零扰动）。
+    # 压档不在这里做——check_verdict 依 unconsumed_input 压上限。
+    if inventory is not None:
+        path = Path(inventory)
+        if not path.is_absolute() or not path.is_file():
+            raise ValueError(f"输入盘点不存在或不是绝对路径：{inventory}")
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict) or data.get("schema") != "input-inventory/1":
+            raise ValueError("输入盘点必须是 input-inventory/1 结构（用 scripts/input_inventory.py 生成）")
+        gaps = data.get("gaps")
+        if not isinstance(gaps, list) or any(not isinstance(g, dict) for g in gaps):
+            raise ValueError("输入盘点 gaps 必须为对象数组")
+        entry["inventory"] = {"state": "provided", "path": str(path.resolve()),
+                              "at": _now(), "gaps": gaps,
+                              "summary": data.get("summary") or {}}
+    else:
+        entry["inventory"] = {"state": "not_provided", "path": None, "at": _now(),
+                              "gaps": [], "summary": {}}
     entry["submitted_at"] = _now()
     entry["routing"] = {
         "declared_class": (_text(model_class, "model_class").lower() if model_class else None),
@@ -1424,6 +1447,12 @@ REASON_POLICY = {
                            "remedy": "声明实际模型类别（--model-class）"},
     "routing_acknowledged": {"mode": "disclose", "needs_human": False,
                              "remedy": None},
+    "inventory_unregistered": {"mode": "disclose", "needs_human": False,
+                               "remedy": "规划阶段补交 submit --inventory <inventory.json>（不传只披露，不压档）"},
+    "inventory_unconsumed": {"mode": "downgrade", "needs_human": False,
+                             "remedy": "为盘点中 unconsumed_input 的材料登记 consumed_by，或 declined+理由后重交 --inventory"},
+    "inventory_declined_without_reason": {"mode": "downgrade", "needs_human": False,
+                                          "remedy": "在 inputs.json 的 declined 项补 reason 后重跑 input_inventory.py"},
 }
 
 
@@ -1493,8 +1522,14 @@ def check_verdict(state, assumptions=None, regression=None):
                             "missing_views / mandatory_attributes / EXP-TRAV- 未经机械检查，"
                             "已测类结论上限压待核实"))
     elif explor.get("ceiling") != "通过":
+        # 优先用 gate 的 reasons；没有时回落到 message——否则测量证据/键盘遍历的
+        # 具体缺口会被默认文案吞掉，报告只剩「探索清单不达标」。
+        detail = explor.get("reasons")
+        message = str(explor.get("message") or "").strip()
+        if not detail and message:
+            detail = [message]
         reasons.extend(_hit_each(hits, "exploration_not_met",
-                                 explor.get("reasons") or ["探索清单不达标，结论上限压待核实"]))
+                                 detail or ["探索清单不达标，结论上限压待核实"]))
     # 采集合规（v1.48.4）：收尾未消费采集 = 采集事实未经结构校验，裁决无法按轨迹复核。
     # 不拒绝历史批次（旧状态文件没有该字段），但把缺口写进原因与上限。
     collection = (state["phases"].get("execute") or {}).get("collection")
@@ -1512,6 +1547,24 @@ def check_verdict(state, assumptions=None, regression=None):
                             "裁决复核与「轨迹为准」缺少输入，结论上限压待核实"))
     reasons.extend(_assumption_reasons(assumptions, hits=hits))
     reasons.extend(_regression_reasons(regression, hits=hits))
+    # 输入盘点（v1.50）：材料是否被消费。不传/旧状态只披露（零扰动）；
+    # unconsumed_input 是「有材料却静默不测」的入口，压待核实。
+    inventory = (state["phases"].get("execute") or {}).get("inventory")
+    if inventory is None or inventory.get("state") != "provided":
+        # disclose 走 warnings 而非 reasons：reasons↔limitations 一一对应的既有不变量
+        # 只容纳 block/downgrade 档，披露项不得混进去。
+        warnings.append({"code": "inventory_unregistered",
+                         "message": "规划→执行交接未登记输入盘点（--inventory）：材料是否被消费未经核对，仅披露"})
+    else:
+        for gap in inventory.get("gaps") or []:
+            code = str(gap.get("code") or "")
+            if code == "unconsumed_input":
+                reasons.append(_hit(hits, "inventory_unconsumed",
+                                    gap.get("message") or "输入材料未登记处置"))
+            elif code == "declined_without_reason":
+                reasons.append(_hit(hits, "inventory_declined_without_reason",
+                                    gap.get("message") or "declined 未写理由"))
+            # input_not_retrievable 属 dataMissing 口径，只在盘点和报告中披露
     routing_warnings = _routing_warnings(state)
     warnings.extend(routing_warnings)
     if any(w["code"] == "routing_mismatch" for w in routing_warnings):
@@ -1714,6 +1767,7 @@ def main(argv=None):
     p.add_argument("--model-name", help="实际模型名（留痕用）")
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
+    p.add_argument("--inventory", help="input-inventory/1（输入盘点，可选；不传只留痕）")
 
     p = sub.add_parser("checkpoint", help="阶段收尾：写交接包并要求结束本会话")
     p.add_argument("state")
@@ -1860,7 +1914,7 @@ def main(argv=None):
         state = load(args.state)
         if args.command == "submit":
             submit(state, args.phase, args.artifact, args.model_class, args.model_name,
-                   args.note, args.session)
+                   args.note, args.session, getattr(args, "inventory", None))
         elif args.command == "checkpoint":
             handoff_dir = (Path(args.handoff_dir) if args.handoff_dir
                            else Path(args.state).parent / "handoff")

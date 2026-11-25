@@ -156,6 +156,44 @@ def _evidence(paths, name):
     return result
 
 
+# v1.50 测量证据（schema 1.1）：视觉/无障碍的 PASS 不能只挂截图——截图证明不了
+# 「测过」，也证明不了「没测到信号」。必须至少一份结构化测量产物（ui_measure.js
+# 记录或 ui_metrics.py 判定），这样「没发现信号」才是「仪器跑过且没报到」，
+# 而不是「压根没测」。1.0 清单保持兼容，只披露不压档。
+MEASUREMENT_ATTRS = {"visual", "accessibility"}
+MEASUREMENT_KEYS = ("kind", "viewport_width_px", "scroll_width_px")
+SCHEMA_VERSIONS = ("1.0", "1.1")
+KEYBOARD_PREFIX = "EXP-KBD-"
+
+
+def _has_measurement_keys(node):
+    return isinstance(node, dict) and any(key in node for key in MEASUREMENT_KEYS)
+
+
+def _is_measurement_artifact(path):
+    """结构化测量产物判定：兼容单条记录与常见包裹（records/results/items/measurements）。
+
+    只认 JSON 且至少含一个测量字段；截图/文本一律不算——这是本条口径的全部意义。
+    """
+    p = Path(path)
+    if p.suffix.lower() != ".json":
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    if _has_measurement_keys(data):
+        return True
+    if isinstance(data, list):
+        return any(_has_measurement_keys(node) for node in data[:3])
+    if isinstance(data, dict):
+        for key in ("records", "results", "items", "measurements"):
+            seq = data.get(key)
+            if isinstance(seq, list) and any(_has_measurement_keys(node) for node in seq[:3]):
+                return True
+    return False
+
+
 def _acknowledged(row):
     """承认项（next_action + owner 齐备）才算出囗；缺字段的一律仍按待执行计。"""
     value = row.get("acknowledged_unexplored")
@@ -163,7 +201,8 @@ def _acknowledged(row):
             and bool(str(value.get("owner") or "").strip()))
 
 
-def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None):
+def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None,
+          measurement_gaps=None, strict=False):
     """按已提供清单计算执行门禁：未消费候选、必查视角覆盖不足、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
     SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
@@ -213,6 +252,9 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     traversal_items = [row for row in rows if str(row.get("id", "")).startswith("EXP-TRAV-")]
     traversal_pending = sum(1 for row in traversal_items if row["status"] == "NOT_RUN")
     traversal_recorded = bool([row for row in traversal_items if row["status"] != "NOT_RUN"])
+    keyboard_items = [row for row in rows if str(row.get("id", "")).startswith(KEYBOARD_PREFIX)]
+    keyboard_pending = sum(1 for row in keyboard_items if row["status"] == "NOT_RUN")
+    keyboard_recorded = bool([row for row in keyboard_items if row["status"] != "NOT_RUN"])
     failed = [row["id"] for row in rows if row["status"] == "FAIL"]
     # 必选义务（v3 G08）：副作用未决、必选质量属性被阻塞/未执行、必选页面未遍历，
     # 都不能因其余视角已有 PASS 而放行结论上限。非必选项仍只披露不阻断。
@@ -268,6 +310,16 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     elif not traversal_recorded:
         ceiling = "待核实"
         message = "清单中无控件遍历条目（EXP-TRAV- 前缀）：按 exploration-runtime.md 的控件遍历约定补充条目或写明不适用理由；技术结论上限为待核实"
+    elif (strict and not keyboard_recorded
+          and (rulings or {}).get("accessibility", {}).get("state") != "not_applicable"):
+        ceiling = "待核实"
+        message = ("schema 1.1 清单无键盘遍历条目（EXP-KBD- 前缀）：键盘走不通/焦点不可见"
+                   "无法由量化仪器测出，须按 Tab 走一遍主流程并记录焦点顺序；"
+                   "纯接口批次可在 attribute_rulings 裁 accessibility=not_applicable 后省略")
+    elif strict and measurement_gaps:
+        ceiling = "待核实"
+        message = ("视觉/无障碍 PASS 未挂结构化测量产物：" + "、".join(measurement_gaps[:6])
+                   + "（须挂 ui_measure.js 记录或 ui_metrics.py 判定；截图不能证明测过）")
     elif failed:
         ceiling = "待核实"
         message = f"存在{len(failed)}项FAIL条目：不得写“通过”，须按缺陷必选性与闭环状态判为“不通过”或“待核实”"
@@ -297,6 +349,9 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
                           for view, attrs in VIEWS.items()},
         "traversal_pending": traversal_pending,
         "traversal_recorded": traversal_recorded,
+        "keyboard_recorded": keyboard_recorded,
+        "keyboard_pending": keyboard_pending,
+        "measurement_gaps": list(measurement_gaps or []),
         "mandatory_attributes": mandatory_status,
         "verdict_ceiling": ceiling,
         "message": message,
@@ -349,10 +404,15 @@ def _next_actions(rows, gate, failed):
 
 
 def summarize(data):
-    """校验单份探索输入，返回当前进度、候选 ID、检查视角和带证据指纹的记录。"""
+    """校验单份探索输入，返回当前进度、候选 ID、检查视角和带证据指纹的记录。
+
+    schema_version=1.1 额外要求：视觉/无障碍 PASS 挂结构化测量产物、存在
+    EXP-KBD- 键盘遍历条目（纯接口批次以 accessibility=not_applicable 豁免）。
+    """
     _object(data, {"schema_version", "context", "items"}, {"attribute_rulings", "view_scope"}, "root")
-    if data["schema_version"] != "1.0":
-        raise ValueError("schema_version: 必须为字符串 1.0")
+    if data["schema_version"] not in SCHEMA_VERSIONS:
+        raise ValueError("schema_version: 必须为字符串 1.0 或 1.1（1.1 启用测量证据与键盘遍历校验）")
+    strict_measurement = data["schema_version"] == "1.1"
     rulings = data.get("attribute_rulings")
     if rulings is not None:
         if not isinstance(rulings, dict):
@@ -392,7 +452,7 @@ def summarize(data):
     origin = _origin(context["target_url"], "context.target_url")
     if not isinstance(data["items"], list):
         raise ValueError("items: 必须为数组")
-    rows, seen = [], set()
+    rows, seen, measurement_gaps = [], set(), []
     for number, item in enumerate(data["items"]):
         name = f"items[{number}]"
         _object(item, ITEM_FIELDS, ITEM_OPTIONAL, name)
@@ -439,10 +499,16 @@ def summarize(data):
             _text(item["blocked_reason"], name + ".blocked_reason")
         row = copy.deepcopy(item)
         row["evidence"] = _evidence(item["evidence_paths"], name + ".evidence_paths")
+        if (strict_measurement and item["status"] == "PASS"
+                and not str(item["id"]).startswith(KEYBOARD_PREFIX)
+                and set(item["attributes"]) & MEASUREMENT_ATTRS
+                and not any(_is_measurement_artifact(entry["path"]) for entry in row["evidence"])):
+            measurement_gaps.append(item["id"])
         rows.append(row)
     rows.sort(key=lambda row: (RISKS[row["risk"]], row["id"]))
     report = {
         "schema_version": "1.0",
+        "input_schema_version": data["schema_version"],
         "context": copy.deepcopy(context),
         "planned": len(rows),
         "counts": {status: sum(row["status"] == status for row in rows) for status in sorted(STATUSES)},
@@ -460,7 +526,8 @@ def summarize(data):
     }
     report["gate"] = _gate(rows, report["executed_views"],
                            {view: set(cells) for view, cells in report["executed_cells"].items()},
-                           data.get("attribute_rulings"), data.get("view_scope"))
+                           data.get("attribute_rulings"), data.get("view_scope"),
+                           measurement_gaps, strict_measurement)
     return report
 
 

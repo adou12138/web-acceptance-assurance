@@ -19,7 +19,7 @@
 5. **断言有效性验证**：关键结论做变异或已知故障挑战，证明"断言真的会报警"而不是"跑通了一次"：`scripts/assertion_mutation.py`（断言杀伤率，抽样由哈希决定）、`scripts/blind_eval.py`（独立盲测与 A/B 归档）。
 6. **三阶段换会话闸门**：plan（规划）→ execute（采集，只记不判）→ adjudicate（裁决）三阶段跨会话放行，机械状态机 `scripts/phase_gate.py`、协议见 `references/phase-workflow.md`；阶段间停会话、换模型、新会话凭确认码 `resume`，同会话放行结论上限压"待核实"；放行人不得为智能体身份。
 7. **影响面回归**：按有来源的依赖方向追踪多跳影响（`scripts/change_impact.py`），输出可解释回归候选；保留首败与波动口径，不以最新一条 PASS 覆盖未闭环失败。
-8. **发现能力工具箱**：包级 27 个脚本——探索清单与门禁（`scripts/exploration_state.py`）、攻击覆盖核算（`scripts/attack_coverage.py`）、对抗门禁（`scripts/adversarial_gate.py`）、成对组合（`scripts/pairwise.py`）、状态格点（`scripts/state_matrix.py`）、控件遍历（`scripts/control_traversal.py`）、文案一致性（`scripts/copy_consistency.py`）、UI 量化取数与核算（`scripts/ui_measure.js` + `scripts/ui_metrics.py`）、性能劣化矩阵（`scripts/perf_matrix.py`）、单文件 HTML 报告（`scripts/render_report_html.py`）、观察候选桥接（`scripts/observation_bridge.py`）、只读浏览器观察器（`scripts/browser_observer.js`）等；全部只做校验、派生与披露，不代判业务断言。
+8. **发现能力工具箱**：包级 28 个脚本——探索清单与门禁（`scripts/exploration_state.py`）、攻击覆盖核算（`scripts/attack_coverage.py`）、对抗门禁（`scripts/adversarial_gate.py`）、成对组合（`scripts/pairwise.py`）、状态格点（`scripts/state_matrix.py`）、控件遍历（`scripts/control_traversal.py`）、文案一致性（`scripts/copy_consistency.py`）、UI 量化取数与核算（`scripts/ui_measure.js` + `scripts/ui_metrics.py`）、输入盘点（`scripts/input_inventory.py`）、性能劣化矩阵（`scripts/perf_matrix.py`）、单文件 HTML 报告（`scripts/render_report_html.py`）、观察候选桥接（`scripts/observation_bridge.py`）、只读浏览器观察器（`scripts/browser_observer.js`）等；全部只做校验、派生与披露，不代判业务断言。
 9. **Web 专项**：界面样式、易用性、基础无障碍按规范实测（`references/visual-usability.md`、`references/a11y-audit.md`，对比度/目标尺寸/320px 重排等能算出数值的按公开规范判，不写"看起来正常"）；安全防护外部可验 12 项（`references/security-verification.md`）；业务坑点库 15 类（`references/business-pitfalls.md`）；检出维度全景见 `references/bug-detection-map.md`。
 
 ## 反模式与真实失败复盘
@@ -43,7 +43,7 @@
 
 ## 能力边界（双向）
 
-- **根目录 `scripts/` 的 27 个脚本不驱动浏览器**：校验器、门禁、台账、报告渲染均只做数据校验、派生与披露，不发起页面操作、不判定业务门禁。
+- **根目录 `scripts/` 的 28 个脚本不驱动浏览器**：校验器、门禁、台账、报告渲染均只做数据校验、派生与披露，不发起页面操作、不判定业务门禁。
 - **包内含执行器代码**：`skills/figma-ui-parity/scripts/node/*.cjs` 用 `playwright-core` 自起 Chromium（`browser.cjs` 的 `resolvePlaywright` + `stabilize.js` 的 `resolveChrome` + 固定 profile），`skills/api-test/scripts/*_runner.py` 用 stdlib `urllib` 发真实 HTTP 请求。
 - **缺的是驱动运行时**：`playwright-core`、Chrome 二进制、固定 profile、登录态与测试数据由宿主提供；缺能力时精确报告阻塞并给出恢复路径，不虚构实测。接口侧走 `http_contract` 通道，不受浏览器运行时影响。
 - 不安装工具、不配置外部账号；观察器与采集工具只提供观察或线索，不自动点击、不代判业务/权限/视觉缺陷；缺登录、环境、数据或工具时不虚构实测。
@@ -80,7 +80,7 @@
 - `references/source-comparison.md`：来源专家融合对照。
 - `references/route-prompts.json`：判路回归基线；`references/schemas/` 5 个 JSON Schema（adversarial-plan/events/scenarios、challenge-results、finding-reviews）。
 
-**scripts/（27 项，产物→消费方）**：`case_data.py`（用例校验→case-generator 门禁）、`execution_ledger.py`（台账→attack_coverage/报告）、`phase_gate.py`（三阶段状态机→check-verdict/交接包）、`amendment_class.py`（修订分类→phase_gate/台账）、`attack_coverage.py`（攻击覆盖→check-verdict/报告 CSV）、`adversarial_data.py`（plan/场景校验→adversarial_gate）、`adversarial_gate.py`（对抗门禁→check-verdict）、`exploration_state.py`（探索清单+gate→observation_bridge/报告）、`observation_bridge.py`（观察候选→清单条目）、`browser_observer.js`（只读采集→observation_bridge）、`ui_measure.js`+`ui_metrics.py`（UI 量化→报告）、`pairwise.py`/`state_matrix.py`/`control_traversal.py`/`copy_consistency.py`（覆盖构造→清单条目）、`assertion_mutation.py`/`blind_eval.py`/`challenge_summary.py`/`finding_summary.py`（断言挑战与汇总→M1/E2 评测）、`change_impact.py`（影响追踪→回归候选）、`coverage_matrix.py`/`design_fingerprint.py`/`legacy_scan.py`/`eval_cases.py`（结构评分与基线）、`perf_matrix.py`（性能矩阵→报告）、`render_report_html.py`（HTML 呈现）、`runtime_probe.py` 与 `exploration_runner.py`（本版新增：运行时能力探测与批次编排）。
+**scripts/（28 项，产物→消费方）**：`case_data.py`（用例校验→case-generator 门禁）、`execution_ledger.py`（台账→attack_coverage/报告）、`phase_gate.py`（三阶段状态机→check-verdict/交接包）、`amendment_class.py`（修订分类→phase_gate/台账）、`attack_coverage.py`（攻击覆盖→check-verdict/报告 CSV）、`adversarial_data.py`（plan/场景校验→adversarial_gate）、`adversarial_gate.py`（对抗门禁→check-verdict）、`exploration_state.py`（探索清单+gate→observation_bridge/报告）、`input_inventory.py`（输入盘点→phase_gate 压档）、`observation_bridge.py`（观察候选→清单条目）、`browser_observer.js`（只读采集→observation_bridge）、`ui_measure.js`+`ui_metrics.py`（UI 量化→报告）、`pairwise.py`/`state_matrix.py`/`control_traversal.py`/`copy_consistency.py`（覆盖构造→清单条目）、`assertion_mutation.py`/`blind_eval.py`/`challenge_summary.py`/`finding_summary.py`（断言挑战与汇总→M1/E2 评测）、`change_impact.py`（影响追踪→回归候选）、`coverage_matrix.py`/`design_fingerprint.py`/`legacy_scan.py`/`eval_cases.py`（结构评分与基线）、`perf_matrix.py`（性能矩阵→报告）、`render_report_html.py`（HTML 呈现）、`runtime_probe.py` 与 `exploration_runner.py`（运行时能力探测与批次编排）。
 
 **skills/（4 个包内 skill）**：requirement-review（需求评审八维度）、case-generator（用例生成，cases JSON 唯一事实源）、api-test（接口专项，契约审查/冒烟/16 列问题单）、figma-ui-parity（页面还原 45 维）。
 

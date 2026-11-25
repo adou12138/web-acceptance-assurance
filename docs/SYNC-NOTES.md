@@ -1496,3 +1496,15 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **核对表回填（低）**：`consumer-checklist-v149.md` 六行 G1 复核列由「待复核」回填为复核结论 + grep/测试证据锚点（phase-verdict-check/2 三真实副本 / surface_path CSV / runtime 四产物 / handoff 诊断）。
 - **真实副本补测取证（关闭潜在风险）**：3 个真实旧状态副本（liheng-slider-20261124 / checkin-1037672-20261124 / online-signing-1037575-20261120）只读跑 `check_verdict`——均 `phase-verdict-check/2`、不崩、`ceiling=待核实`、B2 靶点 `pending_inputs` 点名采集缺口（`pending_has_collection=true`）；确认 check-verdict 分支纯读不写状态（`phase_gate.py:1904-1914`）。
 - **版本**：plugin.json 1.49.0→1.49.1（发布后缺陷修复 patch；全量 **928 tests OK**，此前报告 893 为 C2 阶段中途统计数，现更正为实测值）。
+
+### v1.50.0 · 覆盖下限与静默漏测整改（2026-11-25 执行闭环）
+
+- **P0 必选属性文档对齐**：agents 门禁硬前置由「安全/兼容/文案三类」改为六类（+界面样式/交互易用性/基础无障碍），与 `exploration_state.MANDATORY_ATTRIBUTES`、同文件 `:217`、`exploration-runtime.md` 四方一致；新增 `tests/test_v150_coverage_fixes.py` 守卫（中文名↔枚举映射比对，缺类即 fail）。此前按入口契约只裁三类，会把另外三类记 `undeclared` 压档，或误以为可不测——而这正是用户投诉最集中的三块。
+- **P1 缺输入转需求质疑**：`oracle-contract.md` 增「缺输入也是需求可疑点」——无设计稿/有接口需求无契约/被测对象是 Agent 却未走专项，须登记 `source=req_issue` ORC 并进评审待确认，不得让能力块静默不启动；agents 跳间约定同步。边界如实写：质疑发起属流程纪律，机械只覆盖登记后的闭环。
+- **P2 独立专项义务**：`adversarial-testing.md` 增「独立专项的义务登记」——声明要做接口专项/figma 45 维/Agent 专项，须在对抗 plan 登记 `risk=high` SURF（声明即重要性断言，不重要的应裁不适用并写理由，不得标 medium 躲义务）。补的正是 `exploration_runner.py` 自认的缺口：接口类条目不在探索清单、门控靠 Agent 的 `blocked_reason` 自觉。
+- **P3 输入盘点**：新增 `scripts/input_inventory.py`——识别 Figma URL/导出物、OpenAPI/Swagger 契约、`.har` 抓包，核对 `consumed_by` / `declined+理由`，并可读 `runtime-capabilities.json` 的 `design_data` 通道区分「有材料但取不到」（dataMissing 披露）与「有材料但没用」（`unconsumed_input`）。`phase_gate submit --inventory` 可选登记；`check-verdict` 对 `unconsumed_input` 压待核实，未传走 warnings 只披露（不破 reasons↔limitations 一一对应不变量）。
+- **P4 测量证据与键盘遍历（schema 1.1）**：`exploration.json` 支持 `schema_version=1.1`；视觉/无障碍 PASS 须挂结构化测量产物（JSON 含 `kind`/`viewport_width_px`/`scroll_width_px`），不足进 `gate.measurement_gaps`；新增 `EXP-KBD-` 键盘遍历条目，缺失 `gate.keyboard_recorded=false` 并压待核实（`accessibility=not_applicable` 可豁免）。`1.0` 清单只披露、不追溯压档。修的是「截图=测过」导致的升级信号自我封闭。
+- **P5 披露项**：`attack_coverage` 在 plan 有风险面但零 `high` 时输出 `high_risk_surface_absent`（仅披露不压档），防整体定级下调绕开高风险义务。
+- **审核修复（提交前同轮）**：① `_is_measurement_artifact` 兼容 `records/results/items/measurements` 包裹结构——`ui_measure.js`/`ui_metrics.py` 输出常为数组或包裹对象，原实现只认顶层字段会把合法证据判为不合格（假压档）；② `EXP-KBD-` 条目豁免结构化测量要求（键盘遍历证据本就是文本/截图，按原逻辑会被误压）；③ `phase_gate` 的 `exploration_not_met` 优先取 gate `message`，否则 `measurement_gaps`/键盘缺口会被默认文案吞掉、报告看不到具体缺哪些条目；④ `input_inventory` 对 >5MB 契约文件改用 64KB 前缀识别，避免大 OpenAPI 被漏判成 other（假阴性）；⑤ `agents` 补「有输入先盘点」接线——脚本此前无主文档调用入口，等于不会被执行；⑥ README 脚本计数 27→28 并补登记新脚本。
+- **已知未落地（如实披露）**：P4 第 3 层「升级信号未命中后的抽样复测」未实现（需新增压档点与 `ceiling_flag` 守卫，并改 `test_every_gating_reason_carries_matching_flag` 不变量），留待下一轮单列——当前 schema 1.1 只保证「升了级要带测量证据」，不保证「该升未升会被抽查」。
+- **版本**：plugin.json 1.49.1→1.50.0；本机全量 **948 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。

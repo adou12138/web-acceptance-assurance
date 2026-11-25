@@ -20,6 +20,16 @@
 - req_issue 候选 accepted 后归入**需求问题清单**（关联 REQ-，走需求问题分账），不建产品 BUG-；若实现同时违背了其它已确认规则（REQ/AC/contract/invariant 判据），另行走正常产品候选流程，两账不混；
 - 需求可疑点未澄清前，相关功能点的"通过"结论保持"待业务确认"标注，不以需求原文单方判定。
 
+**缺输入也是需求可疑点**：需求或被测对象明显需要某类材料而实际未提供时，不得只让对应能力块静默不启动，须登记 `source=req_issue` 的 ORC 并进需求评审的待确认清单：
+
+- 页面需求但未给设计稿 → "还原度无验收基准"，可走页面 UI 走查但不得写"还原度"；
+- 有接口需求但未给契约文件/接口清单 → "契约不可审查、契约驱动与 M2/M3 无法建立"；
+- 被测对象本身是对话式 Agent/助手但未走 Agent 专项 → "多轮、审批、澄清与副作用路径未按专项口径覆盖"。
+
+这类条目属"需求问题候选"，不是产品缺陷；若同一功能另有已确认规则被违背，另行走正常产品候选流程。质疑须带可核对的事项（缺什么材料、影响哪类判据），不接受一句笼统抱怨。
+
+边界：`scripts/input_inventory.py` 只能机械识别 Figma URL/导出物、OpenAPI/Swagger 结构、`.har` 抓包；ShowDoc、Confluence 等需登录或纯 Markdown 契约仍靠评审阶段人工登记，不得因为脚本没识别到就当作材料不存在。
+
 ### ADV（对抗义务条目）
 
 每个待执行探针登记一条义务：必须关联至少一条 SURF（surface_ref）与一条 ORC（oracle_ref）、探针类型（probe_type：challenge / fault_injection / timing / permission）、预算（budget，探针数/时间盒/副作用配额任一口径）与状态（status：planned / executed / cancelled）。状态只能由主会话按事实更新；executed 必须有对应 EVT 事件佐证（见 `finding-triage.md`）。
