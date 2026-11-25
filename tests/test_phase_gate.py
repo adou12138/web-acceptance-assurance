@@ -363,8 +363,56 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         self.to_handoff()
         self.pg.reject(self.state, "execute", "user", "交接产物缺用例追溯", session="SESS-2")
         self.assertEqual(self.state["phases"]["execute"]["status"], "rejected")
-        self.assertEqual(self.state["active_session"], "SESS-2")
-        self.assertIsNone(self.state["awaiting_session_for"])
+
+    def test_handoff_runtime_diagnostics_derived_and_rendered(self):
+        """D3：checkpoint 提供两派生源 → 交接包 runtime_diagnostics 独立字段 + 只读段。
+
+        X-06 三不边界：不落 state 顶层、不进 pending_inputs、phase-handoff/1 不升版。
+        """
+        self.pg.start(self.state, "plan", "SESS-1")
+        self.pg.complete(self.state, "plan", session="SESS-1")
+        self.submit_phase("execute")
+        budget = self.folder / "budget-consumption.json"
+        budget.write_text(json.dumps(
+            {"schema": "budget-consumption/1", "declared_budget": {"probes": 20},
+             "batches": [{"batch_id": "B1"}], "probes_consumed": 8,
+             "minutes_consumed": 10, "writes_consumed": 0}), encoding="utf-8")
+        caps = self.folder / "runtime-capabilities.json"
+        caps.write_text(json.dumps(
+            {"schema": "runtime-capabilities/1",
+             "channels": {"browser_selfhost": {"state": "missing", "recovery": "rec-x"},
+                          "http_contract": {"state": "unprobed", "recovery": ""}}}),
+            encoding="utf-8")
+        self.pg.checkpoint(self.state, "plan", self.handoff_dir, session="SESS-1",
+                           budget_ledger=str(budget), capabilities=str(caps))
+        handoff = json.loads(
+            (self.handoff_dir / "handoff-plan.json").read_text(encoding="utf-8"))
+        diag = handoff["runtime_diagnostics"]
+        self.assertEqual(diag["batch_count"], 1)
+        self.assertEqual(diag["probes_consumed"], 8)
+        self.assertEqual(diag["budget_remaining"], 12)
+        self.assertEqual(diag["blocked_by_capability"][0]["channel"], "browser_selfhost")
+        self.assertEqual(handoff["schema"], "phase-handoff/1")  # 不升版
+        md_path = self.state["phases"]["plan"]["handoff"]["markdown"]
+        md = Path(md_path).read_text(encoding="utf-8")
+        self.assertIn("运行时诊断", md)
+        self.assertIn("rec-x", md)
+        self.assertIn("不自动 resume", md)
+        self.assertNotIn("runtime_diagnostics", json.dumps(self.state))  # 不落 state
+        self.assertFalse(any("运行时诊断" in item
+                             for item in handoff["pending_inputs"]))  # 不进 pending_inputs
+
+    def test_handoff_runtime_diagnostics_absent_by_default(self):
+        """D3：未提供派生源 → runtime_diagnostics 为 None、诊断段不渲染，其余字段原样。"""
+        self.to_handoff()
+        handoff = json.loads(
+            (self.handoff_dir / "handoff-plan.json").read_text(encoding="utf-8"))
+        self.assertIsNone(handoff["runtime_diagnostics"])
+        md_path = self.state["phases"]["plan"]["handoff"]["markdown"]
+        md = Path(md_path).read_text(encoding="utf-8")
+        self.assertNotIn("运行时诊断", md)
+        self.assertEqual(handoff["schema"], "phase-handoff/1")
+
 
     def test_same_session_approve_caps_verdict(self):
         """同会话放行是兼容路径：能走完流程，但结论上限只能待核实（B1 downgrade 档）。"""

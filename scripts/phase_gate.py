@@ -922,8 +922,55 @@ def _pending_verdict_inputs(state):
     return pending
 
 
-def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=None):
+def _load_json_or_none(path):
+    """读 JSON 文件；路径为空/不存在/解析失败一律 None（D3 诊断是可选项，
+    不因附属文件缺失阻塞收尾）。"""
+    if not path:
+        return None
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"[warn] runtime_diagnostics 附属文件不可读（{path}）：{type(exc).__name__}",
+              file=sys.stderr)
+        return None
+
+
+def _runtime_diagnostics(budget_ledger, capabilities):
+    """D3：从 budget-consumption.json + runtime-capabilities.json **派生、可重建**的
+    诊断字段（batch_count / probes_consumed / budget_remaining / blocked_by_capability）。
+
+    X-06 边界：不落 state 顶层（_state_digest body 不含它，手工改写不受 verify_chain
+    保护是已知盲区）、不进 pending_inputs（诊断不是"必须补齐才能裁决"的前置缺口）。
+    交接包 handoff 是宽松 dict，旧消费者只断言 token/consumed/pending_inputs——
+    新增独立字段不升 phase-handoff/1 版本。两文件缺省时返回 None（该段不渲染）。"""
+    diag = {}
+    if budget_ledger:
+        budget = budget_ledger.get("declared_budget") or {}
+        consumed = budget_ledger.get("probes_consumed") or 0
+        limit = budget.get("probes")
+        diag["batch_count"] = len(budget_ledger.get("batches") or [])
+        diag["probes_consumed"] = consumed
+        diag["budget_remaining"] = ((limit - consumed)
+                                    if isinstance(limit, (int, float)) else None)
+        diag["minutes_consumed"] = budget_ledger.get("minutes_consumed") or 0
+        diag["writes_consumed"] = budget_ledger.get("writes_consumed") or 0
+    if capabilities:
+        blocked = [{"channel": name, "state": (entry or {}).get("state"),
+                    "recovery": (entry or {}).get("recovery")}
+                   for name, entry in (capabilities.get("channels") or {}).items()
+                   if (entry or {}).get("state") == "missing"]
+        if blocked:
+            diag["blocked_by_capability"] = blocked
+    return diag or None
+
+
+def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=None,
+               budget_ledger=None, capabilities=None):
     """阶段收尾：写交接包并停在 awaiting_new_session——**本会话到此结束**。
+
+    D3：budget_ledger / capabilities 为两个 JSON 路径（可选）；提供时派生
+    runtime_diagnostics 独立字段进交接包（不落 state、不进 pending_inputs）。
+
 
     这是“每阶段停止会话、换会话换模型”的机械落点：
     - 必须先把下一阶段 submit 好（最后一阶段除外），否则交接包没有明确的下一步；
@@ -976,6 +1023,9 @@ def checkpoint(state, phase, handoff_dir, note=None, artifacts=None, session=Non
                            f"--session <新会话标识> --user-confirm \"<粘贴确认文本>\" "
                            f"--model-class {ROUTING[nxt]['model_class']}"
                            if nxt else None),
+        # D3：独立诊断字段（派生可重建；不落 state 顶层、不进 pending_inputs——X-06）
+        "runtime_diagnostics": _runtime_diagnostics(
+            _load_json_or_none(budget_ledger), _load_json_or_none(capabilities)),
     }
     md_path = handoff_dir / HANDOFF_FILE.format(phase=phase)
     json_path = handoff_dir / HANDOFF_JSON.format(phase=phase)
@@ -1019,6 +1069,17 @@ def _render_handoff_md(handoff):
         lines += ["", "## 下一阶段需提交的前置清单", "",
                   "裁决终检会索要以下输入，本阶段尚未登记；下一会话须先补齐再给技术结论：", ""]
         lines += [f"- {item}" for item in pending_inputs]
+    # D3：runtime_diagnostics 只读呈现段——派生可重建，缺字段不渲染（旧交接包兼容）；
+    # 不进 pending_inputs（诊断不是裁决前置缺口——X-06），不影响结论判定。
+    diag = handoff.get("runtime_diagnostics")
+    if diag:
+        lines += ["", "## 运行时诊断（派生自 budget-consumption + runtime-capabilities，可重建）", "",
+                  f"- 批次数：{diag.get('batch_count', 0)}；探针消耗：{diag.get('probes_consumed', 0)}"
+                  f"；剩余探针预算：{diag.get('budget_remaining') if diag.get('budget_remaining') is not None else '未声明'}",
+                  f"- 时长消耗：{diag.get('minutes_consumed', 0)} 分钟；写入次数：{diag.get('writes_consumed', 0)}"]
+        for item in diag.get("blocked_by_capability") or []:
+            lines.append(f"- 能力阻塞：`{item['channel']}`（{item['state']}）→ {item['recovery']}")
+        lines.append("- 以上为只读呈现，不是待补前置；不自动 resume、不自动放行")
     if handoff.get("note"):
         lines += ["", "## 交接说明", "", handoff["note"]]
     lines += [
@@ -1661,6 +1722,10 @@ def main(argv=None):
     p.add_argument("--artifact", action="append", default=None)
     p.add_argument("--note")
     p.add_argument("--session", help="本会话标识")
+    p.add_argument("--budget-ledger", dest="budget_ledger",
+                   help="budget-consumption.json 路径（D3 运行时诊断派生源，可选）")
+    p.add_argument("--capabilities",
+                   help="runtime-capabilities.json 路径（D3 运行时诊断派生源，可选）")
 
     p = sub.add_parser("resume", help="新会话续跑：凭用户粘贴的确认文本放行下一阶段")
     p.add_argument("state")
@@ -1800,7 +1865,9 @@ def main(argv=None):
             handoff_dir = (Path(args.handoff_dir) if args.handoff_dir
                            else Path(args.state).parent / "handoff")
             handoff_dir.mkdir(parents=True, exist_ok=True)
-            checkpoint(state, args.phase, handoff_dir, args.note, args.artifact, args.session)
+            checkpoint(state, args.phase, handoff_dir, args.note, args.artifact, args.session,
+                       budget_ledger=getattr(args, "budget_ledger", None),
+                       capabilities=getattr(args, "capabilities", None))
         elif args.command == "resume":
             resume(state, args.phase, args.session, args.user_confirm, args.model_class,
                    args.model_name, args.note)
