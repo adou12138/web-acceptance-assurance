@@ -1506,5 +1506,15 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **P4 测量证据与键盘遍历（schema 1.1）**：`exploration.json` 支持 `schema_version=1.1`；视觉/无障碍 PASS 须挂结构化测量产物（JSON 含 `kind`/`viewport_width_px`/`scroll_width_px`），不足进 `gate.measurement_gaps`；新增 `EXP-KBD-` 键盘遍历条目，缺失 `gate.keyboard_recorded=false` 并压待核实（`accessibility=not_applicable` 可豁免）。`1.0` 清单只披露、不追溯压档。修的是「截图=测过」导致的升级信号自我封闭。
 - **P5 披露项**：`attack_coverage` 在 plan 有风险面但零 `high` 时输出 `high_risk_surface_absent`（仅披露不压档），防整体定级下调绕开高风险义务。
 - **审核修复（提交前同轮）**：① `_is_measurement_artifact` 兼容 `records/results/items/measurements` 包裹结构——`ui_measure.js`/`ui_metrics.py` 输出常为数组或包裹对象，原实现只认顶层字段会把合法证据判为不合格（假压档）；② `EXP-KBD-` 条目豁免结构化测量要求（键盘遍历证据本就是文本/截图，按原逻辑会被误压）；③ `phase_gate` 的 `exploration_not_met` 优先取 gate `message`，否则 `measurement_gaps`/键盘缺口会被默认文案吞掉、报告看不到具体缺哪些条目；④ `input_inventory` 对 >5MB 契约文件改用 64KB 前缀识别，避免大 OpenAPI 被漏判成 other（假阴性）；⑤ `agents` 补「有输入先盘点」接线——脚本此前无主文档调用入口，等于不会被执行；⑥ README 脚本计数 27→28 并补登记新脚本。
-- **已知未落地（如实披露）**：P4 第 3 层「升级信号未命中后的抽样复测」未实现（需新增压档点与 `ceiling_flag` 守卫，并改 `test_every_gating_reason_carries_matching_flag` 不变量），留待下一轮单列——当前 schema 1.1 只保证「升了级要带测量证据」，不保证「该升未升会被抽查」。
+- **已知未落地（如实披露）**：P4 第 3 层「升级信号未命中后的抽样复测」未实现（需新增压档点与 `ceiling_flag` 守卫，并改 `test_every_gating_reason_carries_matching_flag` 不变量），留待下一轮单列——当前 schema 1.1 只保证「升了级要带测量证据」，不保证「该升未升会被抽查」。（**v1.51.0 已补，见下节**）
 - **版本**：plugin.json 1.49.1→1.50.0；本机全量 **948 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
+
+### v1.51.0 · P4 第 3 层：升级信号抽样复测（EXP-SIG-）
+
+- **问题**：升级 figma 只由「主体走查命中六类信号」触发。走得越粗，信号越不会出现；信号不出现就不升级，不升级就不用细看——自我闭封闭。产物上「检查后确认无需升级」与「压根没检查」完全无法区分，这是 v1.50 唯一未收口的口子。
+- **机制**：`exploration_state` 新增 `_signal_probe`。抽样池为本批次的页面×状态单元（仅含 visual/usability/accessibility 属性的条目，`EXP-SIG-` 自身排除以防自证）。无 figma 回写痕迹时，按 `sha256(站点 + 页面|状态)` 排序取前 `SIGNAL_SAMPLE_SIZE=2` 个作为必测样本——同站点同清单恒定，改清单顺序不换样本，主体不能自选。
+- **覆盖判定**：`EXP-SIG-` 条目状态 PASS/FAIL、`page_url|state` 命中抽样单元、且写了 `falsify_action`（"什么动作会让信号出现"，防纯 PASS 套话）才计覆盖；`observation` 要求写明六类信号逐条结论（人复核，不做字符串匹配以免逼出套话）。
+- **压档与免测**：`gate.signal_probe.missing` 非空且 schema 1.1 时上限压待核实，message 点名抽样单元与抽样依据。免测两条：`reason=deep_upgrade_recorded`（已有 `figma-ui-parity:7.` 回写，细查义务被升级吸收）、`reason=no_page_units`（纯接口批次）。schema 1.0 输出 `enforced=false`，只披露不追溯压档。
+- **接线**：`agents` 在「测量证据与键盘遍历」后补「未命中信号也要留复测痕迹」；`exploration-runtime.md` 新增「升级信号抽样复测（EXP-SIG-）」一节；`output-templates.md` 首屏限档项由三项扩到四项（增 `signal_probe.missing`），明确禁止概括成「已确认无需升级」。
+- **测试**：`tests/test_v150_coverage_fixes.py` 增 `SignalProbeTest` 6 例（缺复测压档、补条目闭合、figma 痕迹免测、纯接口免测、1.0 只披露、抽样与顺序无关）。
+- **版本**：plugin.json 1.50.0→1.51.0；本机全量 **963 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。

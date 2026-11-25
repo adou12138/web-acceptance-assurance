@@ -69,7 +69,7 @@
 | 必查项状态 | `headline.required_checks[]` | 逐项列出（label/status/detail），状态三取值：通过 / 受限 / 缺失（均由台账事实机械判定，不设"未知"；detail 里写明「未单独提供、由三阶段闸门承担」的条目属通过，但该说明须原样保留） |
 | 限档原因 | `headline.limitation_reasons[]` | 逐条列出 code 与说明，一条不许省 |
 
-- **输入盘点与测量证据缺口也要上首屏**：`inventory_unconsumed`（材料在场但未登记处置）属限档原因，须逐条列出；探索 gate 的 `measurement_gaps`（视觉/无障碍 PASS 缺结构化测量产物）与 `keyboard_recorded=false`（缺 `EXP-KBD-` 键盘遍历）同样列入。三者不得被概括成「已做 UI 检查 / 材料已核对」——它们恰恰表示没做或没测。
+- **输入盘点与测量证据缺口也要上首屏**：`inventory_unconsumed`（材料在场但未登记处置）属限档原因，须逐条列出；探索 gate 的 `measurement_gaps`（视觉/无障碍 PASS 缺结构化测量产物）、`keyboard_recorded=false`（缺 `EXP-KBD-` 键盘遍历）与 `signal_probe.missing`（未命中升级信号却无 `EXP-SIG-` 抽样复测覆盖）同样列入。四者不得被概括成「已做 UI 检查 / 材料已核对 / 已确认无需升级」——它们恰恰表示没做、没测或没看。
 
 - `headline.completion_scope.can_claim_readonly_complete` 为 true 时**方可**写「只读范围内已完成」；为 false 时不得写——授权限制不能替代未完成的必查项。
 - **摘要缺 `headline` 字段**（旧摘要）时，首屏须显式标注「台账摘要缺首屏事实字段，限制因素由报告渲染器推断」，并按渲染器推断口径给出；不得静默按推断口径出首屏。

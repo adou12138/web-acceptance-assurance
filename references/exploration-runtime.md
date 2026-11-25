@@ -89,6 +89,16 @@ python scripts/exploration_state.py <本轮exploration.json> --output <新的检
 
 测不了的仍走既有诚实出口：背景为图片/渐变记 `not_evaluable` 转人工视觉通道，环境跑不了仪器记 BLOCKED 带理由——两者都不要求伪造测量 JSON。schema 1.0 清单只披露，不追溯压档。
 
+## 升级信号抽样复测（EXP-SIG-）
+
+主体五视角走查只在命中六类信号（键盘走不通、对比度不足、焦点不可见、CLS 异常、首响 ≥2000ms、断点溢出）时才升级 figma 页面侧链路。问题在「一个都没命中」与「压根没看」在产物上完全一样：走得越粗，信号越不会出现，于是越不需要细看——不升级成了自我实现的结论，「检查后无需升级」与「没检查」无法区分。
+
+schema 1.1 给「没有升级」加一个机械前提：本批次只要有界面/易用/无障碍条目（即存在页面×状态单元），且清单里没有任何 `figma-ui-parity:7.` 回写条目（PASS/FAIL 的 observation 前缀），就必须对抽样单元各留一条 `EXP-SIG-` 条目。抽样由脚本定：按 `sha256(站点 + 页面|状态)` 排序取前 2 个（不足 2 个则全取）——同一站点同一份清单永远抽到同一批，主体挑不掉好测的单元，改清单顺序也不换样本。抽样池只含普通页面条目：`EXP-TRAV-`（控件遍历）、`EXP-KBD-`（键盘遍历）与 `EXP-SIG-` 自身都排除——前两者本身已是「细看」痕迹，留在池里会让同一单元被重复要求两遍。
+
+复测条目的要求：状态 PASS/FAIL、带证据、**必须写 `falsify_action`**（说明什么动作会让信号出现），`observation` 写明六类信号逐条结论（键盘/对比度/焦点可见/CLS/首响/断点）。抽样单元未被覆盖时 `gate.signal_probe.missing` 列出缺口，上限压待核实；`required=false` 时 `reason` 说明免测依据。
+
+两条免测出口都不要求造假：**已升级**——存在 figma 7.xx 回写条目，细查义务已被升级吸收（`reason=deep_upgrade_recorded`）；**纯接口批次**——清单无界面/易用/无障碍条目（`reason=no_page_units`）。schema 1.0 清单只披露（`enforced=false`），不追溯压档。
+
 摘要含`planned/counts/ready/reproduction_candidates/needs_reconcile/views/executed_views/skipped_views/items/scope/gate`。ready仅为NOT_RUN、无阻塞且无待核对副作用的项，按风险再ID排序。FAIL列复现候选；所有有副作用待核对项单独列出。排序不基于完整站点知识，不是自动规划引擎，新增观察及风险仍由专家更新。
 
 `gate.next_actions` 是把上述排序落成可执行的换路视图：`ordered`（可执行项，按风险→异常跟进→ID 排序——与 FAIL 条目同 case_id 的待执行项标记 `linked_fail` 并排前，把"发现异常后补测能区分解释的取值"提到普通待执行之前）、`recheck`（BLOCKED 条目及其复查条件）、`next_focus`（清单首项，执行遇阻时的显式切换目标）、`fail_candidates`。某条链路受阻（等待审核、环境不可达）时按 `next_focus` 切换，而不是空等或就地收尾；清单只呈现排序与依据，选择仍由专家负责并在台账留痕。

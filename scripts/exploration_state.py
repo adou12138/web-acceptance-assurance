@@ -5,7 +5,7 @@ API：summarize(data) 严格校验并返回派生摘要；export_csv(data, outpu
 访问错误抛 OSError。CLI：python exploration_state.py input.json --output new.csv，
 成功向 stdout 输出 JSON 摘要，输入/工具错误向 stderr 输出原因并以 2 退出。
 
-输入根字段仅 schema_version="1.0"、context、items。context 必须含非空字符串
+输入根字段 schema_version("1.0"/"1.1")、context、items，可选 attribute_rulings/view_scope。context 必须含非空字符串
  target_url/application_version/environment。items 可为空；每项必须含 id、非空
  requirement_ids 字符串数组、page_url、role、viewport（如 1440x900 的非空描述）、
  state、action、risk(high/medium/low)、status(NOT_RUN/PASS/FAIL/BLOCKED/SKIPPED)、
@@ -164,6 +164,19 @@ MEASUREMENT_ATTRS = {"visual", "accessibility"}
 MEASUREMENT_KEYS = ("kind", "viewport_width_px", "scroll_width_px")
 SCHEMA_VERSIONS = ("1.0", "1.1")
 KEYBOARD_PREFIX = "EXP-KBD-"
+# v1.51 升级信号抽样复测（P4 第 3 层）：主体五视角走查命中六类信号（键盘走不通/
+# 对比度不足/焦点不可见/CLS/首响慢/断点溢出）才升级 figma；走查粗糙时"一个都没命中"
+# 与"压根没看"在产物上完全一样——不升级于是永远不需要细看，形成自我封闭。
+# 治法是给"没有升级"这个结论加机械前提：有页面的批次要么留下 figma 7.xx 回写痕迹
+# （已升级=已细查），要么对按站点哈希抽出的页面×状态单元各登记一条 EXP-SIG- 复测
+# 条目。抽样由脚本定，主体不能挑好测的单元。
+SIGNAL_PREFIX = "EXP-SIG-"
+SIGNAL_DEPTH_MARK = "figma-ui-parity:7."
+SIGNAL_SAMPLE_SIZE = 2
+PAGE_ATTRS = {"visual", "usability", "accessibility"}
+# 抽样池排除已属"细看"痕迹的条目：控件遍历与键盘遍历本身逐项记录过，
+# EXP-SIG- 又是复测产物——把它们留在池里会让同一单元被重复要求两遍。
+PROBE_EXEMPT_PREFIXES = (SIGNAL_PREFIX, KEYBOARD_PREFIX, "EXP-TRAV-")
 
 
 def _has_measurement_keys(node):
@@ -201,8 +214,45 @@ def _acknowledged(row):
             and bool(str(value.get("owner") or "").strip()))
 
 
+def _signal_probe(rows, salt, strict):
+    """升级信号的抽样复测登记：返回必测单元、已覆盖、缺口与免测理由。
+
+    抽样池是本批次的页面×状态单元（只取含界面/易用/无障碍属性的条目，EXP-SIG-
+    自身排除，避免一条复测条目自证通过）。抽样按 sha256(站点 + 单元) 排序取前
+    SIGNAL_SAMPLE_SIZE 个：同一站点同一份清单永远抽到同一批，主体改不掉。
+    命中阈值刻意低——只要求"抽中单元有 PASS/FAIL 且写了 falsify_action"，
+    不比对观察文案，避免逼出套话；六类信号逐条结论写在 observation 里由人复核。
+    """
+    page_units = sorted({f'{row["page_url"]}|{row["state"]}' for row in rows
+                         if set(row["attributes"]) & PAGE_ATTRS
+                         and not str(row["id"]).startswith(PROBE_EXEMPT_PREFIXES)})
+    deep = [row["id"] for row in rows
+            if row["status"] in {"PASS", "FAIL"} and SIGNAL_DEPTH_MARK in row["observation"]]
+    base = {"enforced": strict, "page_units": len(page_units),
+            "sampled": [], "covered": [], "missing": []}
+    if not page_units:
+        return dict(base, required=False, reason="no_page_units",
+                    detail="清单无界面/易用/无障碍条目，按纯接口批次处理，不要求信号复测")
+    if deep:
+        # 已有 figma 回写 = 已经细查过，复测义务被升级吸收
+        return dict(base, required=False, reason="deep_upgrade_recorded",
+                    deep_ids=deep,
+                    detail="已存在 figma 7.xx 回写条目，视为已完成深度检查，免抽样复测")
+    picked = sorted(page_units,
+                    key=lambda unit: hashlib.sha256(f"{salt}\x00{unit}".encode("utf-8")).hexdigest())[:SIGNAL_SAMPLE_SIZE]
+    covered = [unit for unit in picked
+               if any(f'{row["page_url"]}|{row["state"]}' == unit
+                      and row["status"] in {"PASS", "FAIL"}
+                      and str(row.get("falsify_action") or "").strip()
+                      for row in rows if str(row["id"]).startswith(SIGNAL_PREFIX))]
+    missing = [unit for unit in picked if unit not in covered]
+    return dict(base, required=True, reason="no_upgrade_trace", sampled=picked,
+                covered=covered, missing=missing, sample_size=len(picked),
+                detail="未命中升级信号且无 figma 回写痕迹：须对抽样单元各留一条 EXP-SIG- 复测条目")
+
+
 def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=None,
-          measurement_gaps=None, strict=False):
+          measurement_gaps=None, strict=False, target_url=None):
     """按已提供清单计算执行门禁：未消费候选、必查视角覆盖不足、缺控件遍历条目或存在 FAIL 时降低结论上限。
 
     SKIPPED / BLOCKED 属于"已留痕但未执行"，不能使必查视角计为已覆盖；
@@ -255,6 +305,7 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
     keyboard_items = [row for row in rows if str(row.get("id", "")).startswith(KEYBOARD_PREFIX)]
     keyboard_pending = sum(1 for row in keyboard_items if row["status"] == "NOT_RUN")
     keyboard_recorded = bool([row for row in keyboard_items if row["status"] != "NOT_RUN"])
+    probe = _signal_probe(rows, str(target_url or ""), strict)
     failed = [row["id"] for row in rows if row["status"] == "FAIL"]
     # 必选义务（v3 G08）：副作用未决、必选质量属性被阻塞/未执行、必选页面未遍历，
     # 都不能因其余视角已有 PASS 而放行结论上限。非必选项仍只披露不阻断。
@@ -320,6 +371,13 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         ceiling = "待核实"
         message = ("视觉/无障碍 PASS 未挂结构化测量产物：" + "、".join(measurement_gaps[:6])
                    + "（须挂 ui_measure.js 记录或 ui_metrics.py 判定；截图不能证明测过）")
+    elif strict and probe["missing"]:
+        ceiling = "待核实"
+        message = ("未命中升级信号却无抽样复测记录：" + "、".join(probe["missing"])
+                   + f"（从 {probe['page_units']} 个页面×状态单元按站点哈希抽 "
+                   f"{probe['sample_size']} 个，主体不可自选）；"
+                   "须对抽中单元各留一条 EXP-SIG- 复测条目（PASS/FAIL + falsify_action，"
+                   "observation 写明六类信号逐条结论），或留下 figma 7.xx 回写痕迹")
     elif failed:
         ceiling = "待核实"
         message = f"存在{len(failed)}项FAIL条目：不得写“通过”，须按缺陷必选性与闭环状态判为“不通过”或“待核实”"
@@ -352,6 +410,7 @@ def _gate(rows, executed_views, executed_cells=None, rulings=None, view_scope=No
         "keyboard_recorded": keyboard_recorded,
         "keyboard_pending": keyboard_pending,
         "measurement_gaps": list(measurement_gaps or []),
+        "signal_probe": probe,
         "mandatory_attributes": mandatory_status,
         "verdict_ceiling": ceiling,
         "message": message,
@@ -407,7 +466,8 @@ def summarize(data):
     """校验单份探索输入，返回当前进度、候选 ID、检查视角和带证据指纹的记录。
 
     schema_version=1.1 额外要求：视觉/无障碍 PASS 挂结构化测量产物、存在
-    EXP-KBD- 键盘遍历条目（纯接口批次以 accessibility=not_applicable 豁免）。
+    EXP-KBD- 键盘遍历条目（纯接口批次以 accessibility=not_applicable 豁免）；
+    未命中升级信号且无 figma 回写时，须有 EXP-SIG- 复测条目覆盖哈希抽中的页面单元。
     """
     _object(data, {"schema_version", "context", "items"}, {"attribute_rulings", "view_scope"}, "root")
     if data["schema_version"] not in SCHEMA_VERSIONS:
@@ -527,7 +587,7 @@ def summarize(data):
     report["gate"] = _gate(rows, report["executed_views"],
                            {view: set(cells) for view, cells in report["executed_cells"].items()},
                            data.get("attribute_rulings"), data.get("view_scope"),
-                           measurement_gaps, strict_measurement)
+                           measurement_gaps, strict_measurement, context["target_url"])
     return report
 
 

@@ -258,6 +258,85 @@ class MeasurementEvidenceTest(unittest.TestCase):
             self.exp.summarize(data)
 
 
+class SignalProbeTest(MeasurementEvidenceTest):
+    """v1.51 升级信号抽样复测：没升级不等于不用细看。
+
+    复用测量证据夹具（它已满足前置门禁：各视角双单元、traversal/keyboard/measure 齐备），
+    单独验证「未命中信号」这条路径有没有机械前提。
+    """
+
+    def _add_probe(self, data, units):
+        for index, unit in enumerate(units, 1):
+            page, state = unit.split("|", 1)
+            entry = self._item(f"EXP-SIG-{index}", ["visual"], self.measure,
+                               page, "按六类信号逐条复测")
+            entry["state"] = state
+            entry["falsify_action"] = "放大 200% 并切到 320px 视口，看是否溢出"
+            entry["observation"] = ("六类信号逐条：键盘可用/对比度达标/焦点可见/"
+                                    "CLS 正常/首响 <2000ms/断点无溢出")
+            data["items"].append(entry)
+        return data
+
+    def test_missing_probe_downgrades(self):
+        gate = self.exp.summarize(self._data("1.1"))["gate"]
+        self.assertTrue(gate["signal_probe"]["required"])
+        self.assertTrue(gate["signal_probe"]["missing"])
+        self.assertIn("抽样复测", gate["message"])
+
+    def test_probe_entries_close_gap(self):
+        data = self._data("1.1")
+        sampled = self.exp.summarize(data)["gate"]["signal_probe"]["sampled"]
+        self._add_probe(data, sampled)
+        gate = self.exp.summarize(data)["gate"]
+        self.assertEqual(gate["signal_probe"]["missing"], [])
+        self.assertEqual(gate["signal_probe"]["covered"], sampled)
+
+    def test_figma_trace_waives_probe(self):
+        data = self._data("1.1")
+        data["items"][0]["observation"] = "source=figma-ui-parity:7.41 对比度不足"
+        probe = self.exp.summarize(data)["gate"]["signal_probe"]
+        self.assertFalse(probe["required"])
+        self.assertEqual(probe["reason"], "deep_upgrade_recorded")
+
+    def test_api_only_batch_waives_probe(self):
+        base = "https://example.invalid/app"
+        items = [self._item("EXP-F-1", ["functional"], self.measure, f"{base}/f1", "提交"),
+                 self._item("EXP-F-2", ["functional"], self.measure, f"{base}/f2", "取消")]
+        data = {"schema_version": "1.1",
+                "context": {"target_url": base, "application_version": "b1",
+                            "environment": "test"},
+                "items": items}
+        probe = self.exp.summarize(data)["gate"]["signal_probe"]
+        self.assertFalse(probe["required"])
+        self.assertEqual(probe["reason"], "no_page_units")
+
+    def test_traversal_only_batch_waives_probe(self):
+        # 遍历与键盘条目本身已是细看痕迹，不构成抽样池
+        base = "https://example.invalid/app"
+        items = [self._item("EXP-TRAV-1", ["usability"], self.measure, f"{base}/t1", "遍历控件"),
+                 self._item("EXP-KBD-1", ["usability"], self.measure, f"{base}/k1", "Tab 走主流程")]
+        data = {"schema_version": "1.1",
+                "context": {"target_url": base, "application_version": "b1",
+                            "environment": "test"},
+                "items": items}
+        probe = self.exp.summarize(data)["gate"]["signal_probe"]
+        self.assertFalse(probe["required"])
+        self.assertEqual(probe["reason"], "no_page_units")
+
+    def test_1_0_only_discloses(self):
+        gate = self.exp.summarize(self._data("1.0"))["gate"]
+        self.assertTrue(gate["signal_probe"]["required"])
+        self.assertFalse(gate["signal_probe"]["enforced"])
+        self.assertNotIn("抽样复测", gate["message"])
+
+    def test_sampling_is_order_independent(self):
+        data = self._data("1.1")
+        first = self.exp.summarize(data)["gate"]["signal_probe"]["sampled"]
+        data["items"] = list(reversed(data["items"]))
+        second = self.exp.summarize(data)["gate"]["signal_probe"]["sampled"]
+        self.assertEqual(first, second)
+
+
 class HighRiskAbsentDisclosureTest(unittest.TestCase):
     """plan 有风险面却零 high：只披露不压档（防整体定级下调）。"""
 
