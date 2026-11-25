@@ -1499,3 +1499,11 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 - 删本地 resolvePlaywright 定义与启动逻辑（原 74-81/460-468 行，空 catch 静默吞失败）；launch/closeAll 复用 browser.cjs 唯一来源；finally 清理从只关 context 改为 closeAll(handle)，顺带修复 browser 句柄泄漏（原缺陷：chrome 子进程残留、node 不退出）。净删 5 行、冗余删除 17 行（硬指标「既有冗余删除 >0 行」达成）。
 - **验收口径（P1 修正 b）**：本文件不再自带 resolvePlaywright（grep 命中仅减法说明注释）；其余 4 个自带定义的驱动（capture_aria.js/run_state_scenarios.cjs/run_official_extraction.cjs/run_button_audit.cjs）登记为后续减法项，不在本版范围。
+
+### D1/D2/D3 · 执行自主性加强
+
+| 条目 | 落点 | 验证 |
+|---|---|---|
+| D1 runtime_probe.py | 五通道三态（http_contract 恒具备依赖/available 取决于 manifest——X-07；auth_state 只查 profile 存在可写不做读回；browser_mcp 恒 unprobed 会话内判定）+ runtime-manifest/1 校验；消费四落点见 §0.4，adversarial_gate 本版未改（X-03） | 19 例（撤 manifest 依赖判断变红）；无 playwright 环境返回结构化三态不崩 |
+| D2 exploration_runner.py | 只编排不执行；ready_queue 复用 summarize() 不另建排序；X-02 自动续批走 classify+is_blocking 双层（record 内嵌 declaration 供第二层凭据复验），三种反向凭据 requires_human；X-13 honest_exits 只登记条目 ID；writeback_commands 为发射模板（P3）；预算账本 budget-consumption/1 | 14 例（三反向凭据用例全绿；classify/is_blocking 上线前 grep 确认在位——防御纵深无行为差异，变异不适用） |
+| D3 runtime_diagnostics | 交接包独立字段（batch_count/probes_consumed/budget_remaining/blocked_by_capability），派生可重建；不落 state 顶层、不进 pending_inputs、phase-handoff/1 不升版（X-06）；CLI checkpoint --budget-ledger/--capabilities | 2 例（派生正确性 + 缺省 None 不渲染）；maxTurns 未改 |
