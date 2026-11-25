@@ -1470,3 +1470,11 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 |---|---|---|---|
 | **压档与拒绝出具结论被实现成同一件事** | `allowed = not reasons`（原 1352 行）+ `phase_ceiling: None if allowed else ceiling`：`verdict_allowed=True + ceiling=待核实` 不可表达；缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）与造假/越权同档硬阻断 | 新增单一注册表 `REASON_POLICY`（18 code × {mode, remedy, needs_human}），登记全部现有判定来源，**不新增判断条件**；`verdict_allowed = not blocking_reasons`（仅 block 档：阶段未完成/未批范围变更/交接未消费），downgrade 档允许出具但 `phase_ceiling` 取最严（上游「不通过」不降级）；schema 升 `phase-verdict-check/2`，新增 `blocking_reasons[]` / `limitations[]`（code/message/remedy/needs_human）/ `policy_version`，reasons 全集保留 | `tests/test_verdict_policy.py` 8 例；test_phase_gate 13 处 downgrade 断言随语义改写（断言 True+待核实+limitations.code）；全量 889 passed |
 | 四处接线 | 旧口径「`allowed=not reasons`/直接拦/无条件阻断裁决」散落文档 | CLI `check-verdict --help`、`phase-workflow.md` 补正入口段、agents §165 采集卡口、`output-templates.md` §0.3 限档口径——统一为「缺证据 → 待核实 + 未覆盖范围 + 补正命令」；`remedy` 单一来源（注册表），不再各处手写 | grep 旧口径零残留；引用守卫 + 全量绿 |
+
+### B2/B3/B4 · 旧状态补正 + revise note 留痕 + 文案收编
+
+| 条目 | 发现（实测坐实） | 修复 | 回归 |
+|---|---|---|---|
+| **B2 旧状态漏点名（F-06）** | `_pending_verdict_inputs` 的 `is not None` 判断：旧状态文件无 collection 键时交接包不点名、不给补正命令，下一会话开工即撞墙 | 改为「字段缺失或 state!=provided」一视同仁；remedy 取 REASON_POLICY；`pending_inputs` 只影响交接包文本，不改 check-verdict 结论（旧项目副本零差异口径不变） | `test_pending_inputs_cover_legacy_state_without_collection_key`（撤分支变红） |
+| **B3 revise 自解锁无痕（F-07）** | `revise --collection` 无 approval、无 note 约束即可解除采集缺口 | 不引入人工审批；`--collection` 时 `--note` 必填，事件记 `{auto:true, basis}`；不占 approval；文档明写「留痕供人核对，不防有意伪造」 | `test_revise_collection_requires_note` / `..._records_auto_basis`（撤 note 校验变红） |
+| **B4 文案收编（C-1）** | pending 的 assumptions/regression 手写 label 与注册表 remedy 重复；'采集合规' 3 处手写 | labels 收编：注册表加 `label` 字段，pending = `{label}：{remedy}` 单一来源；采集 pending 前缀改「采集缺口」 | v147 交接包名称断言先红后修复（label 保留名称）；`grep -c '采集合规'` 3→2；全量 892 OK |

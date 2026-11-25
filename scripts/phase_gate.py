@@ -895,14 +895,16 @@ def _pending_verdict_inputs(state):
     发生在下一会话——与「每阶段停会话换模型」直接冲突。交接包显式列出它们，让下
     一会话在开工前就知道要交什么；登记与否不影响终检的独立判定。
     """
-    labels = (("assumptions", "风险假设清算（check-verdict --assumptions）"),
-              ("regression", "回归影响面结论（check-verdict --regression）"))
     pending = []
-    for name, label in labels:
+    for name, code in (("assumptions", "assumptions_missing"),
+                       ("regression", "regression_missing")):
         registered = any((state["phases"][phase].get(name) or {}).get("registered")
                          for phase in PHASES)
         if not registered:
-            pending.append(label)
+            # B4：pending 条目文案收编进 REASON_POLICY（label 名称 + remedy 命令同源），
+            # 不再手写第二份"check-verdict --assumptions/--regression"命令。
+            policy = REASON_POLICY[code]
+            pending.append(f"{policy.get('label', code)}：{policy['remedy']}")
     # 采集缺口：execute 收尾未交/交了空清单/旧状态文件无该字段，交接包都必须点名（B2/F-06）：
     # 补正入口是 revise --collection，交接包不点名则下一会话开工即撞墙。
     # pending_inputs 只影响交接包文本，不改 check-verdict 结论；remedy 取 REASON_POLICY 单一来源。
@@ -915,7 +917,7 @@ def _pending_verdict_inputs(state):
             state_label = f"当前 state={execute_collection.get('state')}"
             code = ("collection_empty" if execute_collection.get("state") == "empty"
                     else "collection_not_provided")
-        pending.append(f"采集合规（{REASON_POLICY[code]['remedy']}）：{state_label}，"
+        pending.append(f"采集缺口（{REASON_POLICY[code]['remedy']}）：{state_label}，"
                        "未补正前裁决结论压待核实")
     return pending
 
@@ -1344,12 +1346,14 @@ REASON_POLICY = {
     "collection_not_provided": {"mode": "downgrade", "needs_human": False,
                                 "remedy": "新会话执行 revise execute --collection <records.jsonl> 补正"},
     "assumptions_missing": {"mode": "downgrade", "needs_human": False,
+                            "label": "风险假设清算",
                             "remedy": "补交 check-verdict --assumptions <assumptions.json>（空清单也须声明 reviewed）"},
     "assumptions_not_reviewed": {"mode": "downgrade", "needs_human": False,
                                  "remedy": "在 assumptions.json 声明 reviewed=true（空数组不等于已审阅）"},
     "assumptions_gap": {"mode": "downgrade", "needs_human": False,
                         "remedy": "按 limitations 中逐条假设完成证伪或修正字段后重交 --assumptions"},
     "regression_missing": {"mode": "downgrade", "needs_human": False,
+                           "label": "回归影响面结论",
                            "remedy": "补交 check-verdict --regression <regression.json>"},
     "regression_gap": {"mode": "downgrade", "needs_human": False,
                        "remedy": "补回归候选（带 basis）或写明 no_impact_reason 后重交 --regression"},
