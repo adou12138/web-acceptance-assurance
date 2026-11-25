@@ -1478,3 +1478,12 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 | **B2 旧状态漏点名（F-06）** | `_pending_verdict_inputs` 的 `is not None` 判断：旧状态文件无 collection 键时交接包不点名、不给补正命令，下一会话开工即撞墙 | 改为「字段缺失或 state!=provided」一视同仁；remedy 取 REASON_POLICY；`pending_inputs` 只影响交接包文本，不改 check-verdict 结论（旧项目副本零差异口径不变） | `test_pending_inputs_cover_legacy_state_without_collection_key`（撤分支变红） |
 | **B3 revise 自解锁无痕（F-07）** | `revise --collection` 无 approval、无 note 约束即可解除采集缺口 | 不引入人工审批；`--collection` 时 `--note` 必填，事件记 `{auto:true, basis}`；不占 approval；文档明写「留痕供人核对，不防有意伪造」 | `test_revise_collection_requires_note` / `..._records_auto_basis`（撤 note 校验变红） |
 | **B4 文案收编（C-1）** | pending 的 assumptions/regression 手写 label 与注册表 remedy 重复；'采集合规' 3 处手写 | labels 收编：注册表加 `label` 字段，pending = `{label}：{remedy}` 单一来源；采集 pending 前缀改「采集缺口」 | v147 交接包名称断言先红后修复（label 保留名称）；`grep -c '采集合规'` 3→2；全量 892 OK |
+
+### C3 · 设计资产 ↔ 对抗场景回链（纯文档约定，零 schema 改动）
+
+| 条目 | 落点 | 验证 |
+|---|---|---|
+| 回链约定 | case-data-contract.md 增「对抗场景回链」节（SCN-ADV- 的 id/note 带设计场景 ID 前缀；cases JSON 是设计唯一事实源；四类路径完备填表 ≠ 组合场景已登记）；probe-playbook.md C 节使用纪律补对应一句 | 引用守卫绿 |
+| §0.4 对照表 | output-templates.md §0.4 增「对抗场景」行（adversarial-scenarios.json → adversarial_data/adversarial_gate --scenarios） | 同上 |
+| 回链示例 | examples/cases-example.json SCN-01.goal 补 SCN-ADV-01- 前缀回链示例；yaml 镜像同步重新生成（to-yaml） | test_case_data 33 例绿 |
+| **偏离登记** | 计划 C3 原文「与一个夹具各补一处回链示例」中的「一个夹具」未执行：检测夹具含答案（hidden_answers）且 E1 未实跑，改题面破坏盲测纯净性并改动冻结哈希；回链示例由 yaml 镜像承担 | 夹具哈希未变（git diff 为空） |
