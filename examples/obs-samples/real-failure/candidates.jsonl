@@ -1,0 +1,1 @@
+{"id": "CAND-ACT-003-1", "obs_id": "OBS-ACT-ACT-003", "finding_key": "runtime-js-error", "verdict": "pending", "basis": "独立通道：console 增量 / page error / unhandled rejection 采集", "evidence": "evidence/screens/OBS-ACT-003.png"}
