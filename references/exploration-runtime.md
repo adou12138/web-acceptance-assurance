@@ -120,6 +120,12 @@ CSV派生“界面样式”“交互易用性”“基础无障碍”“功能�
 - 动作前安装观察钩子（复用 `skills/figma-ui-parity/scripts/node/run_journeys.cjs` 的 `page.addInitScript` 前置注入），避免把交互前的异常计入动作后观察；无法前置安装时记 `blind_spot`。
 - 观察钩子采集带**增量游标**（`__vpObs.lastRead`，`collect` 返回 `sinceLastRead`/`cursor`）：台账与 OBS-ACT- 记录只对 `sinceLastRead` 入账，重复采集同一事件不重复计数——游标随页面生命周期归零，跨页应逐动作采集而非跨页累积（spike 001 实证，见 `docs/spikes/001-action-observation-window/README.md`）。
 
+**动作窗口与不重计入账的验收方式**（S3 口径，可核验而非全自动化）：
+
+1. **窗口边界**用三组事件核对：窗口**前**（导航/首屏加载期异常应在 `blind_spot` 或首窗记录中）、窗口**内**（本次动作产生的 console/network 增量必须完整）、窗口**后**（动作结束后的残留事件不得计入本窗口）——三组各取一条有据可查的实例，而非只看"有无输出"。
+2. **重复读取归零**：同一动作窗口连续 `collect` 两次，第二次 `sinceLastRead` 必须为 0（smoke 断言 `test`...`sinceLastRead` 已锁定此机制）。
+3. **消费端不重复入账**：`sinceLastRead=0` 只证明"读取侧增量归零"，**不等于**"台账/OBS-ACT- 未重复入账"——验收还须直接检查**消费端产物**：同一 `action_id` 在台账 events / OBS-ACT- JSONL 中只应出现一次，同一事件不因多次 collect 而在台账中被记多条。消费端排查以产物（台账/JSONL）为准，不以"脚本说已去重"为准。
+
 ## 观察结果桥接
 
 `scripts/observation_bridge.py` 把观察器JSON中的候选映射为可校验的待复核条目，测试为 `tests/test_observation_bridge.py`。CLI：
