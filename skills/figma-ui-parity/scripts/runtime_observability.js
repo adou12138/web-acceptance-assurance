@@ -131,6 +131,11 @@
       evidence: [{ type: (extra && extra.evidenceType) || 'runtime-probe', result: 'mismatch' }],
       sources: ['runtime-observability'],
       property: (extra && extra.property) || null,
+      // 窗口归属（M4 验收修订）：finding 记录其来源事件的序号与类型，
+      // collect 据此算 windowFindings（本窗口新增判定），转换/入账以它为准，防止
+      // 「累计 findings 每窗口重复转出同一线索」与「动作前事件混入本窗口」。
+      windowSeq: extra && extra.windowSeq != null ? extra.windowSeq : null,
+      sourceKind: (extra && extra.sourceKind) || null,
     }, extra && extra.raw ? { raw: extra.raw } : {}));
   };
 
@@ -146,7 +151,7 @@
     console.error = function () {
       try {
         const text = Array.prototype.map.call(arguments, (a) => String(a && a.message ? a.message : a)).join(' ');
-        obs.errors.push({ kind: 'console', text, at: Date.now() });
+        obs.errors.push({ kind: 'console', text, at: Date.now(), seq: obs.errors.length });
       } catch (e) { /* 采集失败不得影响页面 */ }
       if (origError) { try { origError.apply(console, arguments); } catch (e) {} }
     };
@@ -156,11 +161,12 @@
         text: String((ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error'),
         source: ev && ev.filename ? String(ev.filename) : '',
         at: Date.now(),
+        seq: obs.errors.length,
       });
     });
     window.addEventListener('unhandledrejection', (ev) => {
       const r = ev && ev.reason;
-      obs.errors.push({ kind: 'unhandledrejection', text: String((r && r.message) || r || 'unhandled rejection'), at: Date.now() });
+      obs.errors.push({ kind: 'unhandledrejection', text: String((r && r.message) || r || 'unhandled rejection'), at: Date.now(), seq: obs.errors.length });
     });
 
     if (window.fetch) {
@@ -179,7 +185,7 @@
         const body = rawBody ? String(rawBody) : '';
         const at = Date.now();
         return of.apply(this, args).then((resp) => {
-          const rec = { url, method, body, bodyKind, status: resp.status, ok: !!resp.ok, at };
+          const rec = { url, method, body, bodyKind, status: resp.status, ok: !!resp.ok, at, seq: obs.requests.length };
           obs.requests.push(rec);
           // 响应体只留前 2KB：HTTP 200 + {"success":false} 这类"接口报错但界面显示成功"
           // 的缺陷，只看 status 永远看不到。clone 读取不消费原响应，失败静默不计。
@@ -193,7 +199,7 @@
           } catch (e) { rec.bodyError = String((e && e.message) || e).slice(0, 80); }
           return resp;
         }, (err) => {
-          obs.requests.push({ url, method, body, bodyKind, status: 0, ok: false, at, error: String((err && err.message) || err) });
+          obs.requests.push({ url, method, body, bodyKind, status: 0, ok: false, at, error: String((err && err.message) || err), seq: obs.requests.length });
           throw err;
         });
       };
@@ -216,7 +222,8 @@
             try {
               const ok = self.status >= 200 && self.status < 300;
               const rec = { url: self.__vp.url, method: self.__vp.method, body: self.__vp.body,
-                            bodyKind: self.__vp.bodyKind, status: self.status, ok, at: self.__vp.at };
+                            bodyKind: self.__vp.bodyKind, status: self.status, ok, at: self.__vp.at,
+                            seq: obs.requests.length };
               // 同上：responseType 为 text/空时才读，否则拿到的是对象不是文本
               if (!self.responseType || self.responseType === 'text') {
                 try { rec.bodyText = redact(String(self.responseText || '').slice(0, 2000)); } catch (e) {}
@@ -256,6 +263,7 @@
     push('7.35', '页面运行期抛出未捕获异常：' + e.text.slice(0, 120), '控制台无未捕获错误，交互不中断',
       e.kind + (e.source ? ' @ ' + e.source : '') + '：' + e.text.slice(0, 160), null,
       { severityHint: 'P1', confidence: 0.85, property: 'js-error', evidenceType: 'error-hook',
+        windowSeq: e.seq, sourceKind: 'error',
         raw: { kind: e.kind, text: e.text.slice(0, 300) } });
   });
 
@@ -273,6 +281,7 @@
       '交互触发的请求应成功返回；失败时界面应给出明确提示而非静默',
       '状态码 ' + r.status + (r.error ? '，错误 ' + r.error : ''), null,
       { severityHint: server ? 'P1' : 'P2', confidence: 0.8, property: 'network-failure', evidenceType: 'request-hook',
+        windowSeq: r.seq, sourceKind: 'request',
         raw: { method: r.method, url: redactUrl(r.url), status: r.status, body: redact(String(r.body || '').slice(0, 200)) } });
   });
 
@@ -309,6 +318,7 @@
         '响应体命中错误页特征：' + errorPage.join(' / '), null,
         { severityHint: 'P1', confidence: 0.85, status: 'confirmed', property: 'error-page-as-200',
           evidenceType: 'response-body',
+          windowSeq: r.seq, sourceKind: 'request',
           raw: { method: r.method, url: redactUrl(r.url), status: r.status,
                  signals: errorPage, bodyHead: redact(String(r.bodyText || '').slice(0, 200)) } });
     } else {
@@ -317,6 +327,7 @@
         '响应体命中失败信号：' + businessFail.join(' / '), null,
         { severityHint: 'P2', confidence: 0.5, status: 'pending', property: 'business-error-as-200',
           evidenceType: 'response-body',
+          windowSeq: r.seq, sourceKind: 'request',
           raw: { method: r.method, url: redactUrl(r.url), status: r.status,
                  signals: businessFail, bodyHead: redact(String(r.bodyText || '').slice(0, 200)) } });
     }
@@ -371,6 +382,7 @@
         null,
         { severityHint: 'P2', confidence: 0.85, status: 'confirmed', property: 'payload-placeholder',
           evidenceType: 'request-hook',
+          windowSeq: r.seq, sourceKind: 'request',
           raw: { method: r.method, url: redactUrl(urlText), signals: hits,
                  bodyHead: redact(body.slice(0, 200)) } });
       return;
@@ -386,6 +398,7 @@
         null,
         { severityHint: 'P3', confidence: 0.6, status: 'pending', property: 'payload-duplicate-key',
           evidenceType: 'request-hook',
+          windowSeq: r.seq, sourceKind: 'request',
           raw: { method: r.method, url: redactUrl(urlText), duplicateKeys: dupes } });
       return;
     }
@@ -398,6 +411,7 @@
         null,
         { severityHint: 'P3', confidence: 0.4, status: 'pending', property: 'payload-empty-write',
           evidenceType: 'request-hook',
+          windowSeq: r.seq, sourceKind: 'request',
           raw: { method: r.method, url: redactUrl(urlText) } });
     }
   });
@@ -430,6 +444,7 @@
       '相同方法+路径+载荷重复 ' + reqs.length + ' 次，' + okCount + ' 次成功', null,
       { severityHint: 'P1', confidence: allOk ? 0.85 : 0.6, status: allOk ? 'confirmed' : 'pending',
         property: 'duplicate-submit', evidenceType: 'request-hook',
+        windowSeq: reqs[reqs.length - 1].seq, sourceKind: 'request',
         raw: { signature: sig.slice(0, 200), count: reqs.length, spanMs: span, okCount: okCount, allOk: allOk } });
   });
 
@@ -473,16 +488,17 @@
   // （审查修复：原表达式 `Date.now() - startedAt >= 0` 恒真，等于没校验——
   //   obs 存在即视为已安装钩子，这本身就是正确语义：钩子安装时会创建 __vpObs。）
   const hooksInstalled = !!obs;
-  // 增量游标（M2/动作窗口）：本次距上次 collect 的新增事件数。消费方只对
-  // sinceLastRead 入账，重复采集同一事件不会重复计数；cursor 是累计只读位点。
-  // 增量游标（M2/动作窗口）：数量 + **事件明细**。findings 仍是累计缓冲的判定视图；
-  // 入账以 newEvents 为准——消费方只对本次新增事件写 OBS-ACT-/台账，重复 collect 时
-  // newEvents 为空，同一 action_id 不会重复入账（验收条件：窗口归属可核对 + 不重复入账）。
+  // 增量游标（M2/动作窗口）：**数量 + 事件明细 + 本窗口判定视图**。
+  // findings 是累计判定视图（兼容既有消费方）；windowFindings 只含**本窗口新增事件**
+  // 触发的判定（由 finding.windowSeq/sourceKind 归属判定）。入账与线索转换以
+  // newEvents/windowFindings 为准——重复 collect 时二者为空，同一 action_id 不会
+  // 重复入账、也不会把动作前/历史窗口的 finding 重复转成新线索。
   const prevRead = obs.lastRead || { errors: 0, requests: 0 };
   const sinceLastRead = {
     errors: obs.errors.length - prevRead.errors,
     requests: obs.requests.length - prevRead.requests,
   };
+  const windowStart = { errors: prevRead.errors, requests: prevRead.requests };
   const cursor = { errors: obs.errors.length, requests: obs.requests.length };
   const newEvents = {
     errors: obs.errors.slice(prevRead.errors).map((e) => ({
@@ -497,11 +513,18 @@
       return item;
     }),
   };
+  const inWindow = (f) => {
+    if (f.sourceKind === 'error') { return f.windowSeq != null && f.windowSeq >= windowStart.errors; }
+    if (f.sourceKind === 'request') { return f.windowSeq != null && f.windowSeq >= windowStart.requests; }
+    return true; // 7.38 遮挡等无事件源的判定按当前 DOM 状态计，每窗口有效
+  };
+  const windowFindings = findings.filter(inWindow);
   if (obs.lastRead) { obs.lastRead = cursor; }
   return JSON.stringify({
     mode: 'collect',
     url: location.href,
     findings,
+    windowFindings,
     hooksInstalled: hooksInstalled,
     interactionsObserved: obs.requests.length,
     sinceLastRead,
@@ -517,7 +540,8 @@
       + '7.37/7.38 判据保守（pending），需人工复核后再落确定缺陷；'
       + 'hooksInstalled=false 或 interactionsObserved=0 时该轮采集无效，'
       + '相关维度必须填 notRun（未证明执行=未执行），不得凭空填 pass。未触发交互则相应维度填 notRun。'
-      + '7.45 只判字符串 body；payloadNotInspectable 是「无法判读的请求数」，不是 0 缺陷。',
+      + '7.45 只判字符串 body；payloadNotInspectable 是「无法判读的请求数」，不是 0 缺陷。'
+      + 'findings 为累计判定视图；入账与线索转换以 newEvents（事件明细）与 windowFindings（本窗口判定）为准。',
     summary: {
       total: findings.length,
       byDimension: findings.reduce((acc, f) => { acc[f.dimension] = (acc[f.dimension] || 0) + 1; return acc; }, {}),

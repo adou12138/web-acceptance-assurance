@@ -73,10 +73,18 @@ def _facts_from(collect):
 
 
 def convert(collect, action_id, tc_ref, page_url, evidence, report_class):
-    """返回 (obs_record, candidates)。report_class 决定是否生成候选与盲区表述。"""
+    """返回 (obs_record, candidates)。report_class 决定是否生成候选与盲区表述。
+
+    **窗口归属（审核缺陷修复）**：优先使用 `windowFindings`（本窗口新增事件触发的判定，
+    由 finding.windowSeq/sourceKind 归属）；旧产物无该字段时回退全量 `findings`——
+    回退即表示"窗口归属不可核对"，须在复核时人工核对 cursor 与事件时间（不静默当作
+    本窗口）。这防住「累计 findings 每窗口重复转出同一线索」与「动作前事件混入本窗口」。
+    """
     if report_class not in CLASSES:
         raise ValueError(f"--class 必须为 {CLASSES} 之一，收到 {report_class!r}")
-    findings = collect.get("findings") or []
+    findings = collect.get("windowFindings")
+    if findings is None:
+        findings = collect.get("findings") or []
     obs_id = f"{OBS_SCHEMA_HINT}{action_id}"
     observed = _facts_from(collect)
     blind_spot = []

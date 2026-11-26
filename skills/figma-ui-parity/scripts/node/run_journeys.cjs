@@ -600,6 +600,15 @@ async function main() {
           runtimeInstalled: landed.hooksInstalled,
           runtimeObserved: landed.interactionsObserved,
           runtimeCollectError: landed.collectError,
+          // M4 验收修订：动作窗口游标与增量落产物——消费方据 cursor/sinceLastRead
+          // 核对每条事件的窗口归属，按 windowFindings 入账时不重复、不混入历史窗口。
+          runtimeWindow: {
+            cursor: landed.cursor, sinceLastRead: landed.sinceLastRead,
+            newEvents: landed.newEvents
+              ? { errors: landed.newEvents.errors.length, requests: landed.newEvents.requests.length }
+              : null,
+            windowFindings: (landed.windowFindings || []).length,
+          },
         });
         stepFindings.forEach(f => allFindings.push(f));
         landedRuntime.forEach(f => allFindings.push(f));

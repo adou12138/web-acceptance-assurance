@@ -28,6 +28,32 @@ def collect_doc(findings=None, errors=None, requests=None, hooks=True, error=Non
 
 
 class ConversionTests(unittest.TestCase):
+    def test_window_findings_preferred_over_cumulative(self):
+        """审核缺陷修复：有 windowFindings 时只转本窗口判定——历史窗口 finding
+        不重复转出线索（否则同一 action_id 每窗口重复候选）。"""
+        old = {"dimension": "7.35", "property": "js-error", "symptom": "旧窗口错误",
+               "status": "confirmed", "severity": "P1"}
+        new = {"dimension": "7.36", "property": "network-failure", "symptom": "新窗口 500",
+               "status": "confirmed", "severity": "P1"}
+        doc = collect_doc([old, new], requests=[
+            {"method": "POST", "url": "https://t.example/api", "status": 500, "ok": False, "at": 9}])
+        doc["windowFindings"] = [new]
+        record, candidates = otl.convert(doc, "ACT-W", "TC-W", "https://t.example/f",
+                                         "e.png", "real-failure")
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["finding_key"], "network-failure")
+        self.assertIn("新窗口", record["lead"]["suspicion"])
+        self.assertNotIn("旧窗口", record["lead"]["suspicion"])
+
+    def test_fallback_to_cumulative_findings_for_old_product(self):
+        """旧产物无 windowFindings：回退全量 findings（窗口归属不可核对，须人工核对）。"""
+        finding = {"dimension": "7.35", "property": "js-error", "symptom": "旧版产物错误",
+                   "status": "confirmed", "severity": "P1"}
+        record, candidates = otl.convert(collect_doc([finding]), "ACT-O", "TC-O",
+                                         "https://t.example/f", "e.png", "real-failure")
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("旧版产物错误", record["lead"]["suspicion"])
+
     def test_real_failure_converts_to_lead_and_pending_candidate(self):
         finding = {"dimension": "7.35", "property": "runtime-js-error",
                    "symptom": "未捕获 TypeError", "status": "confirmed",

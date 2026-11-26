@@ -294,6 +294,29 @@ check('无新增时 sinceLastRead 为 0（重复采集不重复入账）',
        && c15c.newEvents.requests.length === 0),
     JSON.stringify(c15c.newEvents));
 
+  // ⑦ 本窗口判定视图（审核缺陷修复）：windowFindings 只含本窗口新增事件触发的判定，
+  // 历史窗口 finding 不重复出现——这是「同一 action_id 不重复转出线索」的机械依据。
+  const e16 = makeEnv();
+  e16.call();
+  e16.fakeConsole.error('win1-error');
+  const c16a = JSON.parse(e16.call());
+  const w16a = (c16a.windowFindings || []).filter((f) => f.dimension === '7.35');
+  check('首窗口 windowFindings 含本窗口异常（windowSeq=0）',
+    w16a.length === 1 && w16a[0].windowSeq === 0, JSON.stringify(w16a.map((f) => f.windowSeq)));
+  e16.fakeConsole.error('win2-error');
+  const c16b = JSON.parse(e16.call());
+  const w16b = (c16b.windowFindings || []).filter((f) => f.dimension === '7.35');
+  check('第二窗口 windowFindings 只含新异常（windowSeq=1，历史不重复）',
+    w16b.length === 1 && w16b[0].windowSeq === 1
+      && (c16b.findings || []).filter((f) => f.dimension === '7.35').length === 2,
+    JSON.stringify({ window: w16b.map((f) => f.windowSeq),
+                     total: (c16b.findings || []).filter((f) => f.dimension === '7.35').length }));
+  const c16c = JSON.parse(e16.call());
+  check('无新增时 windowFindings 为空（累计 findings 仍保留 2 条）',
+    (c16c.windowFindings || []).length === 0
+      && (c16c.findings || []).filter((f) => f.dimension === '7.35').length === 2,
+    JSON.stringify({ window: (c16c.windowFindings || []).length }));
+
   console.log('\n==== runtime_observability 冒烟：' + pass + ' 通过 / ' + fail + ' 失败 ====');
   process.exit(fail ? 1 : 0);
 })();
