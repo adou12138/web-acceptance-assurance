@@ -54,10 +54,46 @@
     <label for="org">所属组织（选填）</label>
     <input id="org" name="org" type="text">
   </div>
-  <!-- 故意注入：错误提示远离字段（反馈位置脱敏为固定底栏内文案） -->
+  <!-- 故意注入：错误提示远离字段（反馈位置脱敏为固定底栏内文案，由脚本动态更新） -->
   <div class="footer-bar">
     <button type="button" id="save-btn">保存</button>
-    <div class="footer-error">昵称不能为空（提示与本字段相距超过一屏）</div>
+    <div class="footer-error" id="form-tip" role="status">昵称不能为空（提示与本字段相距超过一屏）</div>
   </div>
+  <script>
+  /* 夹具旅程逻辑（受控、自足、无外部依赖）：校验 → 保存（localStorage）→ 重开读回。
+     本脚本只证明夹具能完成「校验失败 → 修正 → 提交 → 重开读回」的旅程，
+     不作为产品质量证据；注入点（标签关联断裂 / 提示位置）不受影响。
+     Node 桩测试：skills/figma-ui-parity/scripts/tests/dense_form_journey_smoke.cjs */
+  (function () {
+    var STORE = 'dense-form:nickname';
+    function validate(value) {
+      var v = String(value == null ? '' : value).trim();
+      if (!v) return { ok: false, message: '昵称不能为空' };
+      if (v.length > 20) return { ok: false, message: '昵称最多 20 字' };
+      return { ok: true, value: v };
+    }
+    function save(value, storage) {
+      var result = validate(value);
+      if (!result.ok) return result;
+      storage.setItem(STORE, result.value);
+      return { ok: true, saved: result.value };
+    }
+    function load(storage) { return storage.getItem(STORE) || ''; }
+    var api = { validate: validate, save: save, load: load, storeKey: STORE };
+    if (typeof window !== 'undefined') { window.__denseForm = api; }
+    if (typeof module !== 'undefined' && module.exports) { module.exports = api; }
+    if (typeof document !== 'undefined' && document.getElementById) {
+      var btn = document.getElementById('save-btn');
+      var input = document.getElementById('nickname');
+      var tip = document.getElementById('form-tip');
+      if (btn && input) {
+        btn.addEventListener('click', function () {
+          var out = save(input.value, window.localStorage);
+          if (tip) { tip.textContent = out.ok ? ('已保存：' + out.saved) : out.message; }
+        });
+      }
+    }
+  })();
+  </script>
 </body>
 </html>

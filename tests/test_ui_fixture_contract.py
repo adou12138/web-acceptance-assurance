@@ -60,6 +60,25 @@ class UIFixtureContractTests(unittest.TestCase):
         self.assertIn("occluded-control", text)
         self.assertIn("pending", text)
 
+    def test_dense_form_has_journey_capability(self):
+        """验收影响问题 #3：夹具必须能完成「校验失败→修正→提交→重开读回」。
+
+        锁定内联旅程逻辑的四个锚点（validate/save/load API、提示区、保存接线），
+        并确认 Node 桩旅程测试文件存在（机制级证据载体）。
+        """
+        text = self.load("dense-form.html")
+        self.assertIn("<script>", text)
+        self.assertIn("__denseForm", text)
+        self.assertIn("function validate", text)
+        self.assertIn("function save", text)
+        self.assertIn("function load", text)
+        self.assertIn('id="form-tip"', text)
+        self.assertIn("localStorage", text)
+        smoke = (Path(__file__).resolve().parent.parent
+                 / "skills" / "figma-ui-parity" / "scripts" / "tests"
+                 / "dense_form_journey_smoke.cjs")
+        self.assertTrue(smoke.is_file(), "缺少 dense-form 旅程桩测试")
+
     def test_responsive_table_distinguishes_container_scroll_from_page_overflow(self):
         text = self.load("responsive-table.html")
         # 合法：容器内横向滚动（overflow-x:auto）
