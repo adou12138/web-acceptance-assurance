@@ -1557,3 +1557,15 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 
 - **二次审核（同轮，交付前）**：① **空串静默丢弃**——`orientation`/`user_agent`/`platform` 显式填空串原被静默跳过、记成「未填」，会把两格不同配置并成一格去重，与「不静默忽略」承诺冲突；现显式给值即校验（空串报错、非法枚举报错），+3 子用例。② **mobile 去重键未留痕**——`mobile` 进键实际修正了旧版「桌面/移动同视口误判重复」，但无测试、注释还写成「旧行为完全一致」；现加 `test_mobile_flag_participates_in_dedup` 并把注释改为如实表述（合法旧矩阵本就不含这种两格，故旧记录判定不变）。③ **测试与文档口径分裂**——CSV 测试仍填物理像素 390×844@3→1170×2532，与上一轮刚修的「screen 填 CSS 像素」相反，照抄会重现假告警；现改 390×844 并断言 screen 两列。④ **SYNC-NOTES 自身口径**——能力边界段仍写「屏幕物理分辨率」，改为「屏幕尺寸 screen（CSS 像素）」。另核实：Chrome DevTools MCP `emulate` schema 与文档配置片段逐字段对得上（pageId/viewport 格式/UA/网络枚举/CPU 1–20，无越界字段）；`FIELDS` 36 列与 CSV 写出键零差集，且无下游按列数解析；旧矩阵 `device` 缺省时设备各项为 None，判定不变。
+
+### 补充方案集成（2026-11-26）：dogfood 动作级观察/TDD 红绿/独立复核/UI 夹具/spike
+
+基于外部补充方案（web-acceptance-assurance-integration-plan.md v2）执行 M1-M8，基线 aa0cc0b/1.52.1（方案声明 1.53.0/365c372 与实测不符，按实测执行；pytest 基线 988→999 passed，方案 1509 项主张不成立但方案已自声明以开工实测为准）。commit 链：8eae52f(M1 门禁)→780e7c1(M1 文档)→a318f87(M3+R1-1 字段统一)→01cf7c0(M5/M8/M2 契约)→3c73775(M2/M4 增量游标)→c56fbab(M6 夹具)→0fac83c(M7 spikes)。
+- **M1/R1-1 门禁补漏**：scan_collection_records 递归扫描嵌套裁决字段（observed/lead 值/列表深层，judgement_key_nested）；嵌套禁词表不含 status/result（observed.network[].status=500 是可观测事实，方案 M1 样例零违规通过已入测试）。4 例锁定。
+- **字段统一（R1-1）**：agents:163 与 phase-workflow.md 的 new_lead → lead（校验器实际键），残留仅否定声明。
+- **两链正交（R1-2）**：exploration-runtime.md「动作级观察采集」节 + agents/probe-playbook 映射——观察器 JSON→bridge→NOT_RUN 草稿（路径 A），OBS-ACT-→scan-collection→裁决（路径 B），不互喂。
+- **M2/M4 增量游标**：__vpObs.lastRead + collect 返回 sinceLastRead/cursor；smoke 24→27（动作窗口 3 断言：首报全量/次报增量/无新增 0）。
+- **M5/M8 契约**：红绿复测纪律（首败/修复后独立 attempt，不伪造红阶段）；高风险候选独立复核三落点（finding-triage 检查项/phase-workflow 裁决引用/output-templates 复核口径）；专项 findings confirmed→lead 剥离契约（runtime-observability.md）。
+- **M6 夹具**：dense-form/responsive-table/modal-focus（四类注释+注入点）+ 静态契约测试 7 例。
+- **M7 spikes**：001 动作观察窗口 VALIDATED（smoke 实证）；002 视觉噪声基线 PARTIAL（无浏览器运行时，协议就绪不伪造结论）。
+- **未执行项**：§7 本地夹具全链路试点（浏览器缺失，单元级等价物已覆盖：样例过 scan-collection/夹具契约/动作窗口 smoke）；spike 002 实跑。均为环境阻塞，非方案缺陷。
