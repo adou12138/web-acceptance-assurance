@@ -486,6 +486,55 @@ class CollectionRecordTests(PhaseGateTestBase):
                                   "where": "审批卡片"})
         self.assertEqual(self.pg.scan_collection_records([record]), [])
 
+    def test_nested_severity_in_observed_is_rejected(self):
+        """R1-1 封堵：把 severity 塞进 observed 嵌套对象，门禁必须拒绝（旧实现只扫顶层会放行）。"""
+        record = self.clean(observed={"console": [], "severity": "P1"})
+        violations = self.pg.scan_collection_records([record])
+        hits = [v for v in violations if v["code"] == "judgement_key_nested"]
+        self.assertTrue(hits, violations)
+        self.assertEqual(hits[0]["key"], "observed.severity")
+
+    def test_nested_verdict_in_lead_value_is_rejected(self):
+        """R1-1 封堵：lead 三键的**值**里藏嵌套裁决对象同样被递归拦截。"""
+        record = self.clean(lead={"suspicion": {"verdict": "FAIL", "note": "x"},
+                                  "basis": "独立通道", "where": "表单"})
+        violations = self.pg.scan_collection_records([record])
+        hits = [v for v in violations if v["code"] == "judgement_key_nested"]
+        self.assertTrue(hits, violations)
+        self.assertEqual(hits[0]["key"], "lead.suspicion.verdict")
+
+    def test_deep_nested_verdict_in_action_sequence_is_rejected(self):
+        """列表嵌套同样拦截：action_sequence[0].verdict 命中，路径逐级可定位。"""
+        record = self.clean(action_sequence=[
+            {"step": 1, "action": "click", "target": "提交", "verdict": "PASS"}])
+        violations = self.pg.scan_collection_records([record])
+        hits = [v for v in violations if v["code"] == "judgement_key_nested"]
+        self.assertTrue(hits, violations)
+        self.assertEqual(hits[0]["key"], "action_sequence[0].verdict")
+
+    def test_action_observation_sample_passes_scan(self):
+        """补充方案 M1 的动作级观察样例必须零违规通过 scan-collection：
+        observed.network[].status=500 是可观测事实，嵌套禁词表不含 status，不得误报。"""
+        record = {
+            "id": "OBS-ACT-001", "collection_state": "collected", "tc_ref": "TC-001",
+            "action_id": "ACT-004", "page_url": "https://test.example/form",
+            "action_sequence": [{"step": 4, "action": "click", "target": "提交"}],
+            "before": {"page_url": "https://test.example/form", "client_state": "filled"},
+            "after": {"page_url": "https://test.example/form", "client_state": "submitted"},
+            "observed": {"console": [],
+                         "network": [{"method": "POST", "path": "/api/submit",
+                                      "status": 500, "duration_ms": 812}],
+                         "dom": "evidence/dom/OBS-ACT-001.json",
+                         "screenshot": "evidence/screens/OBS-ACT-001.png"},
+            "evidence_paths": ["evidence/screens/OBS-ACT-001.png",
+                               "evidence/dom/OBS-ACT-001.json"],
+            "lead": {"suspicion": "提交返回 500，疑未落库",
+                     "basis": "独立通道：POST /api/submit 非 2xx；非页面回显",
+                     "where": "https://test.example/form"},
+            "blind_spot": ["页面加载期 hook 未安装，初始加载异常未采集"],
+        }
+        self.assertEqual(self.pg.scan_collection_records([record]), [])
+
     def test_lead_without_basis_is_rejected(self):
         record = self.clean(lead={"suspicion": "看着不对"})
         codes = [v["code"] for v in self.pg.scan_collection_records([record])]

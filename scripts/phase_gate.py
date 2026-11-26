@@ -110,6 +110,16 @@ COLLECTION_FORBIDDEN_KEYS = (
 LEAD_FIELDS = {"suspicion", "basis", "where"}
 COLLECTION_STATE_ALLOWED = {"collected", "blocked", "not_run", "skipped", "partial"}
 JUDGEMENT_TOKENS = {"PASS", "FAIL", "通过", "不通过", "已通过", "判定通过", "判定失败"}
+# 嵌套容器（observed/lead 值/before/after/action_sequence 等）内的裁决专属禁词
+# （补充方案 3.2 明确列出的裁决字段定义）。**不含 status/result**：HTTP status、
+# 查询结果集是采集阶段的可观测事实（如 observed.network[].status=500），必须放行——
+# 拦截它们会把事实误判成裁决。顶层仍用全量 COLLECTION_FORBIDDEN_KEYS（status 在顶层
+# 冒充判定通道已被 test_status_is_treated_like_verdict 锁定）。
+NESTED_JUDGEMENT_KEYS = {
+    "pass", "fail", "verdict", "verdicts", "judgement", "judgment",
+    "conclusion", "conclusions", "severity", "defect", "defects",
+    "classification", "root_cause", "pass_fail",
+}
 
 # 裁决阶段的合法观测依据
 OBSERVATION_BASES = {
@@ -1670,8 +1680,31 @@ def _next_action(state):
     return "三阶段均已完成且交接已消费，可按台账口径汇总结论"
 
 
+def _nested_judgement_violations(node, path, ident, index, violations, depth=0):
+    """R1-1 封堵：递归扫描采集记录的全部嵌套容器（observed/lead 值/before/after/
+    action_sequence 及任意更深层次），裁决专属字段命中即违规——与 check_adjudications
+    的 forbidden_source 口径一致，把防线前移到采集端。depth 上限防循环引用卡死。"""
+    if depth > 8:
+        return
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child_path = f"{path}.{key}"
+            if str(key).lower() in NESTED_JUDGEMENT_KEYS:
+                violations.append({
+                    "index": index, "id": ident, "code": "judgement_key_nested",
+                    "key": child_path,
+                    "message": f"采集记录嵌套对象不得包含裁决字段 {child_path}；"
+                               "判定属裁决阶段，采集阶段只能记观察与 lead（嵌套也不豁免）"})
+            _nested_judgement_violations(value, child_path, ident, index,
+                                         violations, depth + 1)
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            _nested_judgement_violations(item, f"{path}[{i}]", ident, index,
+                                         violations, depth + 1)
+
+
 def scan_collection_records(records):
-    """采集阶段记录合规检查：只许观察，不许判定。"""
+    """采集阶段记录合规检查：只许观察，不许判定（含任意嵌套层——R1-1 封堵）。"""
     violations = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
@@ -1684,6 +1717,10 @@ def scan_collection_records(records):
                 violations.append({"index": index, "id": ident, "code": "judgement_key",
                                    "key": key,
                                    "message": f"采集阶段记录不得包含判定字段 {key}，判定属裁决阶段"})
+        # R1-1：顶层 key 之外，嵌套容器（observed/lead 值/before/after 等）同样不得
+        # 藏裁决字段——只扫顶层时把 severity 塞进 observed 就能绕过门禁。
+        for top_key, subtree in record.items():
+            _nested_judgement_violations(subtree, str(top_key), ident, index, violations)
         state_value = record.get("collection_state")
         if state_value is not None:
             text = str(state_value)
