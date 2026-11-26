@@ -118,6 +118,7 @@ CSV派生“界面样式”“交互易用性”“基础无障碍”“功能�
 - `collected` 状态必须有非空 `evidence_paths`（`no_evidence` 违规）；DOM/截图路径与 `observed.dom/screenshot` 重复是允许的，但 `evidence_paths` 仍须显式列出（校验器读这一项）。
 - 「网络失败→是否缺陷」不在采集层判定，交裁决阶段；预期校验失败（4xx 表单校验、取消请求、轮询）保留为观察，不自动升级为缺陷；5xx/未捕获异常可作高优先级候选，仍需裁决核 `observed_*`。
 - 动作前安装观察钩子（复用 `skills/figma-ui-parity/scripts/node/run_journeys.cjs` 的 `page.addInitScript` 前置注入），避免把交互前的异常计入动作后观察；无法前置安装时记 `blind_spot`。
+- 观察钩子采集带**增量游标**（`__vpObs.lastRead`，`collect` 返回 `sinceLastRead`/`cursor`）：台账与 OBS-ACT- 记录只对 `sinceLastRead` 入账，重复采集同一事件不重复计数——游标随页面生命周期归零，跨页应逐动作采集而非跨页累积（spike 001 实证，见 `docs/spikes/001-action-observation-window/README.md`）。
 
 ## 观察结果桥接
 
