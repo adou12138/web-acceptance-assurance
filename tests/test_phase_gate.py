@@ -545,6 +545,26 @@ class CollectionRecordTests(PhaseGateTestBase):
         codes = [v["code"] for v in self.pg.scan_collection_records([record])]
         self.assertIn("lead_unknown_field", codes)
 
+    def test_very_deep_nested_verdict_is_rejected(self):
+        """S6（用户裁定）：第 9 层及更深的裁决字段同样必须拦截——递归深度上限会
+        静默漏报，"零违规"无法证明被跳过的子树合规。迭代遍历不得截断深度。"""
+        node = {"verdict": "FAIL"}
+        for _ in range(12):
+            node = {"nested": node}
+        record = self.clean(observed=node)
+        hits = [v for v in self.pg.scan_collection_records([record])
+                if v["code"] == "judgement_key_nested"]
+        self.assertTrue(hits, "12 层深嵌套的 verdict 必须被拦截（旧 depth>8 实现会漏报）")
+        self.assertIn(".verdict", hits[0]["key"])
+
+    def test_cyclic_reference_does_not_hang(self):
+        """S6：循环引用结构（采集侧畸形输入）不得卡死——迭代遍历用对象身份去重
+        防环（只防环、不截断深度），合法内容仍零违规。"""
+        loop = {"tag": "loop"}
+        loop["self"] = loop
+        record = self.clean(observed=loop)
+        self.assertEqual(self.pg.scan_collection_records([record]), [])
+
 
 class CollectionClosureTests(PhaseGateTestBase):
     """v1.48.4：complete(execute) 消费采集记录——脏数据拒收尾、缺失/空清单压待核实。"""

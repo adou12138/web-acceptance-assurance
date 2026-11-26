@@ -1680,27 +1680,35 @@ def _next_action(state):
     return "三阶段均已完成且交接已消费，可按台账口径汇总结论"
 
 
-def _nested_judgement_violations(node, path, ident, index, violations, depth=0):
-    """R1-1 封堵：递归扫描采集记录的全部嵌套容器（observed/lead 值/before/after/
-    action_sequence 及任意更深层次），裁决专属字段命中即违规——与 check_adjudications
-    的 forbidden_source 口径一致，把防线前移到采集端。depth 上限防循环引用卡死。"""
-    if depth > 8:
-        return
-    if isinstance(node, dict):
-        for key, value in node.items():
-            child_path = f"{path}.{key}"
-            if str(key).lower() in NESTED_JUDGEMENT_KEYS:
-                violations.append({
-                    "index": index, "id": ident, "code": "judgement_key_nested",
-                    "key": child_path,
-                    "message": f"采集记录嵌套对象不得包含裁决字段 {child_path}；"
-                               "判定属裁决阶段，采集阶段只能记观察与 lead（嵌套也不豁免）"})
-            _nested_judgement_violations(value, child_path, ident, index,
-                                         violations, depth + 1)
-    elif isinstance(node, list):
-        for i, item in enumerate(node):
-            _nested_judgement_violations(item, f"{path}[{i}]", ident, index,
-                                         violations, depth + 1)
+def _nested_judgement_violations(node, path, ident, index, violations):
+    """R1-1 封堵（v3 修订）：**迭代遍历全部 dict/list 子树**，不做深度截断。
+
+    递归深度上限会静默放过第 N 层以后的违规——"零违规"无法证明被跳过的子树合规，
+    与"任何嵌套对象"的承诺冲突。改用显式栈完整遍历，用对象身份（id）去重防循环
+    引用（只防环、不截断深度）。命中裁决专属字段即违规，路径逐级可定位。
+    """
+    stack = [(node, path)]
+    seen = set()
+    while stack:
+        current, current_path = stack.pop()
+        if not isinstance(current, (dict, list)):
+            continue
+        if id(current) in seen:  # 自引用/共享子树只扫一次，防环（非深度截断）
+            continue
+        seen.add(id(current))
+        if isinstance(current, dict):
+            for key, value in current.items():
+                child_path = f"{current_path}.{key}"
+                if str(key).lower() in NESTED_JUDGEMENT_KEYS:
+                    violations.append({
+                        "index": index, "id": ident, "code": "judgement_key_nested",
+                        "key": child_path,
+                        "message": f"采集记录嵌套对象不得包含裁决字段 {child_path}；"
+                                   "判定属裁决阶段，采集阶段只能记观察与 lead（嵌套也不豁免）"})
+                stack.append((value, child_path))
+        else:
+            for i, item in enumerate(current):
+                stack.append((item, f"{current_path}[{i}]"))
 
 
 def scan_collection_records(records):
