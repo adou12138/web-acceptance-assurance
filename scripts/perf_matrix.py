@@ -28,13 +28,23 @@ SCHEMA_VERSION = "1.0"
 METRICS = ("lcp_ms", "fcp_ms", "ttfb_ms", "render_delay_ms", "cls", "inp_ms", "longtask_ms")
 LOAD_TYPES = {"cold", "warm"}
 EVIDENCE_STATES = {"verified", "no-evidence", "incomplete", "file-missing", "mismatch"}
-SCOPE = ("条件格结果只代表所列网络/CPU/视口/冷热组合下的表现，不是真实用户分位数；"
-         "单次 lab 采样不外推总体，未采指标保持未知而不是0")
-FIELDS = ["cell_id", "viewport_w", "viewport_h", "mobile", "network", "cpu_throttling",
-          "load_type", "lcp_ms", "lcp_ms_verdict", "fcp_ms", "fcp_ms_verdict", "ttfb_ms",
-          "ttfb_ms_verdict", "render_delay_ms", "render_delay_ms_verdict", "cls", "cls_verdict",
-          "inp_ms", "inp_ms_verdict", "longtask_ms", "longtask_ms_verdict", "overall",
-          "conclusion", "measured", "evidence_status", "trace_file", "trace_sha256", "notes"]
+SCOPE = ("条件格结果只代表所列网络/CPU/视口/设备/冷热组合下的表现，不是真实用户分位数；"
+         "设备身份字段（UA/DPR/方向/触摸/屏幕）缺记时该格只是视口级模拟，"
+         "不得据此宣称移动端兼容；单次 lab 采样不外推总体，未采指标保持未知而不是0")
+FIELDS = ["cell_id", "viewport_w", "viewport_h", "mobile", "dpr", "user_agent", "screen_w",
+          "screen_h", "orientation", "touch", "max_touch_points", "platform", "network",
+          "cpu_throttling", "load_type", "lcp_ms", "lcp_ms_verdict", "fcp_ms", "fcp_ms_verdict",
+          "ttfb_ms", "ttfb_ms_verdict", "render_delay_ms", "render_delay_ms_verdict", "cls",
+          "cls_verdict", "inp_ms", "inp_ms_verdict", "longtask_ms", "longtask_ms_verdict",
+          "overall", "conclusion", "measured", "evidence_status", "trace_file", "trace_sha256",
+          "notes"]
+
+# 设备身份字段：移动端「同视口不同 UA/DPR/方向」是不同条件格，必须参与去重，
+# 否则照文档成套模拟的两格会被误判「条件组合重复」而拒收。
+DEVICE_TEXT = ("user_agent", "orientation", "platform")
+# 数值字段 → 最小允许值（dpr 另判 >0，见 _device）
+DEVICE_NUMBER = {"dpr": 0, "screen_w": 1, "screen_h": 1, "max_touch_points": 0}
+ORIENTATIONS = ("portrait", "landscape")
 
 
 def _origin(value, label):
@@ -129,6 +139,42 @@ def _evidence(raw, label):
     return {"status": status, "trace_file": trace_file, "sha256": digest}
 
 
+def _device(raw, label):
+    """设备身份（可选）：移动端要记完整才有意义——同视口不同 UA/DPR 是不同的条件格。
+
+    缺省返回空字典（旧矩阵零改动兼容）；只校验给了的字段，不强制全套，
+    因为桌面格通常不需要 UA/方向。不完整时由文档口径要求专家补记，不在工具层拒绝。
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label}.device: 必须是对象")
+    allowed = set(DEVICE_TEXT) | set(DEVICE_NUMBER) | {"touch"}
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"{label}.device: 含未知字段 {sorted(unknown)}")
+    device = {}
+    for key in DEVICE_TEXT:
+        if key in raw:
+            # 显式给了就不能静默丢：空串 UA 被悄悄当成"没记"，会把两格不同配置
+            # 并成一格去重，正是"不静默忽略"要防的情形。
+            value = _text(raw.get(key), f"{label}.device.{key}", True).strip()
+            if key == "orientation" and value not in ORIENTATIONS:
+                raise ValueError(f"{label}.device.orientation: 只能是 portrait 或 landscape")
+            device[key] = value
+    for key, minimum in DEVICE_NUMBER.items():
+        if key in raw:
+            value = _number(raw.get(key), f"{label}.device.{key}", minimum)
+            if key == "dpr" and value <= 0:
+                raise ValueError(f"{label}.device.dpr: 必须大于 0")
+            device[key] = value
+    if "touch" in raw:
+        if type(raw.get("touch")) is not bool:
+            raise ValueError(f"{label}.device.touch: 必须为布尔值")
+        device["touch"] = raw["touch"]
+    return device
+
+
 def _cell(raw, label, limits):
     if not isinstance(raw, dict):
         raise ValueError(f"{label}: 必须是对象")
@@ -140,6 +186,7 @@ def _cell(raw, label, limits):
     height = _number(viewport.get("height"), f"{label}.viewport.height", 1)
     if type(viewport.get("mobile")) is not bool:
         raise ValueError(f"{label}.viewport.mobile: 必须为布尔值")
+    device = _device(raw.get("device"), label)
     network = _text(raw.get("network"), f"{label}.network")
     cpu = _number(raw.get("cpu_throttling"), f"{label}.cpu_throttling", 1)
     load_type = _text(raw.get("load_type"), f"{label}.load_type")
@@ -159,6 +206,7 @@ def _cell(raw, label, limits):
     return {
         "id": ident,
         "viewport": {"width": int(width), "height": int(height), "mobile": viewport["mobile"]},
+        "device": device,
         "network": network,
         "cpu_throttling": cpu,
         "load_type": load_type,
@@ -198,9 +246,18 @@ def summarize(data):
             raise ValueError(f"cells[{index}].id: 重复的 {item['id']}")
         seen_ids.add(item["id"])
         condition = (item["network"], item["cpu_throttling"], item["viewport"]["width"],
-                     item["viewport"]["height"], item["load_type"])
+                     item["viewport"]["height"], item["viewport"]["mobile"], item["load_type"],
+                     # 设备身份全字段参与去重：移动端同视口不同 UA/DPR/方向/触摸/屏幕/
+                     # 平台/触点数都是不同条件格，漏任何一项都会把成套模拟判成重复采集。
+                     # mobile 也进键是有意修正：旧规则把桌面/移动同视口误判为重复，
+                     # 合法旧矩阵不会含这种两格，故旧记录判定不变。
+                     # 旧矩阵无 device → 设备各项为 None。
+                     item["device"].get("user_agent"), item["device"].get("dpr"),
+                     item["device"].get("orientation"), item["device"].get("touch"),
+                     item["device"].get("screen_w"), item["device"].get("screen_h"),
+                     item["device"].get("platform"), item["device"].get("max_touch_points"))
         if condition in seen_conditions:
-            raise ValueError(f"cells[{index}]: 条件组合重复，同一网络/CPU/视口/冷热只测一次")
+            raise ValueError(f"cells[{index}]: 条件组合重复，同一网络/CPU/视口/设备/冷热只测一次")
         seen_conditions.add(condition)
         cells.append(item)
     not_collected = sorted({key for item in cells for key, verdict in item["verdicts"].items()
@@ -239,11 +296,20 @@ def export_csv(data, output):
         writer = csv.DictWriter(stream, fieldnames=FIELDS)
         writer.writeheader()
         for item in report["cells"]:
+            device = item["device"]
             row = {
                 "cell_id": item["id"],
                 "viewport_w": item["viewport"]["width"],
                 "viewport_h": item["viewport"]["height"],
                 "mobile": item["viewport"]["mobile"],
+                "dpr": device.get("dpr", ""),
+                "user_agent": device.get("user_agent", ""),
+                "screen_w": device.get("screen_w", ""),
+                "screen_h": device.get("screen_h", ""),
+                "orientation": device.get("orientation", ""),
+                "touch": "" if "touch" not in device else device["touch"],
+                "max_touch_points": device.get("max_touch_points", ""),
+                "platform": device.get("platform", ""),
                 "network": item["network"],
                 "cpu_throttling": item["cpu_throttling"],
                 "load_type": item["load_type"],

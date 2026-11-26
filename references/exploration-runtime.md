@@ -151,7 +151,7 @@ options可含`expectedOrigin`（精确http/https origin，不能含路径、查�
 
 单一条件的一次采集容易被读成“页面性能达标”。按条件格组织，才能看出哪一维在恶化、恶化多少：
 
-- 视口用设备模拟设置，不用宿主窗口尺寸代替；目标移动端须设到真实宽度（如375）并注明设备像素比与触摸模拟。宿主窗口最小宽度不足以达到目标宽度时，改用设备模拟而不是改写目标值。
+- 视口与设备身份用设备模拟**成套**设置（参数表见下），不用宿主窗口尺寸代替。只改宽度不算移动端模拟：UA、DPR、方向、触摸任一不同，页面走的分支就可能不同。宿主窗口最小宽度不足以达到目标宽度时，改用设备模拟而不是改写目标值。
 - 网络与CPU各取两档（如Slow 4G与Fast 3G、1倍与4倍降速），与视口组合成矩阵；每组条件只采集一次，避免同条件多样本混算。冷缓存加载标cold，交互型标warm。
 - 加载型与交互型分开读数：加载型读LCP及其分解、FCP、CLS；交互型读INP，且必须先不刷新开录、真实操作、再停录。
 - 每格必须保留原始追踪文件与SHA-256。阈值必须写明来源（如Core Web Vitals良好线），没有出处的阈值不得用于判定。
@@ -159,6 +159,67 @@ options可含`expectedOrigin`（精确http/https origin，不能含路径、查�
 - 移动端还需检查文档是否声明 `width=device-width`；缺少时移动浏览器会按默认布局视口渲染再整体缩放，矩阵里的移动格数据必须同时注明这一点。
 
 矩阵结论只覆盖所列条件组合。同一页面在8格加载中全部达标、却在交互格超出INP阈值是常见结果，说明只测加载会漏掉交互问题；报告须按条件分别陈述，不合并成一句“性能通过”。
+
+#### 移动端设备模拟参数（成套设置，可直接照抄）
+
+**为什么必须成套**：站点按 UA 分发移动版、按 DPR 取图、按方向/触摸绑事件。只把视口调成 375 宽，页面拿到的仍是桌面 UA 与桌面事件模型——测的是「窄窗口的桌面浏览器」，不是移动端。这类漏测最隐蔽：布局看着对，UA 分支的跳转、下载、支付、内嵌浏览器适配一个都没覆盖。
+
+**先看通道能力，再填表**（做不到的必须如实记录，不得假定已生效）：
+
+| 通道 | 能设什么 | 不能设什么 |
+|---|---|---|
+| Chrome DevTools MCP `emulate` | `viewport`（宽×高×DPR，可加 `mobile`/`touch`/`landscape` 标记）、`userAgent`、`networkConditions`、`cpuThrottlingRate` | 屏幕物理分辨率、`navigator.platform`、`maxTouchPoints` 无独立开关 |
+| Playwright MCP | `browser_resize` 只改窗口；设备模拟须在创建浏览器上下文时传 `deviceScaleFactor`/`isMobile`/`hasTouch`/`userAgent`——**当前通道是否暴露建上下文能力须先实测**，不成立时按缺口登记，不得假定已生效 | 同上；`browser_resize` 单独用＝只改窗口，不等于设备模拟 |
+
+`emulate` 一次调用会替换全部模拟设置（`extraHttpHeaders` 除外），**所有参数必须一次传齐**，分多次调用会互相覆盖。
+
+**参数表**：
+
+| 参数名称 | 推荐取值 | 适用场景 | 落地方式 |
+|---|---|---|---|
+| `userAgent` | 主流三档（版本号按目标环境实际抓包替换）：<br>iOS Safari：`Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1`<br>Android Chrome：`Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36`<br>微信内置：`Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 MicroMessenger/8.0.49(0x18003129) NetType/WIFI Language/zh_CN` | UA 分发（移动版跳转/下载页/支付通道）、内嵌浏览器适配、服务端按 UA 返回不同字段 | `emulate.userAgent`；矩阵记 `device.user_agent` |
+| `viewport` 视口尺寸 | 375×667（iPhone SE/8，最小主流，WCAG 1.4.10 重排须 ≤320 另测）、390×844（iPhone 12–14）、393×852（iPhone 15/16）、412×915（Pixel 7/8）、360×800（多数 Android 中端）；横屏互换宽高 | 响应式断点、首屏信息量、固定/粘性区域、键盘弹出后的可操作区 | `emulate.viewport` 前三段 `宽x高xDPR` |
+| 设备像素比 `DPR` | 2（iPhone SE/8、部分 Android）、3（iPhone Plus/Pro/15、多数 Android 旗舰）、2.625（Pixel 7/8） | 高清图取图与清晰度、1px 边框、canvas/图片模糊、`srcset` 选图分支 | `emulate.viewport` 第三段；矩阵记 `device.dpr` |
+| `mobile` / `touch` 标记 | 移动端两项都开：`...,mobile,touch` | 触发移动端事件模型（`ontouchstart`、触摸滚动惯性）、视口 meta 生效、hover 态缺失 | `emulate.viewport` 尾部标记；矩阵记 `device.touch`（布尔） |
+| 横竖屏 `orientation` | `portrait`（默认）/ `landscape`（加标记并互换宽高） | 横屏视频/表格、方向锁定、旋转后状态保持、键盘遮挡 | `emulate.viewport` 加 `landscape`；矩阵记 `device.orientation` |
+| `networkConditions` | `Slow 4G`（基线）、`Fast 3G`（劣化重测）、`Offline`（离线态）；枚举仅 `Offline`/`Slow 3G`/`Fast 3G`/`Slow 4G`/`Fast 4G` | 弱网首屏、超时重试、离线缓存与降级、骨架屏时序 | `emulate.networkConditions` |
+| `cpuThrottlingRate` | 1（基准）/ 4（低端机），1–20 | 交互延迟、动画卡顿、主线程长任务 | `emulate.cpuThrottlingRate` |
+| 屏幕尺寸 `screen`（CSS 像素） | 与设备标称一致，通常等于竖屏视口：390×844（iPhone 12–14）、393×852（iPhone 15/16）、412×915（Pixel 7/8）。**`screen.width` 返回 CSS 像素，不是物理像素**；物理分辨率 = `screen` × DPR（如 390×844@3 → 1170×2532），仅作换算说明，不得填进该字段 | `screen.width/height` 媒体查询、全屏/截图基准、横屏判定 | **无独立开关**：页面内读回 `screen.width/height`，以读回值为准；矩阵记 `device.screen_w`/`screen_h`（同为 CSS 像素） |
+| 平台标识 `platform` | 与 UA 同源的平台串（如 `iPhone`/`Linux armv8l`） | `navigator.platform` 分支、客户端提示（Client Hints） | **无独立开关**：UA 覆盖不等改 `navigator.platform`，页面内读回记录；矩阵记 `device.platform` |
+| 多点触控 `maxTouchPoints` | 主流 5，部分 Android 10 | 双指缩放、手势库、地图/画布交互 | **无独立开关**：`touch` 标记不保证点数为 5，页面内读回 `navigator.maxTouchPoints` 记录；矩阵记 `device.max_touch_points` |
+
+**直接可用的配置片段**（Chrome DevTools MCP，宽度/DPR/UA/网络/CPU 一次传齐）：
+
+```json
+{
+  "pageId": 1,
+  "viewport": "390x844x3,mobile,touch",
+  "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+  "networkConditions": "Slow 4G",
+  "cpuThrottlingRate": 4
+}
+```
+
+横屏只改一段：`"viewport": "844x390x3,mobile,touch,landscape"`。
+
+**设置完必须读回核对**（设了不等于生效，`viewport` 字符串解析失败不会报错）：
+
+```js
+() => ({
+  ua: navigator.userAgent, dpr: devicePixelRatio,
+  vw: innerWidth, vh: innerHeight,
+  screenW: screen.width, screenH: screen.height,
+  orientation: matchMedia('(orientation: portrait)').matches ? 'portrait' : 'landscape',
+  touch: 'ontouchstart' in window, maxTouchPoints: navigator.maxTouchPoints,
+  platform: navigator.platform
+})
+```
+
+读回值与设定不一致时，**以读回值为准**写进报告，并记一条「模拟参数与声明不符」——这本身可能就是原因（例如返回了桌面版页面导致 viewport 被重置）。
+
+**证据记录要求**：每个移动条件格必须记录实际生效的 `UA`、`DPR`、视口宽高、屏幕分辨率、方向、`touch`/`maxTouchPoints`、`platform` 与网络/CPU 档位；`perf_matrix.py` 的 `device` 字段承载这组信息并参与条件去重（同视口不同 UA 算两个条件格，不是重复采集）。缺记时按「模拟参数不完整」记缺口，不得只写「移动端」三字。
+
+**模拟 ≠ 真机**：以上只证明「在该模拟参数下的表现」。真实 GPU 渲染、字体度量、系统缩放、运营商网络、厂商 WebView 差异均未覆盖；结论写「iOS Safari（模拟）」，不写「iPhone 上验证通过」，兼容结论须另接真机独立 RUN。按 `skills/case-generator/references/methodology/evidence_grading.md`，设备模拟仍属 **E2**——配齐 UA/DPR/触摸只让「模拟了什么」可核对，不改变证据等级，不得据此写「已验证」。
 
 ## 样式与易用性证据串链
 

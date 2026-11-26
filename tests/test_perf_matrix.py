@@ -132,6 +132,80 @@ class PerfMatrixTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             perf_matrix.summarize(payload([cell("M-1", metrics={"lcp_ms": 100, "magic": 1})]))
 
+    # —— 移动端设备身份（v1.53.0）：同视口不同 UA/DPR 是不同条件格 ——
+    def test_same_viewport_different_ua_are_distinct_conditions(self):
+        """照文档成套模拟 iOS 与 Android 两格，不得被判成重复条件。"""
+        ios = cell("M-ios", device={"user_agent": "Mozilla/5.0 (iPhone; ...) Version/17.5 Mobile/15E148 Safari/604.1"})
+        android = cell("M-android", device={"user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) Chrome/126.0.0.0 Mobile Safari/537.36"})
+        report = perf_matrix.summarize(payload([ios, android]))
+        self.assertEqual(report["cells_total"], 2)
+
+    def test_same_viewport_different_dpr_are_distinct_conditions(self):
+        report = perf_matrix.summarize(payload([cell("M-1", device={"dpr": 2}),
+                                                cell("M-2", device={"dpr": 3})]))
+        self.assertEqual(report["cells_total"], 2)
+
+    def test_identical_device_still_rejected_as_duplicate(self):
+        """设备身份相同才算重复：不能拿 UA 当"多跑一格"的免重复通行证。"""
+        same = {"user_agent": "UA-1", "dpr": 3, "orientation": "portrait", "touch": True}
+        with self.assertRaises(ValueError):
+            perf_matrix.summarize(payload([cell("M-1", device=dict(same)),
+                                           cell("M-2", device=dict(same))]))
+
+    def test_platform_and_touch_points_also_participate_in_dedup(self):
+        """审核修复：文档承诺「设备身份参与去重」，platform/max_touch_points 漏了就会
+        把成套模拟的两格误判重复（同 UA/DPR 不同平台或触点数）。"""
+        base = {"user_agent": "UA-1", "dpr": 3}
+        report = perf_matrix.summarize(payload([
+            cell("M-1", device=dict(base, platform="iPhone", max_touch_points=5)),
+            cell("M-2", device=dict(base, platform="Linux armv8l", max_touch_points=5)),
+            cell("M-3", device=dict(base, platform="iPhone", max_touch_points=10)),
+        ]))
+        self.assertEqual(report["cells_total"], 3)
+
+    def test_legacy_cell_without_device_still_works(self):
+        """旧矩阵无 device 字段：去重行为不变（两格同条件仍拒收）。"""
+        with self.assertRaises(ValueError):
+            perf_matrix.summarize(payload([cell("M-1"), cell("M-2")]))
+        report = perf_matrix.summarize(payload([cell("M-1"),
+                                                cell("M-2", network="Fast 3G")]))
+        self.assertEqual(report["cells_total"], 2)
+        self.assertEqual(report["cells"][0]["device"], {})
+
+    def test_mobile_flag_participates_in_dedup(self):
+        """审核修复：mobile 进键是有意修正——桌面/移动同视口不能被判成重复采集。"""
+        report = perf_matrix.summarize(payload([
+            cell("M-mobile"),
+            cell("M-desktop", viewport={"width": 375, "height": 812, "mobile": False}),
+        ]))
+        self.assertEqual(report["cells_total"], 2)
+
+    def test_device_field_values_are_validated(self):
+        # 空串不得静默丢弃：显式给了就必须记下，否则两格不同配置会被并成一格。
+        for bad in ({"orientation": "斜屏"}, {"orientation": ""}, {"user_agent": ""},
+                    {"platform": ""}, {"dpr": 0}, {"touch": "yes"},
+                    {"unknown_key": 1}, {"screen_w": 0}):
+            with self.subTest(device=bad):
+                with self.assertRaises(ValueError):
+                    perf_matrix.summarize(payload([cell("M-1", device=bad)]))
+
+    def test_device_identity_is_exported_to_csv(self):
+        output = self.root / "matrix.csv"
+        # screen 是 CSS 像素（window.screen.width/height），不是物理像素。
+        item = cell("M-1", device={"user_agent": "UA-iOS", "dpr": 3, "screen_w": 390,
+                                   "screen_h": 844, "orientation": "portrait",
+                                   "touch": True, "max_touch_points": 5, "platform": "iPhone"})
+        perf_matrix.export_csv(payload([item]), output)
+        with output.open(encoding="utf-8-sig") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(rows[0]["user_agent"], "UA-iOS")
+        self.assertEqual(rows[0]["dpr"], "3")
+        self.assertEqual(rows[0]["screen_w"], "390")
+        self.assertEqual(rows[0]["screen_h"], "844")
+        self.assertEqual(rows[0]["orientation"], "portrait")
+        self.assertEqual(rows[0]["max_touch_points"], "5")
+        self.assertEqual(rows[0]["platform"], "iPhone")
+
     def test_negative_metric_rejected(self):
         with self.assertRaises(ValueError):
             perf_matrix.summarize(payload([cell("M-1", metrics={"lcp_ms": -1})]))

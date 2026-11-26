@@ -1541,3 +1541,19 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **多份分域清单合并（中）**：合并结果聚合 `measurement_gaps`、`keyboard_recorded`（取最严）、`signal_probe.missing`（带 `[n]` 域标）与 `input_schema_version`（任一份为 1.1 即 1.1），防止跨域批次把严格缺口洗成通过。
 - **测试**：`SignalProbeTest` 增逐单元与诚实性 6 例（升级只免本页、深度痕迹须为前缀、ghost 页面不建池、无 falsify_action/纯 functional/BLOCKED 的复测条目不计覆盖）；新增 `ExplorationStrictGapTest` 5 例锁住闸门接线（信号/测量缺口顶不住自报通过、键盘仅 1.1 压档、未标记摘要只披露）；新增 `SignalProbeDocContractTest` 3 例锁文档口径。
 - **版本**：plugin.json 1.51.1→1.52.0；本机全量 **978 passed / 2 skipped / 245 subtests**（Python 3.9，`compileall scripts` 通过）。
+
+### v1.52.1 · 移动端设备模拟成套化（UA/DPR/视口/屏幕/方向/触摸/平台/网络）
+
+- **问题**：原要求只说「视口设到真实宽度、注明设备像素比与触摸模拟」，未要求 UA。CDP 的视口模拟不改 `navigator.userAgent`，照此执行测的是「窄窗口的桌面浏览器」——布局看着对，按 UA 分发移动版、内嵌浏览器适配、支付/下载跳转全部漏测。这是移动端最典型的漏测形态。
+- **要求侧（`references/exploration-runtime.md` 新增「移动端设备模拟参数」小节）**：参数表按「参数名称 / 推荐取值 / 适用场景 / 落地方式」四列组织，覆盖 `userAgent`（iOS Safari、Android Chrome、微信内置三档完整串）、`viewport`（375×667 / 390×844 / 393×851 / 360×800）、`DPR`（2 / 3 / 2.625）、`mobile`+`touch` 标记、`orientation`、`networkConditions`（Slow 4G / Fast 3G / Offline）、`cpuThrottlingRate`、以及 `screen` / `platform` / `maxTouchPoints` 三项。附可直接照抄的 `emulate` 配置片段与页面内读回核对脚本。
+- **能力边界如实写死**：Chrome DevTools MCP `emulate` 能设 viewport（含 DPR/mobile/touch/landscape）、userAgent、networkConditions、cpuThrottlingRate；屏幕尺寸 `screen`（CSS 像素，非物理分辨率）、`navigator.platform`、`maxTouchPoints` **无独立开关**，只能页面内读回记录、以读回值为准。`emulate` 每次调用替换全部模拟设置，参数必须一次传齐。`browser_resize` 单独用只改窗口，不等于设备模拟。
+- **证据等级不越级**：设备模拟仍属 E2，配齐参数只让「模拟了什么」可核对，不得写「已验证」；结论须写「iOS Safari（模拟）」并另接真机独立 RUN。
+- **契约侧（`scripts/perf_matrix.py` 补齐，否则文档落不了地）**：新增可选 `device` 对象（`user_agent`/`dpr`/`screen_w`/`screen_h`/`orientation`/`touch`/`max_touch_points`/`platform`），并把设备身份纳入条件去重键。原去重键只有网络/CPU/视口/冷热——照新要求配「同视口不同 UA」两格会被误判「条件组合重复」而拒收，等于要求不可执行。缺省 `device` 的旧矩阵行为完全不变；未知字段/非法枚举/`dpr≤0` 明确报错（不静默忽略）。
+- **CSV 增列**：`dpr`/`user_agent`/`screen_w`/`screen_h`/`orientation`/`touch`/`max_touch_points`/`platform`，模拟参数随矩阵导出，报告不必回查原始输入。
+- **回链**：`visual-usability.md`「触摸与响应式」行指向新参数小节，避免两处各写一套口径。
+- **测试**：`tests/test_perf_matrix.py` 增 6 例（同视口不同 UA/不同 DPR 不判重复、设备身份相同仍拒收、旧矩阵无 device 行为不变、非法字段报错、CSV 导出设备列）。
+- **版本**：plugin.json 1.52.0→1.52.1；本机全量 **988 passed / 253 subtests**（`compileall scripts` 通过）。
+- **审核修复（同轮，v1.52.1 提交前）**：① **机型参数事实错误**——Pixel 7 的 CSS 视口是 412×915（DPR 2.625），原写成 393×851（那是 Pixel 5/6 一档）；390×844 只覆盖 iPhone 12–14，iPhone 15/16 是 393×852。② **screen 单位错误（最关键）**——CDP 的 `screenWidth/Height` 覆盖的是 `window.screen.width/height`，单位是 **CSS 像素**，不是物理像素；原文写「390×844@3 → 1170×2532」并让读回脚本读 `screen.width`，会让按文档填 1170 的人读回 390，触发「参数与声明不符」的假告警。现明确 `screen` 填 CSS 像素，物理分辨率只作换算说明。③ **微信 UA 补全**——缺 `(0x...)` 与 `NetType/Language` 段，部分按完整形态匹配的 UA 嗅探会判不出来。④ **去重键漏字段**——文档承诺「设备身份参与去重」，代码只含 UA/DPR/方向/触摸/屏幕，漏 `platform`/`max_touch_points`，同 UA 不同平台或触点数会被误判重复；现 8 字段全参与，逐字段实测。⑤ **Playwright 通道断言未实测**——原文直接写用 `browser_run_code_unsafe` 调 context 选项，未验证该通道是否暴露建上下文能力，改为「须先实测，不成立按缺口登记」。⑥ **死解构清理**——`DEVICE_NUMBER` 原为 `(minimum, None)` 二元组，第二项从未使用，收敛为纯最小值的标量字典。⑦ 文档补 `device.touch` 落点，使文档字段集与代码接受集对齐（实测无「文档有代码无」）。
+
+
+- **二次审核（同轮，交付前）**：① **空串静默丢弃**——`orientation`/`user_agent`/`platform` 显式填空串原被静默跳过、记成「未填」，会把两格不同配置并成一格去重，与「不静默忽略」承诺冲突；现显式给值即校验（空串报错、非法枚举报错），+3 子用例。② **mobile 去重键未留痕**——`mobile` 进键实际修正了旧版「桌面/移动同视口误判重复」，但无测试、注释还写成「旧行为完全一致」；现加 `test_mobile_flag_participates_in_dedup` 并把注释改为如实表述（合法旧矩阵本就不含这种两格，故旧记录判定不变）。③ **测试与文档口径分裂**——CSV 测试仍填物理像素 390×844@3→1170×2532，与上一轮刚修的「screen 填 CSS 像素」相反，照抄会重现假告警；现改 390×844 并断言 screen 两列。④ **SYNC-NOTES 自身口径**——能力边界段仍写「屏幕物理分辨率」，改为「屏幕尺寸 screen（CSS 像素）」。另核实：Chrome DevTools MCP `emulate` schema 与文档配置片段逐字段对得上（pageId/viewport 格式/UA/网络枚举/CPU 1–20，无越界字段）；`FIELDS` 36 列与 CSV 写出键零差集，且无下游按列数解析；旧矩阵 `device` 缺省时设备各项为 None，判定不变。
