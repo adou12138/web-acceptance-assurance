@@ -1585,3 +1585,14 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
   - **S8（裁定"主落点已有依据"）**：确认复核记录主落点为 `output-templates.md §0.4`（reviews.jsonl 字段+消费入口），缺陷表仅在需要呈现复核结果时才加引用——当前无呈现需求，不重复建表（项目侧零改动）。
 - **方案侧（v2 → v3，640 行，10 处落点已复核）**：修订记录加 v3 行；新增「开工基线记录」节（提交/收集数/执行结果三记录，正文与命令块删除全部固定数字）；§2.3 补方法来源不可达处置；§3.2 明写两层规则差异 + 超深与防环处置；M4 测试按职责分组并补消费端验收；M8 补落点指向 §0.4 与提交三级口径（本地 commit 允许 / push·发布需授权）；§5 阶段0 基线三记录 + 阶段4 独立审核操作定义（冻结基线/待审范围含未提交与新增/四维度/问题表格式）；§6 去固定数字；§7.1 环境不可用交付状态（试点未执行/spike002 PARTIAL/门禁与夹具与 smoke 独立交付）；§8 验收可核验化 + 提交口径终态。
 - **验证**：项目全量 OK、smoke 29/0、方案结构完整（一级标题序无断裂）。方案文件位于 `d:/TestCase`（非 git 仓库），落盘即生效无需提交。
+### 验收影响问题修复（2026-11-26，独立验收清单 4 条）
+
+| # | 级别 | 静态发现（已回源核实成立） | 修复 | 验证 |
+|---|---|---|---|---|
+| #1 | 高 | `sinceLastRead` 只返回数量、异常/请求类 findings 从累计缓冲生成、旅程入口未传游标；smoke 仅覆盖计数 | `runtime_observability.js` collect 新增 `newEvents` **增量事件明细**（errors/requests 含 kind/text/at、method/url/status/at，均经 redact）；`run_journeys.cjs collectRuntime` 透传 `cursor`/`sinceLastRead`/`newEvents`；验收口径写明"入账以 newEvents 为准（findings 是累计判定视图）" | smoke 29→**33**（4 断言：异常明细/请求明细/重复采集仅新增/无新增为空） |
+| #2 | 高 | 专项 confirmed/pending → lead 转换实现与三类分流样例缺失（`rg` 空输出核实） | 新增 `scripts/observation_to_lead.py`：剥离 status/severity/confidence/raw、lead 三键（suspicion/basis/where）、blind_spot 披露、`--class` 三类分流（expected-4xx/background-noise 只观察不候选；real-failure 生成 pending 候选）；新增 `examples/obs-samples/` 三组 OBS+候选+复核记录 | `test_observation_to_lead.py` 11 例：转换产物过 `scan-collection` 零违规、候选→OBS→证据回查、复核→候选回查；三类样例均验 |
+| #3 | 高 | dense-form.html 无脚本逻辑、细则为固定文本，无法完成「校验→修正→提交→重开读回」 | 夹具补内联旅程逻辑（validate/save/load + localStorage + form-tip 提示区，自足无外部依赖；注入点不变）；新增 Node 桩旅程冒烟 `dense_form_journey_smoke.cjs`；契约测试增 `test_dense_form_has_journey_capability` | 桩冒烟 **7/0**（空校验失败不写→超长失败→合法保存→重开读回一致→重复覆盖不追加）；契约 8 例 OK；真实浏览器试点证据仍如实登记未执行 |
+| #4 | 中 | agents:163 与 exploration-runtime.md:117 仍写「递归深度上限 8 层」，与迭代遍历实现不一致 | 两处改为「**迭代遍历完整子树，不做深度截断**（对象身份去重只防循环引用）」+ 12 层/循环引用用例引用 | `rg '深度上限 8 层'` 零残留；引用守卫绿 |
+
+- **提交**：`aa6ebe5`（#4+#1）、`a20f984`（#2）、`69195d6`（#3）；本轮全量 unittest OK、runtime smoke 33/0、dense-form smoke 7/0、node --test 31/0。
+- **仍待环境实跑（如实）**：§7.1 全链路真实浏览器试点与状态读回证据（夹具能力已修复，真实取证待浏览器运行时）。
