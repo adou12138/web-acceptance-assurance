@@ -263,6 +263,37 @@ check('无新增时 sinceLastRead 为 0（重复采集不重复入账）',
     !o14Text.includes('sk-live-abc123secret') && o14Text.includes('[REDACTED]'),
     o14Text.slice(0, 300));
 
+  // ⑥ 增量事件明细（M4 验收修订）：newEvents 承载**每条事件**的窗口归属（不只数量），
+  // 消费方按它入账——重复 collect 时 newEvents 为空，同一 action_id 不重复入账。
+  const e15 = makeEnv(() => Promise.resolve({ status: 200, ok: true }));
+  e15.call();
+  e15.fakeConsole.error('window1-error');
+  await e15.win.fetch('https://example.test/api/a', OPTS);
+  const c15a = JSON.parse(e15.call());
+  check('newEvents 首次含 1 条异常明细（kind/text/at）',
+    !!(c15a.newEvents && c15a.newEvents.errors.length === 1
+       && c15a.newEvents.errors[0].kind === 'console'
+       && !!c15a.newEvents.errors[0].text && !!c15a.newEvents.errors[0].at),
+    JSON.stringify(c15a.newEvents));
+  check('newEvents 首次含 1 条请求明细（method/url/status/at）',
+    !!(c15a.newEvents && c15a.newEvents.requests.length === 1
+       && c15a.newEvents.requests[0].method === 'POST'
+       && c15a.newEvents.requests[0].status === 200
+       && !!c15a.newEvents.requests[0].at),
+    JSON.stringify(c15a.newEvents));
+  e15.fakeConsole.error('window2-error');
+  const c15b = JSON.parse(e15.call());
+  check('重复采集 newEvents 只含新增（1 异常 / 0 请求）',
+    !!(c15b.newEvents && c15b.newEvents.errors.length === 1
+       && c15b.newEvents.errors[0].text.indexOf('window2') >= 0
+       && c15b.newEvents.requests.length === 0),
+    JSON.stringify(c15b.newEvents));
+  const c15c = JSON.parse(e15.call());
+  check('无新增时 newEvents 为空（入账不重复）',
+    !!(c15c.newEvents && c15c.newEvents.errors.length === 0
+       && c15c.newEvents.requests.length === 0),
+    JSON.stringify(c15c.newEvents));
+
   console.log('\n==== runtime_observability 冒烟：' + pass + ' 通过 / ' + fail + ' 失败 ====');
   process.exit(fail ? 1 : 0);
 })();

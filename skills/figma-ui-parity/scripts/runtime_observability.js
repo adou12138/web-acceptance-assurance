@@ -475,12 +475,29 @@
   const hooksInstalled = !!obs;
   // 增量游标（M2/动作窗口）：本次距上次 collect 的新增事件数。消费方只对
   // sinceLastRead 入账，重复采集同一事件不会重复计数；cursor 是累计只读位点。
-  const sinceLastRead = obs.lastRead
-    ? { errors: obs.errors.length - obs.lastRead.errors,
-        requests: obs.requests.length - obs.lastRead.requests }
-    : { errors: obs.errors.length, requests: obs.requests.length };
+  // 增量游标（M2/动作窗口）：数量 + **事件明细**。findings 仍是累计缓冲的判定视图；
+  // 入账以 newEvents 为准——消费方只对本次新增事件写 OBS-ACT-/台账，重复 collect 时
+  // newEvents 为空，同一 action_id 不会重复入账（验收条件：窗口归属可核对 + 不重复入账）。
+  const prevRead = obs.lastRead || { errors: 0, requests: 0 };
+  const sinceLastRead = {
+    errors: obs.errors.length - prevRead.errors,
+    requests: obs.requests.length - prevRead.requests,
+  };
   const cursor = { errors: obs.errors.length, requests: obs.requests.length };
-  if (obs.lastRead) { obs.lastRead = { errors: obs.errors.length, requests: obs.requests.length }; }
+  const newEvents = {
+    errors: obs.errors.slice(prevRead.errors).map((e) => ({
+      kind: e.kind,
+      text: redact(String(e.text == null ? '' : e.text)),
+      source: redact(String(e.source || '')),
+      at: e.at,
+    })),
+    requests: obs.requests.slice(prevRead.requests).map((r) => {
+      const item = { method: r.method, url: redactUrl(r.url), status: r.status, ok: r.ok, at: r.at };
+      if (r.error) { item.error = redact(String(r.error)); }
+      return item;
+    }),
+  };
+  if (obs.lastRead) { obs.lastRead = cursor; }
   return JSON.stringify({
     mode: 'collect',
     url: location.href,
@@ -489,6 +506,7 @@
     interactionsObserved: obs.requests.length,
     sinceLastRead,
     cursor,
+    newEvents,
     // 「检查了哪些维度」显式声明：钩子装上且真的观测到交互时，这五个维度就是
     // 实测过的——没有 findings 只代表没发现问题，不代表没测。缺了这条，
     // 下游按「无产物覆盖」判 notRun，覆盖率会凭空少 5 个维度。

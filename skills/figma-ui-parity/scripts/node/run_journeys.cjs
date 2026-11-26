@@ -242,11 +242,18 @@ async function collectRuntime(page) {
       findings: (parsed && parsed.findings) || [],
       hooksInstalled: !!(parsed && parsed.hooksInstalled),
       interactionsObserved: (parsed && parsed.interactionsObserved) || 0,
+      // M4 验收修订：透传增量游标与事件明细——旅程入口按 newEvents 入账，
+      // 重复采集同一 action_id 不重复记账（此前只取 findings，游标丢失，
+      // 窗口归属不可核对、跨步骤重复入账无从去重）。
+      sinceLastRead: (parsed && parsed.sinceLastRead) || null,
+      cursor: (parsed && parsed.cursor) || null,
+      newEvents: (parsed && parsed.newEvents) || null,
       collectError: null,
     };
   } catch (e) {
     return {
       findings: [], hooksInstalled: false, interactionsObserved: 0,
+      sinceLastRead: null, cursor: null, newEvents: null,
       collectError: String((e && e.message) || e).slice(0, 200),
     };
   }

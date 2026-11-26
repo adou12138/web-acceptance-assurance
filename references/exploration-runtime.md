@@ -114,7 +114,7 @@ CSV派生“界面样式”“交互易用性”“基础无障碍”“功能�
 每条记录必须包含：`id`、`collection_state`、`tc_ref`、`action_id`、动作类型与目标引用、动作前后 `page_url`/客户端状态/角色（`before`/`after`）、动作相关的 console 增量 / page error / unhandled rejection、动作相关网络请求摘要与失败请求（`observed.network`）、动作后的 DOM/可见文本/截图证据路径（`evidence_paths`）。
 
 - **`lead`（只含 `suspicion`/`basis`/`where` 三键）**进入候选复核；**`blind_spot`**（数组）进入限制披露——如导航前未能安装观察钩子时，如实写明"初始加载异常未采集"，不得声称覆盖。
-- `observed.network[].status:500` 这类取值是**可观测事实**，不是裁决字段；但 `severity`/`verdict`/`conclusion`/`classification`/`root_cause` 等裁决字段**不得出现在记录的任何嵌套层**（含 `observed`/`lead` 的值内部）——`scan_collection_records` 递归扫描嵌套容器（`judgement_key_nested`；递归深度上限 8 层，超出部分机器不判、留待人工核查——漏报不误报），只扫顶层绕不过去（测试 `test_nested_severity_in_observed_is_rejected` 锁定）。
+- `observed.network[].status:500` 这类取值是**可观测事实**，不是裁决字段；但 `severity`/`verdict`/`conclusion`/`classification`/`root_cause` 等裁决字段**不得出现在记录的任何嵌套层**（含 `observed`/`lead` 的值内部）——`scan_collection_records` **迭代遍历完整子树**（`judgement_key_nested`；不做深度截断，对象身份去重只防循环引用；12 层深嵌套与循环引用用例已锁定），只扫顶层绕不过去（测试 `test_nested_severity_in_observed_is_rejected` 锁定）。
 - `collected` 状态必须有非空 `evidence_paths`（`no_evidence` 违规）；DOM/截图路径与 `observed.dom/screenshot` 重复是允许的，但 `evidence_paths` 仍须显式列出（校验器读这一项）。
 - 「网络失败→是否缺陷」不在采集层判定，交裁决阶段；预期校验失败（4xx 表单校验、取消请求、轮询）保留为观察，不自动升级为缺陷；5xx/未捕获异常可作高优先级候选，仍需裁决核 `observed_*`。
 - 动作前安装观察钩子（复用 `skills/figma-ui-parity/scripts/node/run_journeys.cjs` 的 `page.addInitScript` 前置注入），避免把交互前的异常计入动作后观察；无法前置安装时记 `blind_spot`。
