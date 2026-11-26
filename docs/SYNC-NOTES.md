@@ -1596,3 +1596,13 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 
 - **提交**：`aa6ebe5`（#4+#1）、`a20f984`（#2）、`69195d6`（#3）；本轮全量 unittest OK、runtime smoke 33/0、dense-form smoke 7/0、node --test 31/0。
 - **仍待环境实跑（如实）**：§7.1 全链路真实浏览器试点与状态读回证据（夹具能力已修复，真实取证待浏览器运行时）。
+### 审核轮（2026-11-26）：#1 修复不完整补齐 + note 口径
+
+对 4 条验收修复的审核发现 2 处缺口并补齐（commit `39329d3`）：
+
+| 发现 | 级别 | 补齐 |
+|---|---|---|
+| **#1 只补了事件明细，findings 仍无窗口归属**（累计缓冲、每窗口重复生成；转换会重复候选/混入历史窗口） | 高（修复不完整） | 事件 push 加 `seq`（6 处）；`push()` 支持 `windowSeq`/`sourceKind`（10 处 finding 构造点标注；7.38 无事件源按当前 DOM 每窗口有效）；collect 新增 **`windowFindings`**（本窗口新增判定视图，累计 `findings` 保留兼容）；`run_journeys` 步骤产物落 `runtimeWindow`（cursor/sinceLastRead/newEvents 计数/windowFindings 数）；转换脚本**优先 `windowFindings`**、旧产物回退全量并在 docstring 声明"窗口归属不可核对，须人工核对"；collect `note` 补"入账与转换以 newEvents/windowFindings 为准" |  |  |
+| collect `note` 未写 newEvents/windowFindings 口径（仅代码注释） | 低 | 同上（note 已补） |  |  |
+
+- **验证**：runtime smoke **33→36**（3 条窗口归属断言：首窗口 windowSeq=0 / 第二窗口只含新异常 / 无新增为空且累计保留）；转换测试 **11→13**（windowFindings 优先 / 旧产物回退）；变异验证：撤 `windowFindings`（改全量）→ 2 断言红 → 还原 36/0；全量 unittest OK、dense-form 7/0。
