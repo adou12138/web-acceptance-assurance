@@ -243,6 +243,26 @@ check('无新增时 sinceLastRead 为 0（重复采集不重复入账）',
     (o13.findings || []).filter((f) => f.dimension === '7.45').length === 0,
     JSON.stringify(o13.findings || []));
 
+  // ⑤ 脱敏（M4 第 8 项）：响应体里的凭据值在产物中必须已打码，不得明文流出。
+  // 用 success:false 让响应体真正进入 findings.raw（正常响应不进产物，无从断言脱敏）。
+  const secretResp = (body) => ({
+    status: 200, ok: true,
+    headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'application/json' : null) },
+    clone: () => ({ text: () => Promise.resolve(body) }),
+  });
+  const e14 = makeEnv(() => Promise.resolve(secretResp('{"token":"sk-live-abc123secret","success":false,"msg":"余额不足"}')));
+  e14.call();
+  await e14.win.fetch('https://example.test/api/me', OPTS);
+  await settle();
+  const o14 = JSON.parse(e14.call());
+  const o14Text = JSON.stringify(o14);
+  const f14 = (o14.findings || []).filter((f) => f.property === 'business-error-as-200');
+  check('业务失败 finding 已产生（脱敏断言的前提）',
+    f14.length === 1, JSON.stringify(o14.findings || []).slice(0, 200));
+  check('响应体中的 token 值已脱敏（明文不外流）',
+    !o14Text.includes('sk-live-abc123secret') && o14Text.includes('[REDACTED]'),
+    o14Text.slice(0, 300));
+
   console.log('\n==== runtime_observability 冒烟：' + pass + ' 通过 / ' + fail + ' 失败 ====');
   process.exit(fail ? 1 : 0);
 })();
