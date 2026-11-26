@@ -136,7 +136,10 @@
 
   /* ================= ① 安装钩子 ================= */
   if (!window.__vpObs) {
-    const obs = { errors: [], requests: [], startedAt: Date.now() };
+    // lastRead：上次 collect 已消费的事件计数（增量游标，M2/动作窗口）——
+    // 消费方按 sinceLastRead 只入账新增事件，重复采集不重复入账。
+    const obs = { errors: [], requests: [], startedAt: Date.now(),
+                  lastRead: { errors: 0, requests: 0 } };
     window.__vpObs = obs;
 
     const origError = typeof console.error === 'function' ? console.error.bind(console) : null;
@@ -470,12 +473,22 @@
   // （审查修复：原表达式 `Date.now() - startedAt >= 0` 恒真，等于没校验——
   //   obs 存在即视为已安装钩子，这本身就是正确语义：钩子安装时会创建 __vpObs。）
   const hooksInstalled = !!obs;
+  // 增量游标（M2/动作窗口）：本次距上次 collect 的新增事件数。消费方只对
+  // sinceLastRead 入账，重复采集同一事件不会重复计数；cursor 是累计只读位点。
+  const sinceLastRead = obs.lastRead
+    ? { errors: obs.errors.length - obs.lastRead.errors,
+        requests: obs.requests.length - obs.lastRead.requests }
+    : { errors: obs.errors.length, requests: obs.requests.length };
+  const cursor = { errors: obs.errors.length, requests: obs.requests.length };
+  if (obs.lastRead) { obs.lastRead = { errors: obs.errors.length, requests: obs.requests.length }; }
   return JSON.stringify({
     mode: 'collect',
     url: location.href,
     findings,
     hooksInstalled: hooksInstalled,
     interactionsObserved: obs.requests.length,
+    sinceLastRead,
+    cursor,
     // 「检查了哪些维度」显式声明：钩子装上且真的观测到交互时，这五个维度就是
     // 实测过的——没有 findings 只代表没发现问题，不代表没测。缺了这条，
     // 下游按「无产物覆盖」判 notRun，覆盖率会凭空少 5 个维度。
@@ -492,6 +505,7 @@
       byDimension: findings.reduce((acc, f) => { acc[f.dimension] = (acc[f.dimension] || 0) + 1; return acc; }, {}),
       errorCount: obs.errors.length,
       requestCount: obs.requests.length,
+      sinceLastRead,
       payloadChecked: obs.requests.length - payloadNotInspectable,
       payloadNotInspectable,
       overlayOpen,

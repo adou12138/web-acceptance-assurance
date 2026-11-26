@@ -73,6 +73,21 @@ let crashed = false;
 try { JSON.parse(env.call()); } catch (e) { crashed = true; }
 check('重复采集不崩溃', !crashed);
 
+// ①b 增量游标（M2/动作窗口）：collect 带 sinceLastRead/cursor——重复采集同一事件不重复入账
+const eInc = makeEnv();
+eInc.call();                                   // install
+eInc.fakeConsole.error('first-batch-error');   // 动作窗口 1 的异常
+const c1 = JSON.parse(eInc.call());            // 第一次 collect
+check('首次 collect 报全量增量（errors=1）',
+  c1.sinceLastRead && c1.sinceLastRead.errors === 1, JSON.stringify(c1.sinceLastRead));
+eInc.fakeConsole.error('second-batch-error');  // 动作窗口 2 的新增事件
+const c2 = JSON.parse(eInc.call());
+check('第二次 collect 只报新增 1 条（cursor 累计=2）',
+  c2.sinceLastRead.errors === 1 && c2.cursor.errors === 2, JSON.stringify(c2.sinceLastRead));
+const c3 = JSON.parse(eInc.call());            // 第三次 collect：无新增
+check('无新增时 sinceLastRead 为 0（重复采集不重复入账）',
+  c3.sinceLastRead.errors === 0 && c3.sinceLastRead.requests === 0, JSON.stringify(c3.sinceLastRead));
+
 // ② 7.37 自动确认（fetch 钩子在 .then 里记录，故须 await 后再 collect）
 (async () => {
   const URL = 'https://example.test/api/create';
