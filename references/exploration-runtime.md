@@ -107,6 +107,18 @@ schema 1.0 清单只披露（`enforced=false`），不追溯压档。下游 `pha
 
 CSV派生“界面样式”“交互易用性”“基础无障碍”“功能”“性能”视角，一条记录可属于多个视角，planned与总量按唯一id去重。CSV采用标准引号转义，疑似公式单元格加前导单引号避免表格应用执行，原始JSON不改。此视图不自动生成BUG严重度、UX评分或AC满足率；业务判断仍用实际断言与证据。正式执行结果不要直接从可编辑清单反向覆盖events.jsonl。
 
+## 动作级观察采集（OBS-ACT-，路径 B 的采集记录）
+
+关键交互（提交、删除、审批、登录、支付等写操作与状态迁移）前后，产出**动作级观察采集记录**（JSONL，`id` 用 `OBS-ACT-` 前缀），走路径 B：`scan-collection` 校验 → 裁决阶段回链 `EXP/TC/RUN` → `finding-triage` 裁定。它与路径 A（观察器 JSON → `observation_bridge` → NOT_RUN 草稿）是**两条正交数据流**：OBS-ACT- 记录不喂给 `observation_bridge`，桥接也不代 OBS 落账。
+
+每条记录必须包含：`id`、`collection_state`、`tc_ref`、`action_id`、动作类型与目标引用、动作前后 `page_url`/客户端状态/角色（`before`/`after`）、动作相关的 console 增量 / page error / unhandled rejection、动作相关网络请求摘要与失败请求（`observed.network`）、动作后的 DOM/可见文本/截图证据路径（`evidence_paths`）。
+
+- **`lead`（只含 `suspicion`/`basis`/`where` 三键）**进入候选复核；**`blind_spot`**（数组）进入限制披露——如导航前未能安装观察钩子时，如实写明"初始加载异常未采集"，不得声称覆盖。
+- `observed.network[].status:500` 这类取值是**可观测事实**，不是裁决字段；但 `severity`/`verdict`/`conclusion`/`classification`/`root_cause` 等裁决字段**不得出现在记录的任何嵌套层**（含 `observed`/`lead` 的值内部）——`scan_collection_records` 递归扫描全部嵌套容器（`judgement_key_nested`），只扫顶层绕不过去（测试 `test_nested_severity_in_observed_is_rejected` 锁定）。
+- `collected` 状态必须有非空 `evidence_paths`（`no_evidence` 违规）；DOM/截图路径与 `observed.dom/screenshot` 重复是允许的，但 `evidence_paths` 仍须显式列出（校验器读这一项）。
+- 「网络失败→是否缺陷」不在采集层判定，交裁决阶段；预期校验失败（4xx 表单校验、取消请求、轮询）保留为观察，不自动升级为缺陷；5xx/未捕获异常可作高优先级候选，仍需裁决核 `observed_*`。
+- 动作前安装观察钩子（复用 `skills/figma-ui-parity/scripts/node/run_journeys.cjs` 的 `page.addInitScript` 前置注入），避免把交互前的异常计入动作后观察；无法前置安装时记 `blind_spot`。
+
 ## 观察结果桥接
 
 `scripts/observation_bridge.py` 把观察器JSON中的候选映射为可校验的待复核条目，测试为 `tests/test_observation_bridge.py`。CLI：
