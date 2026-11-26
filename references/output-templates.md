@@ -99,7 +99,7 @@
 | 风险假设清算 | `assumptions.json` | `reviewed` / `items[].result`∈confirmed/refuted/open | `phase_gate.py check-verdict --assumptions` |
 | 回归影响面 | `regression.json` | `changed_areas` / `candidates[].basis` / `no_impact_reason` | `phase_gate.py check-verdict --regression` |
 
-`findings.jsonl`（裁决结论）与 `reviews.jsonl`（候选复核记录）字段集不同：前者供 `check-adjudication` 做诚实性校验，后者供 `finding_summary.py` 聚类。用错文件不会报错，只会聚出 0 簇。
+`findings.jsonl`（裁决结论）与 `reviews.jsonl`（候选复核记录）字段集不同：前者供 `check-adjudication` 做诚实性校验，后者供 `finding_summary.py` 聚类。用错文件不会报错，只会聚出 0 簇。高风险候选的独立复核检查项（复核者只收判据/证据/复现步骤、核对 `observed_*` 与动作窗口、三类分账不混、首败保留与重复计数检查）见 `finding-triage.md`「高风险候选的独立复核」；报告呈现复核结果时引用既有 `reviews.jsonl` 记录，不另建评审真相库。
 
 ## 1. 新需求分析
 

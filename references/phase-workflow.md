@@ -173,6 +173,8 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
 裁决必须给出：分类、证据引用、依据类型、证据等级。合法依据类型只有观测类：
 `observed_ui` / `observed_dom` / `observed_network` / `observed_console` / `observed_screenshot` / `observed_api_response`。
 
+**高风险候选先过独立复核再 accepted**：复核者只接收需求判据、观察证据与复现步骤，不接收根因叙述作为事实；检查项与记录口径见 `finding-triage.md`「高风险候选的独立复核」，复核结果写入既有 `finding-reviews`，不另建评审真相库。
+
 `python scripts/phase_gate.py check-adjudication <findings.json>` 机械拒绝：
 
 | 违规码 | 触发条件 | 为什么 |
