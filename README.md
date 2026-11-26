@@ -15,7 +15,7 @@
 1. **对抗发现（首要身份）**：先假设会坏，再去证明。每个产出技术结论的批次登记攻击假设（`ATK-`，零条须附解释）并执行探针；探针从 `references/probe-playbook.md` 取（A 节坑点→探针模板、B 节 15 方法通用库、C 节 `SCN-ADV` 三类组合场景：跨模块组合 / 操作序列反常 / 状态机规避链），缺预期依据只能出观察，不能判 PASS/FAIL。
 2. **需求批判**：需求是待验证断言而非既定标准。逐项检查完整性、一致性、可验证性、业务合理性，产出需求可疑点并按 `req_issue` 分账（归需求问题，不冒充产品缺陷）；空数组也要显式声明"已审阅无疑点"。
 3. **新需求分析与功能测试**：功能→功能点两级拆解、旧新行为差异、入口开关、状态迁移、边界与异常；稳定 ID 与 REQ→FP→AC→SCN→TC→执行→缺陷双向追溯。结构化用例契约见 `references/case-data-contract.md`（校验器 `scripts/case_data.py`）。
-4. **真实执行与证据**：浏览器通道唯一入口 `references/browser-connection.md`（默认 Chrome DevTools MCP，句柄纪律 `pageId`/`uid`/`ref`）；单写者执行台账 `scripts/execution_ledger.py` 逐例记 BEGIN/FINISH；证据等级 E1 真实执行 / E2 模拟只能写"待核实" / E3 仅出资产；裁决诚实性由 `scripts/phase_gate.py check-adjudication` 机械校验——禁止用脚本、桩或重放补全缺失页面行为后计为通过。
+4. **真实执行与证据**：浏览器通道唯一入口 `references/browser-connection.md`（默认 Chrome DevTools MCP，句柄纪律 `pageId`/`uid`/`ref`）；单写者执行台账 `scripts/execution_ledger.py` 逐例记 BEGIN/FINISH；关键交互做动作级观察采集（`OBS-ACT-` 记录含 `lead`/`blind_spot`，与探索草稿两条正交数据流，见 `references/exploration-runtime.md`）；证据等级 E1 真实执行 / E2 模拟只能写"待核实" / E3 仅出资产；裁决诚实性由 `scripts/phase_gate.py check-adjudication` 机械校验——禁止用脚本、桩或重放补全缺失页面行为后计为通过。
 5. **断言有效性验证**：关键结论做变异或已知故障挑战，证明"断言真的会报警"而不是"跑通了一次"：`scripts/assertion_mutation.py`（断言杀伤率，抽样由哈希决定）、`scripts/blind_eval.py`（独立盲测与 A/B 归档）。
 6. **三阶段换会话闸门**：plan（规划）→ execute（采集，只记不判）→ adjudicate（裁决）三阶段跨会话放行，机械状态机 `scripts/phase_gate.py`、协议见 `references/phase-workflow.md`；阶段间停会话、换模型、新会话凭确认码 `resume`，同会话放行结论上限压"待核实"；放行人不得为智能体身份。
 7. **影响面回归**：按有来源的依赖方向追踪多跳影响（`scripts/change_impact.py`），输出可解释回归候选；保留首败与波动口径，不以最新一条 PASS 覆盖未闭环失败。

@@ -84,6 +84,29 @@ A 节模板与 B 节方法都是**横切维度**：回答"单点打什么、用�
 
 **机械校验（不是自觉）**：场景文件经 `scripts/adversarial_data.py --scenarios <文件>` 校验，强制 `sequence ≥ 2` 步、`cross_module` 至少关联两条 SURF、ID 以 `SCN-ADV-` 开头；`scenario_gaps()` 把"零场景""缺跨模块组合""高风险面未被任何场景覆盖"列为覆盖缺口，并由 `adversarial_gate.py --scenarios` 压入结论上限——**不登记场景，结论最高只能到"待核实"**。
 
+## 旅程级检查清单（dogfood 风格，并入现有探索流程）
+
+对每个关键旅程执行（是既有探索循环的检查面，**不新增独立流程**）：
+
+1. 先建立页面与关键旅程范围（入口、角色、状态、数据组合）；
+2. 每个旅程执行正向、无效输入、空输入、异常恢复与边界状态；
+3. 关键交互后检查 console 增量、网络失败、DOM 与业务读回（动作级观察采集见 `exploration-runtime.md`「动作级观察采集」）；
+4. 首屏之外检查可滚动内容、固定区域（sticky/fixed）、空态与错误态；
+5. 有权限和条件时检查键盘 Tab、焦点可见性与小屏布局（EXP-TRAV-/EXP-KBD-）；
+6. 记录未探索页面、角色、状态与数据组合（`acknowledged_unexplored` 出口）。
+
+**两条正交数据流映射**（不互喂、不代传）：
+
+```text
+路径 A（观察→探索草稿）：浏览器观察器 JSON → observation_bridge → 探索清单草稿（NOT_RUN）
+路径 B（探索→执行→裁决）：dogfood 探索动作 → OBS-ACT- 采集记录 → scan-collection → 裁决 → 候选复核
+新线索 → lead（suspicion/basis/where）→ finding-triage
+业务判断 → adjudication
+稳定发现 → TC/RUN/BUG
+```
+
+浏览器通道仍以 `browser-connection.md` 为准，不把外部 dogfood 工具名写成项目硬依赖。
+
 ## 使用纪律
 
 - 本清单是**提示性全集**，不是逐条必跑：按风险面（SURF）挑适用模板，未选的写明理由；

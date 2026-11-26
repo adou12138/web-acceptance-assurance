@@ -152,15 +152,15 @@ python scripts/phase_gate.py amend phase-state.json --phase plan --by tester \
  "model_class": "fast",
  "action_sequence": [{"step": 1, "action": "click", "target": "保存"}],
  "observed": {"page": "...", "dom": "...", "network": [{"status": 500, "url": "..."}], "console": []},
- "evidence_paths": ["evidence/step1.png"], "new_lead": null}
+ "evidence_paths": ["evidence/step1.png"], "lead": null}
 ```
 
 机械禁令（`python scripts/phase_gate.py scan-collection <records.jsonl>`，有违规 rc=1）：
 
-- 禁判定字段：`verdict` / `judgement` / `conclusion` / `severity` / `defect` / `classification` / `root_cause` / `pass_fail`。
+- 禁判定字段：`verdict` / `judgement` / `conclusion` / `severity` / `defect` / `classification` / `root_cause` / `pass_fail`——**含任意嵌套层**（`observed`/`lead` 值/列表深层同样被拒，`judgement_key_nested`；`observed.network[].status=500` 是可观测事实不受影响）。
 - `collection_state` 只许 `collected` / `blocked` / `not_run` / `skipped` / `partial`；出现 `PASS` / `FAIL` / `通过` 即拒绝。
 - `collected` 必须附 `evidence_paths`，否则裁决阶段无法复核。
-- 新发现的风险线索写 `new_lead`，**不得**自行扩写计划或改判用例——走 `amend` 修订申请。申请按 **2.3** 分级：固定授权范围内的只读观察（`readonly_lead`，五项凭据齐备）登记后即可继续；写入、扩权、换环境、超预算、属性未知、凭据不全一律 `scope_change`，先批后动。
+- 新发现的风险线索写 **`lead`**（只含 `suspicion`/`basis`/`where`——校验器实际读的键，不用 `new_lead`），**不得**自行扩写计划或改判用例——走 `amend` 修订申请。申请按 **2.3** 分级：固定授权范围内的只读观察（`readonly_lead`，五项凭据齐备）登记后即可继续；写入、扩权、换环境、超预算、属性未知、凭据不全一律 `scope_change`，先批后动。
 
 **已知盲区**：自然语言观察文本里的判定（"功能看起来正常"）拦不住。发现此类记录按流程缺陷处理，并计入本批次的过程问题。
 
