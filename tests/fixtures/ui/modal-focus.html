@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<!--
+  测试夹具：弹层与焦点（modal-focus）
+  用途：只验证检测器与流程行为，不作为真实产品质量证据。
+  配套契约测试：tests/test_ui_fixture_contract.py（静态契约断言）
+
+  == 故意注入的问题 ==
+  - 焦点陷阱缺失：modal 打开后未实现 Tab 焦点循环（无 keydown 拦截、
+    无 aria-modal/role=dialog 声明），Tab 可逃逸到背景内容；
+    键盘遍历（EXP-KBD-）与 a11y 审计应记"焦点可逃逸弹层"（人工裁定确认）。
+  - 关闭后焦点不回归：关闭按钮仅隐藏弹层，不把焦点还给触发按钮。
+
+  == 合法设计（不得判缺陷）==
+  - modal 打开时全屏遮罩覆盖背景按钮/链接：属弹层的合法遮挡，
+    观察器 7.38 对背景元素的 occluded-control 必须保持 pending，
+    不得把"弹层遮住背景"自动判成缺陷。
+
+  == 预期观察器输出 ==
+  - 7.38：弹层打开时背景按钮被遮罩覆盖 → occluded-control pending（合法遮挡）。
+  - 遮罩层 .modal-overlay 存在且 z-index 高于背景。
+  - 焦点问题不在 7.38 范围内，由键盘遍历/a11y 维度承担。
+
+  == 必须人工裁定 ==
+  - 焦点逃逸的实际影响（键盘用户能否误操作背景）。
+  - 焦点回归缺失对读屏用户的影响（体验/无障碍分账）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>夹具 · 弹层与焦点</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .content { padding: 24px; }
+  /* 合法设计：遮罩层覆盖背景 */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+                   z-index: 10; display: none; }
+  .modal-overlay.open { display: block; }
+  .modal { position: fixed; top: 20%; left: 50%; transform: translateX(-50%);
+           width: 420px; background: #fff; border: 1px solid #ccc;
+           padding: 20px; z-index: 11; }
+  /* 故意注入：未声明 dialog 语义、未实现焦点陷阱 —— 由注释与结构声明，动态核由键盘遍历承担 */
+</style>
+</head>
+<body>
+  <div class="content">
+    <button type="button" id="open-modal-btn">删除该条目</button>
+    <button type="button">背景按钮（弹层打开时被合法遮罩覆盖）</button>
+    <a href="#section" id="bg-link">背景链接</a>
+    <p id="section">背景内容段落。</p>
+  </div>
+  <div class="modal-overlay open" id="overlay">
+    <div class="modal" id="confirm-modal">
+      <h2>确认删除</h2>
+      <p>删除后不可恢复，确认继续？</p>
+      <!-- 故意注入：button 均为 type=button，无焦点陷阱脚本、无 role=dialog/aria-modal -->
+      <button type="button" id="confirm-btn">确认删除</button>
+      <button type="button" id="close-btn">取消</button>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!--
+  测试夹具：密集表单（dense-form）
+  用途：只验证检测器与流程行为，不作为真实产品质量证据。
+  配套契约测试：tests/test_ui_fixture_contract.py（静态契约断言）
+  动态验证：由浏览器会话观察器采集与 docs/spikes/001 承担。
+
+  == 故意注入的问题 ==
+  1. 标签-输入关联断裂：第 2 个字段（手机号）的 label 没有 for 属性、input 没有 id，
+     无障碍维度（标签关联）应能检出。
+  2. 错误提示与输入框视觉断层：错误提示放在表单最底部固定底栏上方，
+     与触发它的字段相距超过一屏，易用性走查应记"反馈位置与操作位置脱节"（人工裁定）。
+
+  == 合法设计（不得判缺陷）==
+  - 固定底栏（position:fixed）覆盖页面末尾内容：属常见表单布局，滚动可见；
+    观察器 7.38 若报 occluded-control 应为 pending，由人工结合滚动行为裁定。
+  - 必填项空值提交被前端拦截并显示错误提示：预期校验失败，不是缺陷。
+
+  == 预期观察器输出 ==
+  - 无障碍：标签关联缺失 → missing-control-label 类候选（高/中风险）。
+  - 7.38 遮挡：底栏覆盖的提交按钮 → occluded-control，status=pending。
+  - 网络：提交请求本身是夹具行为，不发真实请求（button type=button）。
+
+  == 必须人工裁定 ==
+  - 错误提示位置是否构成可用性问题（主观体验，归体验建议分账）。
+  - 底栏遮挡是否影响实际操作（需真实交互核滚动行为）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>夹具 · 密集表单</title>
+<style>
+  body { margin: 0; font-family: sans-serif; padding-bottom: 72px; }
+  .field { margin: 12px 16px; }
+  label { display: block; font-size: 13px; margin-bottom: 4px; }
+  input { width: 60%; padding: 6px; }
+  .footer-bar { position: fixed; left: 0; right: 0; bottom: 0; height: 56px;
+                background: #eee; border-top: 1px solid #ccc; padding: 8px 16px; }
+  .footer-error { font-size: 12px; color: #b00; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <h1>用户资料（夹具）</h1>
+  <div class="field">
+    <label for="nickname">昵称（必填，1-20 字）</label>
+    <input id="nickname" name="nickname" type="text">
+  </div>
+  <div class="field">
+    <!-- 故意注入：label 缺 for、input 缺 id —— 标签关联断裂 -->
+    <label>手机号</label>
+    <input name="phone" type="text" aria-label="">
+  </div>
+  <div class="field">
+    <label for="org">所属组织（选填）</label>
+    <input id="org" name="org" type="text">
+  </div>
+  <!-- 故意注入：错误提示远离字段（反馈位置脱敏为固定底栏内文案） -->
+  <div class="footer-bar">
+    <button type="button" id="save-btn">保存</button>
+    <div class="footer-error">昵称不能为空（提示与本字段相距超过一屏）</div>
+  </div>
+</body>
+</html>

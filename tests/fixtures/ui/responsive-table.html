@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+  测试夹具：响应式表格（responsive-table）
+  用途：只验证检测器与流程行为，不作为真实产品质量证据。
+  配套契约测试：tests/test_ui_fixture_contract.py（静态契约断言）
+
+  == 故意注入的问题 ==
+  - 整页横溢出：页头横幅 banner 设 min-width:1400px 且不可滚动，
+    在 320px/768px 视口下整页出现横向滚动条 —— 观察器应记
+    horizontal-overflow（页面级），这是真实缺陷。
+
+  == 合法设计（不得判缺陷）==
+  - 表格容器 .table-wrap 设 overflow-x:auto：宽表格在容器内二维滚动，
+    页面本身不溢出 —— 合法实现，检测器不得把容器内滚动报成页面级横溢出。
+
+  == 预期观察器输出 ==
+  - 页面级：document.scrollWidth > viewport 宽 → horizontal-overflow 候选（高风险）。
+  - 容器级：.table-wrap 内滚动不产生页面级溢出信号。
+  - 320px 视口复测：整页横溢出仍存在（注入元素不随视口收敛）。
+
+  == 必须人工裁定 ==
+  - 溢出对操作的实际影响（横幅内容是否关键）。
+  - 小屏下表格可读性是否可接受（体验建议分账）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>夹具 · 响应式表格</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  /* 故意注入：整页横溢出 —— min-width 超视口且无 overflow 收敛 */
+  .banner { min-width: 1400px; height: 48px; background: #246; color: #fff;
+            line-height: 48px; padding: 0 16px; box-sizing: border-box; }
+  /* 合法设计：容器内横向滚动 */
+  .table-wrap { overflow-x: auto; max-width: 100%; border: 1px solid #ccc; margin: 16px; }
+  table { border-collapse: collapse; min-width: 900px; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+</style>
+</head>
+<body>
+  <div class="banner">系统横幅（故意注入：min-width 1400px，320px 视口下整页横溢出）</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>订单号</th><th>商品</th><th>数量</th><th>单价</th><th>金额</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead>
+      <tbody>
+        <tr><td>SO-0001</td><td>示例商品 A</td><td>2</td><td>99.00</td><td>198.00</td><td>已发货</td><td>2026-11-20 10:00</td><td>查看</td></tr>
+        <tr><td>SO-0002</td><td>示例商品 B</td><td>1</td><td>199.00</td><td>199.00</td><td>待支付</td><td>2026-11-21 11:30</td><td>支付</td></tr>
+        <tr><td>SO-0003</td><td>示例商品 C</td><td>5</td><td>9.90</td><td>49.50</td><td>已完成</td><td>2026-11-22 09:15</td><td>评价</td></tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
