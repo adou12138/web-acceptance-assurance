@@ -45,15 +45,14 @@ NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([条次个点份项名岁元人题
 DECIMAL_RE = re.compile(r"\d+\.\d+")
 
 
-def cross_view_compare(views):
-    """views: {"视图名": [文案, ...]}。横向比对各视图的量词单位与小数精度使用，
-    输出观察候选（advisory）——是否为缺陷须人工裁定。"""
-    if not isinstance(views, dict) or not views:
-        raise ValueError('views 必须为非空对象 {"视图名": [文案, ...]}')
+def _compare_group(group_name, gviews):
+    """S6：在同一语义量分组内互比单位与小数位——跨视图一致性只在
+    "同一语义量"（如各页签的剩余量）上成立；不同资源的单位差异（短信=条、
+    OCR=次）是合法的，全语料比对只会产噪声（A1 修正）。"""
     normalized = {}
-    for name, texts in views.items():
+    for name, texts in gviews.items():
         if not isinstance(texts, list):
-            raise ValueError(f"views[{name}]: 必须为字符串数组")
+            raise ValueError(f"groups[{group_name}][{name}]: 必须为字符串数组")
         normalized[str(name)] = [str(t) for t in texts if str(t).strip()]
     findings = []
     unit_views = {}
@@ -75,37 +74,79 @@ def cross_view_compare(views):
         without = [n for n in names if unit not in unit_views[n]]
         if with_unit and without:
             findings.append({
-                "code": "cross_view_unit_mismatch", "id": f"unit:{unit}",
-                "text": f"量词「{unit}」出现于 {with_unit}，未出现于 {without}",
+                "code": "cross_view_unit_mismatch", "id": f"{group_name}:unit:{unit}",
+                "group": group_name,
+                "text": f"组「{group_name}」量词「{unit}」出现于 {with_unit}，未出现于 {without}",
                 "token": unit,
-                "message": f"量词「{unit}」在 {len(with_unit)}/{len(names)} 个视图出现："
-                           "各子视图的同位信息单位可能不统一（观察候选，须人工裁定）",
+                "message": f"同一语义量（{group_name}）在各视图的量词不统一："
+                           "观察候选，须人工裁定",
                 "severity": "advisory"})
     dec_with = [n for n in names if decimal_views[n]]
     dec_without = [n for n in names if not decimal_views[n]]
     if dec_with and dec_without:
         findings.append({
-            "code": "cross_view_decimal_mismatch", "id": "decimal:precision",
-            "text": f"小数精度出现于 {dec_with}，未出现于 {dec_without}",
+            "code": "cross_view_decimal_mismatch", "id": f"{group_name}:decimal",
+            "group": group_name,
+            "text": f"组「{group_name}」小数精度出现于 {dec_with}，未出现于 {dec_without}",
             "token": "decimal",
-            "message": "部分视图数值带小数、部分只出整数：同位数值的精度口径可能不统一"
+            "message": f"同一语义量（{group_name}）的精度口径可能不统一"
                        "（观察候选，须人工裁定）",
             "severity": "advisory"})
-    return {"views": names, "findings": findings,
+    return findings
+
+
+def cross_view_compare(views, groups=None):
+    """S6（v1.56）：跨视图互比须按同语义量分组（groups）进行。
+
+    views: {"视图名": [文案, ...]}——用于登记本轮涉及哪些视图；
+    groups: {"组名": {"视图名": [文案, ...]}}——同组=同一语义量，组内互比
+    单位与小数位才产候选；未纳入分组的视图不出单位类候选，只出披露
+    （无分组=没有"同位信息"可比，全语料比对已被判定为噪声源）。
+    """
+    if not isinstance(views, dict) or not views:
+        raise ValueError('views 必须为非空对象 {"视图名": [文案, ...]}')
+    for name, texts in views.items():
+        if not isinstance(texts, list):
+            raise ValueError(f"views[{name}]: 必须为字符串数组")
+    names = sorted(str(n) for n in views)
+    findings = []
+    notices = []
+    if groups:
+        if not isinstance(groups, dict) or not groups:
+            raise ValueError('groups 必须为非空对象 {"组名": {"视图名": [文案, ...]}}')
+        for gname, gviews in groups.items():
+            if not isinstance(gviews, dict) or not gviews:
+                raise ValueError(f"groups[{gname}]: 必须为非空对象（键为视图名，值为文案数组）")
+            unknown = [n for n in gviews if str(n) not in views]
+            if unknown:
+                raise ValueError(f"groups[{gname}] 引用了 views 中不存在的视图: {unknown}")
+            findings.extend(_compare_group(str(gname), gviews))
+    else:
+        notices.append({
+            "code": "cross_view_unaligned",
+            "message": "未提供同语义量分组（groups），跨视图互比降级为披露："
+                       "不同资源的单位/精度差异（短信=条、OCR=次）是合法的，"
+                       "全语料比对只会产噪声；请在 groups 中按同一语义量分组后重跑",
+            "severity": "advisory"})
+    return {"views": names, "findings": findings, "notices": notices,
             "scope": "跨视图横向互比只产观察候选；是否为缺陷须人工裁定（与设计稿一致性另行判定）"}
 
 
 def analyse_cross_view(payload):
     """兼容 analyse 的输出形态：cross-view 模式共用 findings/gaps 结构。"""
-    result = cross_view_compare(payload.get("views") if isinstance(payload, dict) else payload)
+    views = payload.get("views") if isinstance(payload, dict) else payload
+    groups = payload.get("groups") if isinstance(payload, dict) else None
+    result = cross_view_compare(views, groups)
     findings = result["findings"]
+    notices = result["notices"]
     return {
         "mode": "cross_view",
         "views": result["views"],
-        "total": sum(len(v) for v in (payload.get("views") or {}).values()) if isinstance(payload, dict) else 0,
+        "total": sum(len(v) for v in (views or {}).values()) if isinstance(payload, dict) else 0,
         "defects": 0,
         "advisories": len(findings),
         "findings": findings,
+        "notices": notices,
         "gaps": [],
         "verdict_ceiling": "通过",
         "scope": result["scope"],

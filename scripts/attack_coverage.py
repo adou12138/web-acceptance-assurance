@@ -65,7 +65,7 @@ COVERAGE_SCHEMA = "attack-coverage/1"
 # v4：M1 证据等级门禁——ATK「未命中」新增 verified_by/attempt_id/evidence 字段；
 # 推演/走读判「未命中」且影响面属功能/数据/权限时须解释或复打；practical 未命中
 # 须挂 E1 执行记录或落盘证据。同一份台账在 v3 与 v4 下可能得到不同 verdict_ceiling。
-TOOL_VERSION = "5"  # v1.55：R2 同源判定 + R3 双方向义务进入 gaps 判定
+TOOL_VERSION = "6"  # v1.56：S2 持久化零一致性路径 / S3 逐轴覆盖 / S4 计划参数对照 / S5 绕径披露
 
 # 路径类型：positive 表示"确认功能可用"，其余全部是攻击维度（非正向）。
 ATTACK_PATH_TYPES = (
@@ -856,7 +856,7 @@ def analyse_atk(entries):
 def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
             residual_note=None, plan_surfaces=None, plan_risks=None,
-            plan_directions=None,
+            plan_directions=None, plan_meta=None,
             surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None,
             atk_entries=None, reviews=None, prev_atk_entries=None,
             atk_absent_reason=None, replay_notes=None):
@@ -1136,6 +1136,77 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                      + "；".join(f"{d['surface']}({d['direction']}，{d['records']}条)"
                                 for d in direction_single_held[:5])
                      + "——须补反向探针（记录 hypothesis 与结果）或提交不复打理由（--replay-note）"})
+
+    # —— S2/S3/S4/S5（v1.56）——
+    meta = plan_meta or {}
+    persistence_surfaces = meta.get("persistence") or {}
+    axes_map = meta.get("axes") or {}
+    probe_inputs_map = meta.get("probe_inputs") or {}
+
+    dc_count = sum(1 for r in records if r.get("path_type") == "data_consistency")
+    if persistence_surfaces and dc_count == 0:
+        gaps.append({"code": "consistency_path_absent",
+                     "message": f"以下面声明了持久化写入（persistence=true）但台账零条 "
+                                f"data_consistency 记录：{sorted(persistence_surfaces)[:6]}"
+                                "——持久化核验从未发生（额度任务原形：流水页从未访问）；"
+                                "补 P19 类对账记录（列表/详情/导出/流水页取值比对）"})
+    if dc_count == 0 and not persistence_surfaces:
+        notices.append({"code": "consistency_path_unclaimed",
+                        "message": "本轮零条 data_consistency 记录且无任何面声明 persistence："
+                                   "若涉及持久化写入，请在 plan 对应 SURF 声明 persistence=true"
+                                   "（仅披露；声明后零记录将升级为缺口）"})
+    for surf, axes in sorted(axes_map.items()):
+        matched_axes = set()
+        for r in records:
+            if r.get("surf_id") != surf:
+                continue
+            axis = str(r.get("axis") or "").strip()
+            if axis in axes:
+                matched_axes.add(axis)
+            elif len(axes) == 1:
+                matched_axes.add(axes[0])
+        missing_axes = [a for a in axes if a not in matched_axes]
+        if missing_axes:
+            gaps.append({"code": "axis_uncovered",
+                         "message": f"SURF {surf} 声明了逐轴覆盖（resource_axes={axes}）"
+                                    f"但以下轴零条记录：{missing_axes}"
+                                    "——逐资源类型铺开（额度实证：sms 有通道、OCR/多媒体零通道）"})
+    adv_ids = {str(r.get("adv_id") or "").strip() for r in records} - {""}
+    for adv_id, pis in sorted(probe_inputs_map.items()):
+        if adv_id not in adv_ids:
+            notices.append({"code": "probe_inputs_unexecuted",
+                            "message": f"ADV {adv_id} 声明了 probe_inputs 但台账无 adv_id 关联记录"
+                                       "（声明了探针参数但未见执行留痕）"})
+            continue
+        mismatched = []
+        for pi in pis:
+            field = str(pi.get("field") or "")
+            op = pi.get("op")
+            declared = pi.get("value")
+            ok = False
+            for r in records:
+                if str(r.get("adv_id") or "") != adv_id:
+                    continue
+                for ai in (r.get("actual_inputs") or []):
+                    if str(ai.get("field") or "") == field and _input_satisfied(op, declared, ai.get("value")):
+                        ok = True
+                        break
+                if ok:
+                    break
+            if not ok:
+                mismatched.append(f"{field} {op} {declared!r}")
+        if mismatched:
+            gaps.append({"code": "probe_input_mismatch",
+                         "message": f"ADV {adv_id} 的实执行输入不满足声明边界（F2 场景："
+                                    f"声明差一单位、实执行 100 填 200）：{'；'.join(mismatched[:4])}"
+                                    "——须按声明边界重打，或修订 plan 并说明变更"})
+    forbidden_drivers = [str(r.get("driver")) for r in records
+                         if r.get("driver") in ("page_internal_fn", "replay_or_stub")]
+    if forbidden_drivers:
+        notices.append({"code": "driver_forbidden_observed",
+                        "message": f"{len(forbidden_drivers)} 条记录的触发方式为绕径驱动"
+                                   "（page_internal_fn/replay_or_stub）：不得作为通过证据，"
+                                   "仅观察/线索；PASS 类须有 driver_justified（落账已强制）"})
     if hyp_without_surface:
         gaps.append({"code": "hypothesis_without_surface",
                      "message": f"{len(hyp_without_surface)} 条失效假设未关联风险面："
@@ -1666,6 +1737,55 @@ def _plan_directions(path):
             for s in surfaces if isinstance(s, dict) and s.get("id")}
 
 
+def _plan_meta(path):
+    """v1.56 S2/S3/S4：plan 侧元数据——persistence / resource_axes / ADV probe_inputs。
+
+    probe_inputs 按 ADV id 索引；与执行记录的 adv_id/actual_inputs 对照（F2 场景）。
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    surfaces = data.get("surfaces")
+    if not isinstance(surfaces, list):
+        raise ValueError("plan 缺 surfaces 数组")
+    obligations = data.get("obligations")
+    probe_inputs = {}
+    if isinstance(obligations, list):
+        for ob in obligations:
+            if isinstance(ob, dict) and isinstance(ob.get("probe_inputs"), list):
+                probe_inputs[str(ob.get("id"))] = ob["probe_inputs"]
+    return {
+        "persistence": {str(s_.get("id")): bool(s_.get("persistence"))
+                        for s_ in surfaces if isinstance(s_, dict) and s_.get("id")
+                        and s_.get("persistence") is True},
+        "axes": {str(s_.get("id")): [str(a) for a in s_.get("resource_axes") or []]
+                 for s_ in surfaces if isinstance(s_, dict) and s_.get("id")
+                 and isinstance(s_.get("resource_axes"), list) and s_.get("resource_axes")},
+        "probe_inputs": probe_inputs,
+    }
+
+
+def _input_satisfied(op, declared, actual):
+    """S4：单条声明输入是否被实际输入满足。数值不可比时按不满足计（宁报不漏）。"""
+    if actual is None:
+        return False
+    if op == "eq":
+        return actual == declared
+    if op == "ne":
+        return actual != declared
+    if op == "in":
+        return actual in declared if isinstance(declared, (list, tuple, set)) else str(declared) in str(actual)
+    if op == "range":
+        try:
+            lo, hi = declared
+            return lo <= actual <= hi
+        except (TypeError, ValueError):
+            return False
+    try:
+        a, d = float(actual), float(declared)
+    except (TypeError, ValueError):
+        return False
+    return {"lt": a < d, "le": a <= d, "gt": a > d, "ge": a >= d}.get(op, False)
+
+
 def _plan_risks(path):
     """风险面 → 风险等级。高风险面必须至少有一条可证伪预测，这是"设计过攻击"的判据。"""
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -1737,6 +1857,7 @@ def main(argv=None):
                          residual_note=residual,
                          plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
                          plan_directions=_plan_directions(args.plan) if args.plan else None,
+                         plan_meta=_plan_meta(args.plan) if args.plan else None,
                          plan_risks=_plan_risks(args.plan) if args.plan else None,
                          surf_linkage_threshold=args.surf_linkage,
                          amend_note=args.amend_note,

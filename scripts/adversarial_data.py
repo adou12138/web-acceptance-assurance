@@ -55,12 +55,16 @@ OBLIGATION_STATUSES = {"planned", "executed", "cancelled"}
 SCENARIO_KINDS = {"cross_module", "operation_sequence", "state_bypass"}
 SURF_FIELDS = {"id", "entry", "role", "state", "data", "dependencies", "failure_hypothesis", "risk"}
 # v1.55 R3（P25 校验双方向）：direction 为 SURF 可选字段；未声明按披露，不熔断。
-SURF_OPTIONAL_FIELDS = {"direction"}
+SURF_OPTIONAL_FIELDS = {"direction", "direction_reason", "persistence", "resource_axes"}
 SURF_DIRECTIONS = {"increase", "decrease", "both", "n/a"}
+# v1.56 S1：direction=n/a 必须附 direction_reason，堵"写 n/a 免打反向"逃逸口。
+# v1.56 S2/S3：persistence（bool）声明持久化面；resource_axes（轴清单）声明逐轴覆盖。
+PROBE_INPUT_OPS = {"eq", "ne", "lt", "le", "gt", "ge", "in", "range"}
 ORC_REQUIRED = {"id", "source", "observation_entry", "applicable_condition"}
 ORC_OPTIONAL = {"source_ref"}
 ADV_REQUIRED = {"id", "surface_ref", "oracle_ref", "probe_type", "budget", "status"}
-ADV_OPTIONAL = {"cancel_reason", "method", "playbook_ref"}
+ADV_OPTIONAL = {"cancel_reason", "method", "playbook_ref", "probe_inputs"}
+# v1.56 S4：probe_inputs = [{field, op, value}]，边界有 schema 才可机械判定（修 D2）。
 
 
 def fingerprint(path):
@@ -150,6 +154,15 @@ def validate(plan, material_path=None, cases_json_path=None):
         if "direction" in item:
             if item["direction"] not in SURF_DIRECTIONS:
                 raise ValueError(f"{name}.direction: 必须为 {sorted(SURF_DIRECTIONS)} 之一")
+        if item.get("direction") == "n/a" and not str(item.get("direction_reason") or "").strip():
+            raise ValueError(f"{name}: direction=n/a 必须附非空 direction_reason（为何双方向不适用）")
+        if "persistence" in item and type(item["persistence"]) is not bool:
+            raise ValueError(f"{name}.persistence: 必须为布尔（是否涉及持久化写入面）")
+        if "resource_axes" in item:
+            axes = item["resource_axes"]
+            if (not isinstance(axes, list) or not axes
+                    or any(not isinstance(a, str) or not a.strip() for a in axes)):
+                raise ValueError(f"{name}.resource_axes: 必须为非空字符串数组（逐轴覆盖的轴名清单）")
 
     oracle_ids = set()
     for index, item in enumerate(oracles):
@@ -188,6 +201,19 @@ def validate(plan, material_path=None, cases_json_path=None):
             if "cancel_reason" not in item:
                 raise ValueError(f"{name}: status=cancelled 必须附 cancel_reason")
             _text(item["cancel_reason"], name + ".cancel_reason")
+        if "probe_inputs" in item:
+            pis = item["probe_inputs"]
+            if not isinstance(pis, list) or not pis:
+                raise ValueError(f"{name}.probe_inputs: 必须为非空数组")
+            for j, pi in enumerate(pis):
+                if not isinstance(pi, dict):
+                    raise ValueError(f"{name}.probe_inputs[{j}]: object required")
+                if not str(pi.get("field") or "").strip():
+                    raise ValueError(f"{name}.probe_inputs[{j}].field: nonempty string required")
+                if pi.get("op") not in PROBE_INPUT_OPS:
+                    raise ValueError(f"{name}.probe_inputs[{j}].op: 必须为 {sorted(PROBE_INPUT_OPS)} 之一")
+                if "value" not in pi:
+                    raise ValueError(f"{name}.probe_inputs[{j}].value: required")
         if "method" in item:
             if item["method"] not in METHOD_IDS:
                 raise ValueError(f"{name}.method: 必须为方法库稳定 ID {sorted(METHOD_IDS)} 之一")

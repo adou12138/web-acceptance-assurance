@@ -14,6 +14,19 @@
 
 **独立判据的同源判定（v1.55 R2）**：台账 `oracle_source=independent` 时必须同时声明 `oracle_scope ∈ {cross_system, cross_module, same_backend}`。同一后端/同一数据表的另一个视图（如同域接口换参数、页面 DOM 再读一遍）**不算独立**——额度任务把 `SubAccountResource.ashx` 的接口读回当独立通道，实际与界面同源。台账落账即拒绝 `independent + same_backend` 组合；未声明 scope 按同源嫌疑计（same_source_unverified）。真正的独立通道来自不同系统或不同模块：交易流水页、素材库、真实扣减行为、第三方账单。
 
+**持久化面与逐轴覆盖（v1.56 S2/S3）**：涉及持久化写入的 SURF 须声明 `persistence: true`——
+声明后台账零条 `data_consistency` 记录即缺口（`consistency_path_absent`，额度任务原形：
+流水页从未访问=0 条记录）；多资源/多变体面声明 `resource_axes`（轴名清单），执行记录用
+`axis` 标注落在哪个轴上，任一轴零记录即缺口（`axis_uncovered`，额度实证：sms 有通道、
+OCR/多媒体/实人零通道）。
+
+**计划参数与实执行对照（v1.56 S4）**：义务项（ADV）可声明结构化 `probe_inputs`
+（`[{field, op ∈ eq/ne/lt/le/gt/ge/in/range, value}]`——边界必须有 schema 才可机械判定）；
+执行记录用 `adv_id` 关联义务、`actual_inputs` 记录实际输入取值。声明了 probe_inputs 的
+ADV 无关联记录 → `probe_inputs_unexecuted`（披露）；有记录但实执行不满足声明边界 →
+`probe_input_mismatch`（缺口）——F2 场景机械化：ADV-01 声明"余额恰差一单位"、
+实执行"余额 100 填 200"，旧流程只能靠人眼发现。
+
 ### req_issue（需求可疑点判据）与需求批判
 
 批判者不只批判实现，也批判需求本身。评审阶段产出的**需求可疑点**（遗漏 / 冲突 / 隐含假设 / 业务合理性存疑，见 `skills/requirement-review/SKILL.md` 的伴随文件约定）登记为 `source=req_issue` 的 ORC，驱动"挑战需求"类探针：验证产品在需求未定义、自相矛盾或违背业务常识之处的行为是否可辩护。纪律：

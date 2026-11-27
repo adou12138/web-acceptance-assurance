@@ -881,20 +881,49 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
     return state
 
 
+def _collect_path_types(node, out):
+    """S7：递归收集记录子树里的 path_type 取值（对象身份去重防循环引用）。"""
+    if isinstance(node, dict):
+        value = node.get("path_type")
+        if isinstance(value, str) and value.strip():
+            out.add(value.strip().lower())
+        seen = set()
+        for child in node.values():
+            if id(child) in seen:
+                continue
+            seen.add(id(child))
+            _collect_path_types(child, out)
+    elif isinstance(node, list):
+        seen = set()
+        for child in node:
+            if id(child) in seen:
+                continue
+            seen.add(id(child))
+            _collect_path_types(child, out)
+
+
 def _ui_handoff_check(value):
     """R4（v1.55）：无判据定性 UI 项的放弃留痕。
 
     - None → not_provided（收尾缺清单，压档；补救入口 revise --ui-handoff）
     - 字面量 not_applicable → 纯接口/无 UI 范围批次显式豁免
     - 文件 → JSON 数组或 {"items": [...]}；每条须含非空 view 与 item，
-      且 criterion（判据来源）与 not_evaluable_reason 二选一非空——
-      空清单/空条目都过不了门禁，「清单存在但全空」不算留痕。
+      且 criterion_source（判据来源）与 not_evaluable_reason 二选一非空——
+      空清单/空条目都过不了门禁，「清单存在但全空」不算留痕（S8）。
+      S7（v1.56）：not_applicable 与本轮 ui_content/usability/accessibility 采集
+      记录交叉核验——看了界面还声明无 UI 范围属矛盾，拒收。
     """
     if value is None:
         return {"state": "not_provided", "checked_at": _now()}
     if str(value).strip().lower() == "not_applicable":
         return {"state": "not_applicable", "checked_at": _now()}
     payload = _read_json_file(value, "ui_handoff")
+    return _ui_handoff_check_text(json.dumps(payload, ensure_ascii=False))
+
+
+def _ui_handoff_check_text(raw_text):
+    """S8（v1.56）：文本入口，供校验复用与测试。"""
+    payload = json.loads(raw_text)
     items = payload.get("items") if isinstance(payload, dict) else payload
     if not isinstance(items, list):
         raise ValueError('ui_handoff 必须为 JSON 数组或 {"items": [...]}')
@@ -907,9 +936,13 @@ def _ui_handoff_check(value):
             problems.append(f"items[{i}].view: nonempty string required")
         if not str(item.get("item") or "").strip():
             problems.append(f"items[{i}].item: nonempty string required")
-        if not (str(item.get("criterion") or "").strip()
+        # S8（v1.56）：判据下限。裸 criterion 文本（如"已对照"）凑不出机器可辨的
+        # 判据来源——必须是 criterion_source（设计稿节点/规范条款/数值阈值）或
+        # not_evaluable_reason 二选一；criterion 只作补充细节。
+        if not (str(item.get("criterion_source") or "").strip()
                 or str(item.get("not_evaluable_reason") or "").strip()):
-            problems.append(f"items[{i}]: criterion 与 not_evaluable_reason 至少一项非空")
+            problems.append(f"items[{i}]: 须给 criterion_source（判据来源）或 "
+                            "not_evaluable_reason（放弃理由）之一，裸 criterion 不算判据")
     if problems:
         raise ValueError(f"ui_handoff 结构不合规，未收尾：{problems[0]}")
     if not items:
@@ -959,6 +992,21 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
         # R4（v1.55）：无判据定性 UI 项的放弃留痕。缺失压档（ui_handoff_missing），
         # not_applicable 显式豁免（纯接口批次），provided 必须过结构校验——
         # 「清单存在但全空」过不了门禁。
+        # S7（v1.56）：not_applicable 与采集记录交叉核验——本轮既然观察到了
+        # UI/易用/无障碍路径，就不存在"无 UI 范围"。矛盾即拒收，不降级披露：
+        # 豁免声明错了就该改声明，不是加个提醒了事。
+        if (str(ui_handoff).strip().lower() == "not_applicable"
+                and collection is not None and records):
+            ui_path_types = {"ui_content", "usability", "accessibility"}
+            seen_types = set()
+            for r in records:
+                _collect_path_types(r, seen_types)
+            conflict = sorted(seen_types & ui_path_types)
+            if conflict:
+                raise ValueError(
+                    f"ui_handoff=not_applicable 与本轮采集记录矛盾：存在 "
+                    f"path_type ∈ {conflict} 的记录（S7 交叉核验）——"
+                    "请交真实放弃清单或修正 path_type 标注")
         entry["ui_handoff"] = _ui_handoff_check(ui_handoff)
     elif attack_coverage is not None or exploration is not None or collection is not None \
             or ui_handoff is not None:

@@ -24,3 +24,22 @@
 6. **九类逐类结论都写了吗？** 报告须按 applicability 九类逐类给结论（含"未测"类），缺类即交付不完整（R10）。
 7. **跨视图互比跑了吗？** 平行子视图（页签/模块/资源类型）的量词单位、数值精度、术语——`copy_consistency.py --cross-view` 出观察候选，人工裁定（R5）。
 8. **对每条"按设计拒绝"反向打过吗？** 校验规则的减少/回收/撤销方向有没有探针（R3/P25）。
+
+## 交付前补问（v1.56 S 批次）
+
+7. **持久化面零一致性路径？**（S2）涉及持久化写入的 SURF 声明 `persistence: true`；台账零条
+   `data_consistency` 即缺口（`consistency_path_absent`）——流水页从未访问=0 条记录，旧判据照漏。
+8. **多资源面逐轴铺了吗？**（S3）`resource_axes` 声明轴清单，执行记录用 `axis` 标注；
+   任一轴零记录即缺口（`axis_uncovered`）。
+9. **计划探针参数与实执行一致吗？**（S4）ADV 声明 `probe_inputs`（含边界 schema），
+   记录用 `adv_id`+`actual_inputs` 对照；不满足即 `probe_input_mismatch`（F2 场景）。
+10. **触发方式声明了吗？**（S5）`driver ∈ {ui_user_path, page_internal_fn, replay_or_stub}`；
+    后两类不得计 PASS（落账强制 driver_justified）。
+11. **跨视图互比按同语义量分组了吗？**（S6）`--cross-view` 须带 `groups`；无分组只披露
+    （不同资源的单位差异是合法的，全语料比对是噪声源）。
+12. **ui_handoff 豁免与事实一致吗？**（S7/S8）not_applicable 与 ui_content/usability/
+    accessibility 采集记录矛盾即拒收；放弃项须给 criterion_source 或 not_evaluable_reason，
+    且报告逐条列出。
+13. **交付记录绑定台账了吗？**（S10）`delivery_ledger_binding.py --enforce`：交付 CSV 每条
+    须能在 events.jsonl 找到 FINISH。
+14. **恶劣数据形状登记了吗？**（S9）`init --data-shapes`；impossible 进 headline.uncovered。

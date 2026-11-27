@@ -12,6 +12,7 @@
 
 - `cases.snapshot.json`：冻结本轮设计，防止正在执行的步骤被静默更改。
 - `baseline.json`：round_id、UTC创建时间、设计/环境哈希、计划TC、提测上下文和已知缺陷快照。
+- `baseline.data_shapes`（v1.56 S9，可选）：恶劣数据形状登记（每条 shape/constructible/note；constructible ∈ constructible/request_needed/impossible）。**不复用 input-inventory**——那是材料消费盘点，数据形状是测试数据覆盖面。impossible 项进 headline.uncovered 与阻断同权披露；开工自检（self-check 问 5）列出的形状逐条落在这里。
 - `baseline.blocked_faces`（v1.55 R8）：执行期阻断面登记——每条 `name`（面名）+ `reason`（原因），
   建议附 `alternative_channel`（替代通道）与 `status`；经 `execution_ledger.py init --blocked-faces <JSON数组>` 登记，
   进报告首屏「已声明阻断」栏。缺失只披露不阻断；**"留待手动核验"不算已安排**（无替代通道与责任人的登记形同虚设）。

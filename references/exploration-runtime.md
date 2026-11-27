@@ -114,6 +114,7 @@ CSV派生“界面样式”“交互易用性”“基础无障碍”“功能�
 每条记录必须包含：`id`、`collection_state`、`tc_ref`、`action_id`、动作类型与目标引用、动作前后 `page_url`/客户端状态/角色（`before`/`after`）、动作相关的 console 增量 / page error / unhandled rejection、动作相关网络请求摘要与失败请求（`observed.network`）、动作后的 DOM/可见文本/截图证据路径（`evidence_paths`）。
 
 - **`lead`（只含 `suspicion`/`basis`/`where` 三键）**进入候选复核；**`blind_spot`**（数组）进入限制披露——如导航前未能安装观察钩子时，如实写明"初始加载异常未采集"，不得声称覆盖。
+- **触发方式声明（v1.56 S5）**：执行记录可带 `driver ∈ {ui_user_path, page_internal_fn, replay_or_stub}`。自动化驱动但走 UI 路径的记 `ui_user_path`，**可以**计通过；`page_internal_fn`（直调页面内部函数，如 sarLoad()）/`replay_or_stub`（重放或桩补全页面行为）不是用户可达路径，其观察**不得计 PASS**——落账时强制：这两类 + PASS 必须附非空 `driver_justified`（为何该观察可作通过证据），否则拒绝；门禁侧对绕径记录出披露 notice。
 - `observed.network[].status:500` 这类取值是**可观测事实**，不是裁决字段；但 `severity`/`verdict`/`conclusion`/`classification`/`root_cause` 等裁决字段**不得出现在记录的任何嵌套层**（含 `observed`/`lead` 的值内部）——`scan_collection_records` **迭代遍历完整子树**（`judgement_key_nested`；不做深度截断，对象身份去重只防循环引用；12 层深嵌套与循环引用用例已锁定），只扫顶层绕不过去（测试 `test_nested_severity_in_observed_is_rejected` 锁定）。
 - `collected` 状态必须有非空 `evidence_paths`（`no_evidence` 违规）；DOM/截图路径与 `observed.dom/screenshot` 重复是允许的，但 `evidence_paths` 仍须显式列出（校验器读这一项）。
 - 「网络失败→是否缺陷」不在采集层判定，交裁决阶段；预期校验失败（4xx 表单校验、取消请求、轮询）保留为观察，不自动升级为缺陷；5xx/未捕获异常可作高优先级候选，仍需裁决核 `observed_*`。

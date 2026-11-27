@@ -227,7 +227,7 @@ class R3DirectionObligation(unittest.TestCase):
         self.assertIn("direction_undeclared", notice_codes)
 
     def test_tool_version_bumped(self):
-        self.assertEqual(ac.TOOL_VERSION, "5")
+        self.assertEqual(ac.TOOL_VERSION, "6")  # v1.56 S2-S5 进入 gaps 判定
 
 
 class R4UiHandoff(unittest.TestCase):
@@ -305,7 +305,7 @@ class R4UiHandoff(unittest.TestCase):
         import phase_gate as pg
         state = self._finish(self._state())  # 不带 ui_handoff
         good = {"items": [{"view": "日志弹窗", "item": "列文案缩略",
-                           "criterion": "设计稿对照"}]}
+                           "criterion_source": "设计稿节点 #log-dialog：列宽与文案对照"}]}
         f = self.folder / "later.json"
         f.write_text(json.dumps(good, ensure_ascii=False), encoding="utf-8")
         pg.revise(state, "execute", ui_handoff=str(f), note="补正 R4 留痕")

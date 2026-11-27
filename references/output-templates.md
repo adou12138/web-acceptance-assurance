@@ -86,7 +86,7 @@
 | 阶段 | 产物文件 | 字段集要点 | 消费方 |
 |---|---|---|---|
 | 采集 | `collection.jsonl` / 台账 `events.jsonl` | 只写观察，禁止判定字段 | `phase_gate.py scan-collection`、`attack_coverage.py --ledger` |
-| 定性 UI 放弃清单 | `ui-handoff.json` 或字面量 `not_applicable` | 每条 view/item + criterion 或 not_evaluable_reason（v1.55 R4） | `phase_gate.py complete --ui-handoff`、`revise --ui-handoff`；报告「转人工通道清单」 |
+| 定性 UI 放弃清单 | `ui-handoff.json` 或字面量 `not_applicable` | 每条 view/item + criterion_source（判据来源）或 not_evaluable_reason（v1.55 R4；v1.56 S8 收紧：裸 criterion 不算判据）；**报告须逐条列出放弃项**，不只给计数 | `phase_gate.py complete --ui-handoff`、`revise --ui-handoff`；报告「转人工通道清单」 |
 | 门禁缺席结论 | `gate-absent-check` 输出 | absent 列表 + `verdict_ceiling_suggestion`（v1.55 R9） | `scripts/gate_absent_check.py --dir --enforce`；self-check 交付前问 1 |
 | 对抗计划 | `adversarial-plan.json` | `SURF-` 风险面与 `hypothesis` | `attack_coverage.py --plan` |
 | 对抗场景 | `adversarial-scenarios.json` | `SCN-ADV-` 三类（cross_module/operation_sequence/state_bypass）、`sequence≥2`、cross_module≥2 SURF；id/note 带设计场景 ID 前缀作回链（约定见 case-data-contract.md「对抗场景回链」） | `adversarial_data.py --scenarios`、`adversarial_gate.py --scenarios` |
@@ -375,6 +375,11 @@ EXP ID；目标风险；范围/排除项；环境/角色/数据；时间盒与�
 生成不等于执行：仅完成生成时执行项一律 NOT_RUN；台账（execution_ledger.py）直接吃同一份 cases JSON，只写执行事实不改 testcases[]。
 
 ## 8.4 报告歧义对账
+
+收到外部反馈/缺陷清单时，交付前附**三态对账表**（v1.56 S11）：逐条映射
+`found`（本轮已发现并交付）/ `declared_blocked`（已声明阻断，附原因与所需条件）/ `missed`
+（未发现），missed 逐条写归因——对应本轮哪条改进缺口（self-check/口径/维度）或是新根因；
+新根因须回写登记。**禁止把 missed 混进 declared_blocked**（"测不了"与"没测出来"结论不同）。
 
 外部反馈/缺陷列表与测试结论一起交付时，附「歧义对账」节：每条有争议或双方理解不一致的反馈列“我方判读 / 对方表述 / 差异点 / 需要澄清的问题 / 暂按哪一方执行”；没有歧义项时写“本轮对账无歧义项”，不省略该节。对账入口与维度归属按 agents 主文件的「批次结论门禁与反馈对账」，本节只定报告呈现形态，不另建口径。
 

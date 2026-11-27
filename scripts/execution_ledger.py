@@ -550,7 +550,7 @@ def _readonly_write_crosscheck(phase_state, write_ops_ledger):
 
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
                adversarial_gate=None, adversarial_waiver=None, phase_state=None,
-               attack_coverage=None, blocked_faces=None):
+               attack_coverage=None, blocked_faces=None, data_shapes=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
@@ -590,6 +590,10 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
             if not str(face.get("reason") or "").strip():
                 raise ValueError(f"blocked_faces[{i}].reason: nonempty string required")
         baseline["blocked_faces"] = blocked_faces
+    # S9（v1.56）：恶劣数据形状在建账时登记（不复用 input-inventory——那是材料消费，
+    # 不是测试数据形状）。impossible 项进 headline.uncovered，与 blocked 同权披露。
+    if data_shapes:
+        baseline["data_shapes"] = _validate_data_shapes(data_shapes)
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
@@ -687,7 +691,12 @@ def begin(workspace, design, context, attempt_id, case_id, intended_action):
 
 ATTACK_FIELDS = ("path_type", "surf_id", "method", "oracle_source", "oracle_channel",
                  "oracle_scope",
-                 "discovery_mode", "probes", "hypothesis", "hypothesis_outcome")
+                 "discovery_mode", "probes", "hypothesis", "hypothesis_outcome",
+                 "adv_id", "axis", "actual_inputs", "driver", "driver_justified")
+# v1.56 S4：adv_id 关联对抗义务（F2 对照的前提）、actual_inputs 记录实际输入取值；
+# v1.56 S5：driver 声明触发方式——page_internal_fn/replay_or_stub 不是用户路径。
+ATTACK_DRIVERS = ("ui_user_path", "page_internal_fn", "replay_or_stub")
+ATTACK_DRIVERS_FORBIDDEN_AS_PASS = ("page_internal_fn", "replay_or_stub")
 # hypothesis / hypothesis_outcome 必须走 finish() 落进台账：attack_coverage.py 从台账读它们
 # 判「高风险面是否有可证伪预测」。若只由调用方手工回写 JSONL，会破坏 digest 哈希链
 # （每一步 _append 都以整条 payload 计算 digest），等于用违规换取门禁通过。
@@ -742,6 +751,38 @@ def _attack_fields(attack, evidence_paths):
         value = attack["oracle_channel"]
         _text(value, "attack.oracle_channel")
         out["oracle_channel"] = value.strip()
+    if "driver" in attack:
+        # v1.56 S5：绕径驱动声明。page_internal_fn/replay_or_stub 不是用户可达路径，
+        # 产生的观察不得计 PASS，除非显式 driver_justified（并将在门禁侧披露）。
+        value = str(attack["driver"]).strip().lower()
+        if value not in ATTACK_DRIVERS:
+            raise ValueError(f"attack.driver 必须为 {list(ATTACK_DRIVERS)} 之一")
+        out["driver"] = value
+    if "driver_justified" in attack:
+        value = attack["driver_justified"]
+        _text(value, "attack.driver_justified")
+        out["driver_justified"] = value.strip()
+    if "adv_id" in attack:
+        value = str(attack["adv_id"]).strip()
+        if not value.upper().startswith("ADV-"):
+            raise ValueError("attack.adv_id 必须形如 ADV-XXX（关联对抗义务）")
+        out["adv_id"] = value
+    if "axis" in attack:
+        value = attack["axis"]
+        _text(value, "attack.axis")
+        out["axis"] = value.strip()
+    if "actual_inputs" in attack:
+        ais = attack["actual_inputs"]
+        if not isinstance(ais, list):
+            raise ValueError("attack.actual_inputs: 必须为数组")
+        norm = []
+        for i, ai in enumerate(ais):
+            if not isinstance(ai, dict) or not str(ai.get("field") or "").strip():
+                raise ValueError(f"attack.actual_inputs[{i}]: 须为含非空 field 的对象")
+            if "value" not in ai:
+                raise ValueError(f"attack.actual_inputs[{i}].value: required")
+            norm.append({"field": str(ai["field"]).strip(), "value": ai["value"]})
+        out["actual_inputs"] = norm
     if "oracle_scope" in attack:
         # v1.55 R2：通道范围声明。same_backend 与 independent 互斥——同后端视图
         # 不是独立通道（额度任务 08 证据实证），落账时就拒绝，不改口成本最低。
@@ -817,6 +858,12 @@ def finish(workspace, design, context, attempt_id, status, actual, evidence_path
         if not path.is_absolute() or not path.is_file():
             raise ValueError("evidence must be existing absolute local file")
         evidence.append({"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    if attack and str(attack.get("driver") or "") in ATTACK_DRIVERS_FORBIDDEN_AS_PASS \
+            and status == "PASS" and not str(attack.get("driver_justified") or "").strip():
+        # v1.56 S5：绕径驱动直出 PASS 必须给理由——sarLoad() 类直调（F1 实证）
+        # 不经用户路径，静默计通过会让"点击有效"判定失真。
+        raise ValueError(f"driver={attack['driver']} 不是用户路径，status=PASS 必须附非空 "
+                         "driver_justified（为何该观察可作通过证据）；否则改记 OBS/lead")
     attack_fields = _attack_fields(attack, evidence_paths)
     with _lock(workspace):
         baseline, cases, _, same = _compatible(workspace, design, context)
@@ -1017,6 +1064,19 @@ def _headline_checks(baseline, final_precondition, counts, evidence_issues,
     return checks
 
 
+def _validate_data_shapes(data_shapes):
+    """S9（v1.56）：恶劣数据形状登记结构校验。"""
+    if not isinstance(data_shapes, list):
+        raise ValueError("data_shapes 必须为数组")
+    for i, shape in enumerate(data_shapes):
+        if not isinstance(shape, dict) or not str(shape.get("shape") or "").strip():
+            raise ValueError(f"data_shapes[{i}]: 须为含非空 shape 的对象")
+        if shape.get("constructible") not in ("constructible", "request_needed", "impossible"):
+            raise ValueError(f"data_shapes[{i}].constructible: 必须为 "
+                             "constructible/request_needed/impossible 之一")
+    return data_shapes
+
+
 def _build_headline(baseline, counts, executed, cases, final_precondition, ceiling,
                     evidence_issues, flaky_cases, context, missing_inputs,
                     delegated_inputs=()):
@@ -1095,6 +1155,11 @@ def _build_headline(baseline, counts, executed, cases, final_precondition, ceili
     not_run_cases = not_run
     if not_run_cases:
         uncovered_items.append({"source": "execution.NOT_RUN", "items": not_run_cases})
+    impossible_shapes = [d.get("shape") for d in (baseline.get("data_shapes") or [])
+                         if isinstance(d, dict) and d.get("constructible") == "impossible"]
+    if impossible_shapes:
+        uncovered_items.append({"source": "baseline.data_shapes.impossible",
+                                "items": impossible_shapes})
 
     return {
         "schema": HEADLINE_SCHEMA,
@@ -1283,6 +1348,10 @@ def main():
             part.add_argument("--blocked-faces",
                               help="执行期阻断面登记 JSON 数组（每条 name/reason，建议附 alternative_channel/status）；"
                                    "R8：缺失只披露，「留待手动核验」不算已安排")
+            part.add_argument("--data-shapes",
+                              help="恶劣数据形状登记 JSON 数组（每条 shape/constructible/note；"
+                                   "constructible ∈ constructible/request_needed/impossible）；"
+                                   "S9：impossible 进 headline.uncovered")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -1308,7 +1377,8 @@ def main():
                                 args.adversarial_waiver,
                                 _load(args.phase_state) if getattr(args, "phase_state", None) else None,
                                 _load(args.attack_coverage) if getattr(args, "attack_coverage", None) else None,
-                                _load(args.blocked_faces) if getattr(args, "blocked_faces", None) else None)
+                                _load(args.blocked_faces) if getattr(args, "blocked_faces", None) else None,
+                                _load(args.data_shapes) if getattr(args, "data_shapes", None) else None)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

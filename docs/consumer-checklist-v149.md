@@ -30,3 +30,18 @@
 | `baseline.blocked_faces` | execution_ledger init --blocked-faces | _build_headline → headline.blocked | scripts/execution_ledger.py |
 | `gate_absent_check.py` | scripts/gate_absent_check.py | self-check.md 交付前问 1 | references/self-check.md |
 | `self-check.md` | — | agents/web-acceptance-assurance.md 读取契约 | agents/web-acceptance-assurance.md:90 |
+
+## v1.56.0 新产物消费核对（S 批次）
+
+| 新产物/字段 | 生产者 | 消费者 | grep 证据 |
+|---|---|---|---|
+| `direction_reason`（SURF） | adversarial_data.validate | —（落账即拒 n/a 无理由） | scripts/adversarial_data.py |
+| `persistence`（SURF）→ `consistency_path_absent` | adversarial_data / attack_coverage | analyse gaps | scripts/attack_coverage.py S2 块 |
+| `resource_axes`/`axis` → `axis_uncovered` | adversarial_data / execution_ledger / attack_coverage | analyse gaps | scripts/attack_coverage.py S3 块 |
+| `probe_inputs`（ADV）+ `adv_id`/`actual_inputs` → `probe_input_mismatch` | adversarial_data / execution_ledger / attack_coverage | analyse gaps | scripts/attack_coverage.py S4 块 |
+| `driver`/`driver_justified` → 落账拒 + notice | execution_ledger._attack_fields | attack_coverage `driver_forbidden_observed` | scripts/execution_ledger.py ATTACK_DRIVERS |
+| `groups`（--cross-view）→ 组内候选 + `cross_view_unaligned` | copy_consistency | analyse_cross_view | scripts/copy_consistency.py |
+| ui_handoff 交叉核验 + `criterion_source` | phase_gate.complete/_ui_handoff_check_text | REASON_POLICY（沿用 ui_handoff_missing） | scripts/phase_gate.py S7/S8 |
+| `data_shapes`（baseline）→ headline.uncovered | execution_ledger init --data-shapes | _build_headline | scripts/execution_ledger.py |
+| `delivery_ledger_binding.py` | scripts/delivery_ledger_binding.py | self-check 交付前问 13 | references/self-check.md |
+| 反馈三态对账节 | output-templates.md | execution-management 对账入口 | references/output-templates.md |

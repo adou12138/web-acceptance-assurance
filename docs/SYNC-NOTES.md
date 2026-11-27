@@ -1684,3 +1684,45 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **本版不宣称的能力**：R7–R11 不产生新检出；本版不消除漏测，只覆盖已识别的三类病灶
   （声明-覆盖脱钩、假独立、规则不触发）；不宣称像素级 diff、渗透、压测、全量 WCAG 合规。
 - **版本**：`plugin.json`/`marketplace.json` 1.54.0 → 1.55.0；tag `v1.55.0`。
+
+### v1.56.0 · 判据修正与覆盖补齐（S 批次，2026-11-27）
+
+来源：expert-improvement-plan-v2.md（M1-M10）的实质审核——4 条判据不成立、4 条可绕过、
+3 处覆盖缺口、3 处内部矛盾。本版只做：判据修正（S1/S5/S6）、判别力补强（S7/S8）、
+覆盖缺口（S2/S3/S4）、交付绑定（S10）；TOOL_VERSION 5→6。
+
+- **S1 direction=n/a 须附 reason**（检测）：堵"写 n/a 免打反向"逃逸口。
+- **S2 持久化面零一致性路径**（检测）：`persistence` SURF 字段 + `consistency_path_absent`
+  缺口——额度任务原形（流水页 0 条记录）此前结构性不可见。未声明 persistence 且零
+  data_consistency 只披露（`consistency_path_unclaimed`）。
+- **S3 逐轴覆盖**（检测）：`resource_axes`/`axis` 字段 + `axis_uncovered` 缺口——
+  额度实证（sms 有通道、OCR/多媒体零通道）。
+- **S4 计划参数对照**（检测）：ADV `probe_inputs`（含边界 schema {field,op,value}）+
+  记录 `adv_id`/`actual_inputs` → `probe_input_mismatch`——F2 场景机械化（声明差一单位、
+  实执行 100 填 200）。
+- **S5 绕径驱动**（检测+落账拒）：`driver ∈ {ui_user_path, page_internal_fn, replay_or_stub}`；
+  后两类 + PASS 强制 `driver_justified`（sarLoad/F1 场景）。自动化走 UI 不误杀（ui_user_path）。
+- **S6 跨视图同语义量分组**（判据修正）：`--cross-view` 须带 `groups`，组内才产单位/精度
+  候选；无分组降级为披露（`cross_view_unaligned`）——消除"短信=条/OCR=次"合法差异误报。
+- **S7 not_applicable 交叉核验**（判别力）：与 ui_content/usability/accessibility 采集
+  记录矛盾即拒收。
+- **S8 清单判据下限**（判别力）：非 not_evaluable 项必须给 `criterion_source`，裸
+  criterion 不算判据；报告须逐条列出放弃项。**契约收紧**：v1.55 夹具已同步。
+- **S9 数据形状登记**（加锁，不产生新检出）：`init --data-shapes`，impossible 进
+  headline.uncovered；不复用 input-inventory（范畴错误修正）。
+- **S10 交付-台账绑定**（加锁）：新脚本 `delivery_ledger_binding.py`——交付 CSV 每条须
+  在 events 找到 FINISH；缺失压待核实。防"建空台账照旧手写"（存在性检查无判别力）。
+- **S11 反馈三态对账**（加锁）：output-templates 固定 found/declared_blocked/missed 三态，
+  missed 逐条归因；禁止混列。
+- **S12/S13 决策留痕**：M10 前半（WARN 须处置）不做——布尔 risk_flag 随手填=橡皮图章，
+  零检出价值；M10 后半（L3 方法见证扩展）本版不做（coverage_matrix 无"校验类面"判据）；
+  M9 硬阻断不做——沿用 R9 检测，check-verdict 硬阻断与"不改放行协议"矛盾，观察一轮后再议。
+- **准出记录**：全量 1128 通过（新增 test_v156_substance 36 条）；TOOL_VERSION 5→6；
+  v1.55 的 R4 夹具（criterion→criterion_source）与 TOOL_VERSION 断言同步更新。
+- **兼容性**：全部新字段可选，旧 plan/旧台账缺字段不熔断；S2/S3/S4 缺口只对
+  tool_version≥6 重算生效，归档产物保持原判；ui_handoff/cross-view 契约收紧只影响
+  新交付，旧归档不回读重判。
+- **回退**：`git revert` 至 v1.55.0；cache 旧版 SKILL.md 禁活状态不变。
+- **本版不宣称的能力**：S9/S10/S11 不产生新检出；S12/S13 为显式决策不做；不宣称
+  L3 方法见证扩展、check-verdict 硬阻断。
+- **版本**：plugin.json/marketplace.json 1.55.0 → 1.56.0；tag v1.56.0。
