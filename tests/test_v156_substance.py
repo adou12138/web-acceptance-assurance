@@ -176,6 +176,27 @@ class S4ProbeInputMismatch(unittest.TestCase):
                    if g["code"] == "probe_input_mismatch")
         self.assertIn("分配额度", msg)
 
+    def test_good_record_cannot_mask_bad_record(self):
+        """真实场景回放抓到：ADV-01 声明 99，一条填 99、另一条填 200——
+        旧实现'任一记录满足即通过'会漏报 F2 场景。"""
+        records = [
+            _record(attempt_id="a1", case_id="TC-1", surf_id="SURF-01",
+                    adv_id="ADV-01",
+                    actual_inputs=[{"field": "分配额度", "value": 99},
+                                   {"field": "主账户余额", "value": 100}]),
+            _record(attempt_id="a2", case_id="TC-2", surf_id="SURF-01",
+                    adv_id="ADV-01",
+                    actual_inputs=[{"field": "分配额度", "value": 200},
+                                   {"field": "主账户余额", "value": 100}]),
+        ]
+        result = ac.analyse(records, plan_surfaces={"SURF-01"},
+                            plan_risks={"SURF-01": "high"}, plan_meta=self.PLAN)
+        codes = [g["code"] for g in result["gaps"]]
+        self.assertIn("probe_input_mismatch", codes, f"gaps={codes}")
+        msg = next(g["message"] for g in result["gaps"]
+                   if g["code"] == "probe_input_mismatch")
+        self.assertIn("a2", msg)  # 点名偏离的那条记录
+
     def test_match_passes(self):
         records = [_record(surf_id="SURF-01", adv_id="ADV-01",
                            actual_inputs=[{"field": "分配额度", "value": 99},

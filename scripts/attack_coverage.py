@@ -1178,23 +1178,28 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
                             "message": f"ADV {adv_id} 声明了 probe_inputs 但台账无 adv_id 关联记录"
                                        "（声明了探针参数但未见执行留痕）"})
             continue
+        # 逐条记录判定：一条合规记录不能掩盖另一条偏离声明的记录（真实场景实测抓到：
+        # ADV-01 声明 99，ATT-SIM-1 实填 99、ATT-SIM-2 实填 200——旧"任一记录满足即通过"
+        # 会把 F2 场景漏掉）。每条关联记录都要满足全部声明输入。
         mismatched = []
-        for pi in pis:
-            field = str(pi.get("field") or "")
-            op = pi.get("op")
-            declared = pi.get("value")
-            ok = False
-            for r in records:
-                if str(r.get("adv_id") or "") != adv_id:
-                    continue
-                for ai in (r.get("actual_inputs") or []):
-                    if str(ai.get("field") or "") == field and _input_satisfied(op, declared, ai.get("value")):
-                        ok = True
-                        break
-                if ok:
-                    break
-            if not ok:
-                mismatched.append(f"{field} {op} {declared!r}")
+        for r in records:
+            if str(r.get("adv_id") or "") != adv_id:
+                continue
+            bad = []
+            for pi in pis:
+                field = str(pi.get("field") or "")
+                op = pi.get("op")
+                declared = pi.get("value")
+                ok = any(
+                    str(ai.get("field") or "") == field
+                    and _input_satisfied(op, declared, ai.get("value"))
+                    for ai in (r.get("actual_inputs") or [])
+                )
+                if not ok:
+                    bad.append(f"{field} {op} {declared!r}")
+            if bad:
+                mismatched.append(f"{r.get('attempt_id') or r.get('case_id') or r.get('id')}:"
+                                  + "，".join(bad))
         if mismatched:
             gaps.append({"code": "probe_input_mismatch",
                          "message": f"ADV {adv_id} 的实执行输入不满足声明边界（F2 场景："
