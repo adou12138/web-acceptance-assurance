@@ -43,7 +43,7 @@ PROBE_TYPES = {"challenge", "fault_injection", "timing", "permission",
                "visual_walkthrough", "copy_audit", "heuristic_review",
                "consistency", "regression"}
 # 方法库与坑点模板的稳定 ID（与 references/probe-playbook.md 同步；模板编号以文档 A 节为准）
-PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 25)}
+PLAYBOOK_TEMPLATES = {f"P{i}" for i in range(1, 26)}
 METHOD_IDS = {"equivalence", "boundary", "decision_table", "state_transition", "combinatorial",
               "differential", "metamorphic", "fault_injection", "concurrency", "rollback",
               "visual_walkthrough", "copy_audit", "heuristic_review", "consistency_check",
@@ -54,6 +54,9 @@ METHOD_DIVERSITY_MIN_METHODS = 2
 OBLIGATION_STATUSES = {"planned", "executed", "cancelled"}
 SCENARIO_KINDS = {"cross_module", "operation_sequence", "state_bypass"}
 SURF_FIELDS = {"id", "entry", "role", "state", "data", "dependencies", "failure_hypothesis", "risk"}
+# v1.55 R3（P25 校验双方向）：direction 为 SURF 可选字段；未声明按披露，不熔断。
+SURF_OPTIONAL_FIELDS = {"direction"}
+SURF_DIRECTIONS = {"increase", "decrease", "both", "n/a"}
 ORC_REQUIRED = {"id", "source", "observation_entry", "applicable_condition"}
 ORC_OPTIONAL = {"source_ref"}
 ADV_REQUIRED = {"id", "surface_ref", "oracle_ref", "probe_type", "budget", "status"}
@@ -135,7 +138,7 @@ def validate(plan, material_path=None, cases_json_path=None):
     methods_used, templates_used = set(), set()
     for index, item in enumerate(surfaces):
         name = f"surfaces[{index}]"
-        _object(item, SURF_FIELDS, set(), name)
+        _object(item, SURF_FIELDS, SURF_OPTIONAL_FIELDS, name)
         _prefix_id(item["id"], "SURF-", name + ".id")
         if item["id"] in seen:
             raise ValueError(f"{name}.id: 重复的稳定 ID {item['id']}")
@@ -144,6 +147,9 @@ def validate(plan, material_path=None, cases_json_path=None):
             _text(item[key], f"{name}.{key}")
         if item["risk"] not in RISKS:
             raise ValueError(f"{name}.risk: 必须为 high/medium/low")
+        if "direction" in item:
+            if item["direction"] not in SURF_DIRECTIONS:
+                raise ValueError(f"{name}.direction: 必须为 {sorted(SURF_DIRECTIONS)} 之一")
 
     oracle_ids = set()
     for index, item in enumerate(oracles):
@@ -187,7 +193,7 @@ def validate(plan, material_path=None, cases_json_path=None):
                 raise ValueError(f"{name}.method: 必须为方法库稳定 ID {sorted(METHOD_IDS)} 之一")
         if "playbook_ref" in item:
             if item["playbook_ref"] not in PLAYBOOK_TEMPLATES:
-                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P24 之一")
+                raise ValueError(f"{name}.playbook_ref: 必须为挑刺清单模板 ID P1~P25 之一")
         methods_used.add(item.get("method"))
         templates_used.add(item.get("playbook_ref"))
 

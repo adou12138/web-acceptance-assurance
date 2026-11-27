@@ -12,6 +12,7 @@
   非 applicable 时记 `not_required` 并回写该状态与理由（不得默认判覆盖）。
 - **L3 设计方法**：`method_evidence` 中有实际见证的方法数 ≥ `min_witnessed_methods`（policy 可配，默认 2）；
   每条声明的方法必须有见证，否则进 `declared_without_evidence`。
+- **维度下限（v1.55 R1）**：`applicability` 中声明 `applicable` 的 visual/usability/accessibility，各至少一条 `coverage_flags` 含该类大写标签的用例；缺项记 `dimension_gaps` 并计入退出码。
 - **L4 探索性**：`suites` 含 `exploratory` 的用例数与占比，只统计不要求达标（`counts_as_covered=false`），
   超 `budget_policy.exploratory_ratio_limit` 记 warn。
 
@@ -33,6 +34,12 @@ DEFAULT_POLICY = (Path(__file__).resolve().parents[1] / "skills" / "case-generat
 WITNESS_REQUIRED_LAYERS = ("L1", "L2", "L3")
 # 已登记缺口按类别回落到对应层：功能点缺失压 L1，元素/边界缺失压 L2，方法无见证压 L3。
 GAP_LAYER = {"feature_uncovered": "L1", "element_uncovered": "L2", "method_unwitnessed": "L3"}
+
+# v1.55 R1：适用性"声明 applicable"必须配最小覆盖——每个声明适用的维度类，
+# 至少一条 coverage_flags 含该类大写标签（VISUAL/USABILITY/ACCESSIBILITY）的用例。
+# 缺项是"声明与覆盖脱钩"的直接信号（访谈任务实证：visual=applicable 却只有一条
+# 探索用例、判据仅溢出与截断两项）。policy `structure.dimension_floor` 可覆盖默认三类。
+DIMENSION_FLOOR_CLASSES = ("visual", "usability", "accessibility")
 
 
 def _flags(case):
@@ -322,6 +329,45 @@ def _gap_overlay(cases, layers):
     return open_gaps, overlay
 
 
+def _dimension_floor(cases, classes):
+    """R1：声明 applicable 的维度类必须有带标签的用例；not_applicable 必须有理由。
+
+    标签约定：coverage_flags 内写维度大写名（VISUAL/USABILITY/ACCESSIBILITY），
+    与 L1-L4 层标记并存。状态为 insufficient_evidence/deferred 时留在分母与风险清单，
+    只记 note 不记缺口——与逐类适用性裁定口径一致。
+    """
+    applicability = cases.get("applicability") or {}
+    gaps, notes = [], []
+    for cls in classes:
+        entry = applicability.get(cls) if isinstance(applicability, dict) else None
+        entry = entry if isinstance(entry, dict) else {}
+        state = str(entry.get("state") or "").strip() or "unspecified"
+        tag = cls.upper()
+        tagged = [c.get("id") for c in (cases.get("testcases") or [])
+                  if isinstance(c, dict) and tag in _flags(c)]
+        if state == "applicable":
+            if tagged:
+                notes.append({"class": cls, "state": state, "cases": tagged})
+            else:
+                gaps.append({"kind": "dimension_uncovered", "layer": None, "target": cls,
+                             "reason": f"{cls} 声明 applicable 但没有任何 coverage_flags 含 {tag} "
+                                       "的用例——声明与覆盖脱钩；补一条实测用例（含该维度判据），"
+                                       "或改判 not_applicable/deferred 并给理由"})
+        elif state == "not_applicable":
+            if not str(entry.get("reason") or "").strip():
+                gaps.append({"kind": "dimension_uncovered", "layer": None, "target": cls,
+                             "reason": f"{cls} 判 not_applicable 但缺理由（逐类裁定要求）"})
+            else:
+                notes.append({"class": cls, "state": state, "note": "豁免须附理由，已附"})
+        elif state in {"insufficient_evidence", "deferred"}:
+            notes.append({"class": cls, "state": state,
+                          "note": "留在分母与风险清单，不计覆盖（与逐类适用性裁定口径一致）"})
+        else:
+            gaps.append({"kind": "dimension_uncovered", "layer": None, "target": cls,
+                         "reason": f"{cls} 未裁定（applicability 缺该类或状态为空）——九类逐类裁定为交付前置"})
+    return gaps, notes
+
+
 def build_matrix(cases, policy=None, source=None):
     """返回矩阵 dict；不写文件、不改入参。"""
     policy = policy or {}
@@ -332,6 +378,9 @@ def build_matrix(cases, policy=None, source=None):
         "L3": _layer_l3(cases, policy),
         "L4": _layer_l4(cases, policy),
     }
+    floor_classes = tuple((policy.get("structure") or {}).get("dimension_floor")
+                          or DIMENSION_FLOOR_CLASSES)
+    dimension_gaps, dimension_notes = _dimension_floor(cases, floor_classes)
     unmet_obligations, overlay = _obligation_overlay(cases, layers)
     for lid, payload in overlay.items():
         layers[lid] = payload
@@ -359,6 +408,8 @@ def build_matrix(cases, policy=None, source=None):
     for ob in unmet_obligations:
         gaps.append({"kind": "obligation_unbound", "layer": ob["layer"],
                      "target": ob["id"], "reason": ob["reason"]})
+    for dg in dimension_gaps:
+        gaps.append(dict(dg))
     for gap in open_gaps:
         gaps.append({"kind": gap["kind"] or "registered_gap", "layer": gap["layer"],
                      "target": gap["target"], "reason": gap["reason"],
@@ -376,6 +427,8 @@ def build_matrix(cases, policy=None, source=None):
         },
         "layer_matrix": layers,
         "missing_layers": missing,
+        "dimension_gaps": dimension_gaps,
+        "dimension_notes": dimension_notes,
         "gaps": gaps,
         "unmet_obligations": unmet_obligations,
         "open_registered_gaps": open_gaps,
@@ -418,10 +471,14 @@ def main(argv=None):
                 brief[lid] = "info"
             else:
                 brief[lid] = "missing"
-        print(json.dumps({"missing_layers": matrix["missing_layers"], "layers": brief,
+        print(json.dumps({"missing_layers": matrix["missing_layers"],
+                          "dimension_gaps": matrix["dimension_gaps"],
+                          "layers": brief,
                           "gaps": len(matrix["gaps"]), "out": args.out or ""},
                          ensure_ascii=False))
-    return 0 if not matrix["missing_layers"] else 1
+    # v1.55 R1：维度覆盖缺口与层缺口同权——声明了适用却没测，与层未覆盖一样不可交付。
+    bad = bool(matrix["missing_layers"]) or bool(matrix["dimension_gaps"])
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

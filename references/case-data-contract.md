@@ -35,7 +35,7 @@ ID 跨所有节点全局唯一，引用按 ID；名称修改不影响关联。�
 
 `elements` 四项都要写具体：场景定位页面或业务域，对象定位字段/功能/元素，条件写前置、边界、角色或状态，关注点写要验证的可观察行为。任一项为空、只剩「正常/成功/符合预期/功能可用」这类空话、或含 TODO/待补充等占位内容，`case_data.py` 直接判错；整体缺 `elements` 给告警，`--strict` 下视为失败。AC 的 description/oracle 与 TC 的 assertions.check/oracle 同样禁止空话和占位。
 
-`applicability` 是逐类裁定矩阵，七类都要有结论：状态取 applicable / not_applicable / insufficient_evidence / deferred，not_applicable 与 deferred 必须给非空 reason，缺类产生未裁定告警。状态非法、给未知类型或漏理由均判错。该矩阵只表达「这一类要不要测、为什么」，不代替实际执行结果。
+`applicability` 是逐类裁定矩阵，**九类都要有结论**：状态取 applicable / not_applicable / insufficient_evidence / deferred，not_applicable 与 deferred 必须给非空 reason，缺类产生未裁定告警。状态非法、给未知类型或漏理由均判错。该矩阵只表达「这一类要不要测、为什么」，不代替实际执行结果；**覆盖下限在 coverage_matrix 维度层强制（v1.55 R1）**：声明 applicable 的 visual/usability/accessibility，各至少一条 coverage_flags 含该类大写标签（VISUAL/USABILITY/ACCESSIBILITY）的用例，缺项记 dimension_gaps 并计入退出码——「声明可测却没测」不可交付。
 
 ## 场景路径
 

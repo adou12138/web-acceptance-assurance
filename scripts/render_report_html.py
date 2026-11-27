@@ -36,7 +36,7 @@ COVERAGE_LABELS = {"available": ("t-green", "已采"), "partial": ("t-amber", "�
                    "missing": ("t-amber", "缺失"), "not-collected": ("t-gray", "未采")}
 # 与 execution_ledger.HEADLINE_SCHEMA 同值：schema 不一致即视为旧摘要，
 # 回退推断并标注，不静默按新口径解读旧字段（字段语义可能已变）。
-HEADLINE_SCHEMA = "ledger-headline/1"
+HEADLINE_SCHEMA = "ledger-headline/2"  # v1.55 R7：新增 blocked/uncovered；/1 旧摘要走版本不符回退并标注
 
 CSS = """
 *{box-sizing:border-box}
@@ -313,6 +313,17 @@ def build(args):
         limit_text = "；".join(str(item.get("text") or item) for item in limits) \
             or "未见未完成项或未提供证据的限制因素"
         add(f"<div class='sub'><b>限档原因：</b>{esc(limit_text)}。</div>")
+        blocked = headline.get("blocked") or {}
+        uncovered = headline.get("uncovered") or {}
+        if blocked.get("faces"):
+            add("<div class='sub'><b>已声明阻断（替代通道/条件见台账 baseline）：</b>"
+                + esc("；".join(f"{f.get('name')}（{f.get('reason')}）" for f in blocked["faces"]))
+                + "</div>")
+        if uncovered.get("items"):
+            add("<div class='sub'><b>未覆盖：</b>"
+                + esc("；".join(f"{u.get('source')}（{u.get('count', len(u.get('items') or []))} 项）"
+                                for u in uncovered["items"]))
+                + "</div>")
         if checks:
             add("<table><tr><th style='width:150px'>必查项</th><th style='width:80px'>状态</th>"
                 "<th>说明</th></tr>")

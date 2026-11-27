@@ -238,7 +238,8 @@ class TestVerdictInputRegistration(PhaseGateTestBase):
         self.pg.complete(self.state, "execute", session=self.session_for("execute"),
                          attack_coverage=COVERAGE, exploration=EXPLORATION,
                          assumptions=paths["assumptions"], regression=paths["regression"],
-                         collection=self.clean_collection_file())
+                         collection=self.clean_collection_file(),
+                         ui_handoff="not_applicable")  # v1.55 R4：无 UI 范围显式豁免
         entry = self.state["phases"]["execute"]
         self.assertTrue(entry["assumptions"]["registered"])
         self.assertTrue(entry["regression"]["registered"])

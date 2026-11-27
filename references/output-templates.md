@@ -75,6 +75,8 @@
 - **摘要缺 `headline` 字段**（旧摘要）时，首屏须显式标注「台账摘要缺首屏事实字段，限制因素由报告渲染器推断」，并按渲染器推断口径给出；不得静默按推断口径出首屏。
 - **限档原因的档位口径（B1，`phase-verdict-check/2`）**：缺证据类缺口（attack/exploration/采集/假设/回归/路由误配）呈现为「结论上限压待核实 + 未覆盖范围 + 补正命令」——补正命令取 `check-verdict` 输出 `limitations[].remedy`，不另手写；只有 block 档（阶段未完成/未批范围变更/交接未消费）才呈现为「拒绝出具结论」（`blocking_reasons`）。两类在报告中分账，不得混写成一种。
 - 报告中另有各数据集门禁自身的判定（如「门禁自身结论上限」）。那是门禁单项结论，**不是**技术结论上限；两者冲突时以首屏为准，并写明差异原因。
+- **「已声明阻断」与「未覆盖」必须分栏（v1.55 R7，headline/2）**：首屏消费 `headline.blocked`（faces：面名/原因/替代通道）与 `headline.uncovered`（items：来源+条目），两栏各配计数，**禁止混列**——额度任务的自充值、访谈任务的录音转录都是"已声明阻断"，被外部读者当漏测提出即属呈现失败；`headline.blocked` 数据来自 baseline `blocked_faces`（R8）。
+- **逐类适用性结论表（v1.55 R10）**：报告须按 `applicability` 九类（functional/security/performance/accessibility/compatibility/visual/reliability/usability/content）逐类给一行结论——类名｜裁定（applicable/not_applicable/insufficient_evidence/deferred）｜本轮结论（已验/未验/不通过/未测）｜一句说明｜证据指针。缺类即交付不完整；"这次只测了功能"式的交付（访谈实测：摘要 8 个功能域、四类视角无声消失）不得再出现。
 - **`headline.schema` 与渲染器要求不符**（旧版或更新版摘要）时，渲染器一律回退推断并在首屏标注版本不符，不按当前口径硬读旧字段——字段语义会随版本变，硬读会得出"看起来合规"的错结论。手写交付物同样不得引用版本不符的摘要数值。
 
 ## 0.4 产物与消费脚本对照
@@ -84,6 +86,8 @@
 | 阶段 | 产物文件 | 字段集要点 | 消费方 |
 |---|---|---|---|
 | 采集 | `collection.jsonl` / 台账 `events.jsonl` | 只写观察，禁止判定字段 | `phase_gate.py scan-collection`、`attack_coverage.py --ledger` |
+| 定性 UI 放弃清单 | `ui-handoff.json` 或字面量 `not_applicable` | 每条 view/item + criterion 或 not_evaluable_reason（v1.55 R4） | `phase_gate.py complete --ui-handoff`、`revise --ui-handoff`；报告「转人工通道清单」 |
+| 门禁缺席结论 | `gate-absent-check` 输出 | absent 列表 + `verdict_ceiling_suggestion`（v1.55 R9） | `scripts/gate_absent_check.py --dir --enforce`；self-check 交付前问 1 |
 | 对抗计划 | `adversarial-plan.json` | `SURF-` 风险面与 `hypothesis` | `attack_coverage.py --plan` |
 | 对抗场景 | `adversarial-scenarios.json` | `SCN-ADV-` 三类（cross_module/operation_sequence/state_bypass）、`sequence≥2`、cross_module≥2 SURF；id/note 带设计场景 ID 前缀作回链（约定见 case-data-contract.md「对抗场景回链」） | `adversarial_data.py --scenarios`、`adversarial_gate.py --scenarios` |
 | 攻击覆盖结论 | `attack-coverage.json` | `verdict_ceiling` / `gaps` / `notices` | `phase_gate.py complete --attack-coverage` |

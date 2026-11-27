@@ -776,7 +776,7 @@ def _attack_check(coverage):
 
 
 def revise(state, phase, attack_coverage=None, exploration=None, collection=None,
-           note=None, session=None, allow_relax=False):
+           ui_handoff=None, note=None, session=None, allow_relax=False):
     """对已完成阶段的机械结论做**补正**（不改阶段状态、不改 completed_at）。
 
     存在目的：execute 在 S2 收尾时冻结 attack_coverage / exploration / collection 快照；
@@ -804,8 +804,10 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
     if entry["status"] != "done":
         raise ValueError(f"阶段 {phase} 尚未完成（status={entry['status']}）："
                          "revise 只用于补正已完成阶段的机械结论")
-    if attack_coverage is None and exploration is None and collection is None:
-        raise ValueError("revise 至少要提供 --attack-coverage / --exploration / --collection 之一")
+    if attack_coverage is None and exploration is None and collection is None \
+            and ui_handoff is None:
+        raise ValueError("revise 至少要提供 --attack-coverage / --exploration / --collection / "
+                         "--ui-handoff 之一")
     # B3/F-07：--collection 补正可在无人工放行的情况下解除采集缺口，必须 --note 留痕。
     # 不引入人工审批（避免新增人机往返）；留痕供人核对，不防有意伪造——与诚实边界一致。
     if collection is not None and not (isinstance(note, str) and note.strip()):
@@ -856,9 +858,21 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
         entry["collection"]["revised"] = True
         changed.append("collection")
 
+    if ui_handoff is not None:
+        # R4（v1.55）：漏交 ui_handoff 的补正入口——与 collection 的 revise 同口径，
+        # 补正无需人工放行，事件记 auto + basis 留痕。
+        old_state = (entry.get("ui_handoff") or {}).get("state")
+        checked = _ui_handoff_check(ui_handoff)
+        new_state = checked["state"]
+        if old_state and old_state != new_state:
+            relaxed["ui_handoff"] = f"{old_state} -> {new_state}"
+        checked["revised"] = True
+        entry["ui_handoff"] = checked
+        changed.append("ui_handoff")
+
     revise_payload = {"fields": changed, "note": note,
                       "session": session, "transitions": relaxed}
-    if "collection" in changed:
+    if "collection" in changed or "ui_handoff" in changed:
         # B3：collection 补正无需人工放行，事件里显式记 auto 留痕 + basis（note 原文），
         # 供台账摘要与人工核对识别"自动解除采集缺口"的批次；不占 approval（后者只记人工放行）。
         revise_payload["auto"] = True
@@ -867,9 +881,45 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
     return state
 
 
+def _ui_handoff_check(value):
+    """R4（v1.55）：无判据定性 UI 项的放弃留痕。
+
+    - None → not_provided（收尾缺清单，压档；补救入口 revise --ui-handoff）
+    - 字面量 not_applicable → 纯接口/无 UI 范围批次显式豁免
+    - 文件 → JSON 数组或 {"items": [...]}；每条须含非空 view 与 item，
+      且 criterion（判据来源）与 not_evaluable_reason 二选一非空——
+      空清单/空条目都过不了门禁，「清单存在但全空」不算留痕。
+    """
+    if value is None:
+        return {"state": "not_provided", "checked_at": _now()}
+    if str(value).strip().lower() == "not_applicable":
+        return {"state": "not_applicable", "checked_at": _now()}
+    payload = _read_json_file(value, "ui_handoff")
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        raise ValueError('ui_handoff 必须为 JSON 数组或 {"items": [...]}')
+    problems = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            problems.append(f"items[{i}]: object required")
+            continue
+        if not str(item.get("view") or "").strip():
+            problems.append(f"items[{i}].view: nonempty string required")
+        if not str(item.get("item") or "").strip():
+            problems.append(f"items[{i}].item: nonempty string required")
+        if not (str(item.get("criterion") or "").strip()
+                or str(item.get("not_evaluable_reason") or "").strip()):
+            problems.append(f"items[{i}]: criterion 与 not_evaluable_reason 至少一项非空")
+    if problems:
+        raise ValueError(f"ui_handoff 结构不合规，未收尾：{problems[0]}")
+    if not items:
+        return {"state": "empty", "items": 0, "checked_at": _now()}
+    return {"state": "provided", "items": len(items), "checked_at": _now()}
+
+
 def complete(state, phase, note=None, session=None, attack_coverage=None,
              exploration=None, artifacts=None, assumptions=None, regression=None,
-             collection=None):
+             collection=None, ui_handoff=None):
     session = _require_session(state, session)
     entry = _entry(state, phase)
     if entry["status"] != "in_progress":
@@ -887,25 +937,37 @@ def complete(state, phase, note=None, session=None, attack_coverage=None,
         if collection is not None:
             records = _load_records(collection)
             violations = scan_collection_records(records)
-            if violations:
+            # R6（v1.55）：notice 级（疑似线索键）不阻断收尾，但必须留痕出声——
+            # 静默放过等于线索丢失；blocking 级仍拒绝收尾。
+            notices = [v for v in violations if v.get("notice")]
+            blocking = [v for v in violations if not v.get("notice")]
+            if blocking:
                 raise ValueError(
-                    f"采集记录存在 {len(violations)} 处结构违规，未收尾："
-                    f"{violations[0].get('code')}（{violations[0].get('message', '')[:80]}）；"
+                    f"采集记录存在 {len(blocking)} 处结构违规，未收尾："
+                    f"{blocking[0].get('code')}（{blocking[0].get('message', '')[:80]}）；"
                     "修正采集记录后重新 complete——结果台账不能改名充当采集输入")
             if not records:
                 entry["collection"] = {"state": "empty", "records": 0,
-                                       "violations": [], "checked_at": _now()}
+                                       "violations": [], "notices": notices,
+                                       "checked_at": _now()}
             else:
                 entry["collection"] = {"state": "provided", "records": len(records),
-                                       "violations": [], "checked_at": _now()}
+                                       "violations": [], "notices": notices,
+                                       "checked_at": _now()}
         else:
             entry["collection"] = {"state": "not_provided", "checked_at": _now()}
-    elif attack_coverage is not None or exploration is not None or collection is not None:
+        # R4（v1.55）：无判据定性 UI 项的放弃留痕。缺失压档（ui_handoff_missing），
+        # not_applicable 显式豁免（纯接口批次），provided 必须过结构校验——
+        # 「清单存在但全空」过不了门禁。
+        entry["ui_handoff"] = _ui_handoff_check(ui_handoff)
+    elif attack_coverage is not None or exploration is not None or collection is not None \
+            or ui_handoff is not None:
         # 这两个结论只对 execute 有意义，check_verdict 也只读 execute。静默丢弃会让
         # 调用方以为"交了、被记录了"，实际没进任何门禁——收尾时最不该有的错觉。
         extra = [n for n, v in (("--attack-coverage", attack_coverage),
                                 ("--exploration", exploration),
-                                ("--collection", collection)) if v is not None]
+                                ("--collection", collection),
+                                ("--ui-handoff", ui_handoff)) if v is not None]
         raise ValueError(f"{' / '.join(extra)} 只对 execute 阶段生效（当前 phase={phase}）："
                          "这两个结论是执行期的机械检查，check_verdict 只读 execute")
     # 裁决前置的两份清单：允许在 execute 收尾时提前登记，让「终检会索要什么」在检查点
@@ -978,6 +1040,10 @@ def _pending_verdict_inputs(state):
                     else "collection_not_provided")
         pending.append(f"采集缺口（{REASON_POLICY[code]['remedy']}）：{state_label}，"
                        "未补正前裁决结论压待核实")
+    execute_ui = (state["phases"].get("execute") or {}).get("ui_handoff")
+    if execute_ui is None or execute_ui.get("state") in {"not_provided", "empty"}:
+        pending.append(f"定性 UI 放弃留痕（{REASON_POLICY['ui_handoff_missing']['remedy']}）："
+                       f"当前 state={execute_ui.get('state') if execute_ui else '旧状态文件未登记该字段'}")
     return pending
 
 
@@ -1463,6 +1529,10 @@ REASON_POLICY = {
                                 "remedy": "新会话执行 revise execute --collection <records.jsonl> 补正"},
     "collection_empty": {"mode": "downgrade", "needs_human": False,
                          "remedy": "补实际采集记录后 revise execute --collection（空文件不算采集）"},
+    "ui_handoff_missing": {"mode": "downgrade", "needs_human": False,
+                           "label": "定性 UI 放弃留痕",
+                           "remedy": "执行收尾补交 --ui-handoff <清单.json>，纯接口批次传 "
+                                     "not_applicable；漏交可新会话 revise execute --ui-handoff 补正"},
     "collection_not_provided": {"mode": "downgrade", "needs_human": False,
                                 "remedy": "新会话执行 revise execute --collection <records.jsonl> 补正"},
     "assumptions_missing": {"mode": "downgrade", "needs_human": False,
@@ -1594,6 +1664,15 @@ def check_verdict(state, assumptions=None, regression=None):
         reasons.append(_hit(hits, "collection_not_provided",
                             "execute 阶段收尾未提供采集记录（--collection）：采集事实未经校验，"
                             "裁决复核与「轨迹为准」缺少输入，结论上限压待核实"))
+    # R4（v1.55）：定性 UI 项放弃留痕。缺失/空清单压档；not_applicable 是显式豁免。
+    ui_handoff = (state["phases"].get("execute") or {}).get("ui_handoff")
+    if ui_handoff is None:
+        reasons.append(_hit(hits, "ui_handoff_missing",
+                            "execute 阶段未登记定性 UI 放弃清单（旧批次状态文件，按原契约披露）"))
+    elif ui_handoff.get("state") in {"not_provided", "empty"}:
+        reasons.append(_hit(hits, "ui_handoff_missing",
+                            "execute 阶段收尾未提供定性 UI 放弃清单（--ui-handoff）或清单为空："
+                            "间距/图标/字号/对齐等无判据项的放弃未留痕，人工视觉通道无人接手"))
     reasons.extend(_assumption_reasons(assumptions, hits=hits))
     reasons.extend(_regression_reasons(regression, hits=hits))
     # 输入盘点（v1.50）：材料是否被消费。不传/旧状态只披露（零扰动）；
@@ -1743,6 +1822,17 @@ def scan_collection_records(records):
         else:
             violations.append({"index": index, "id": ident, "code": "missing_state",
                                "message": "缺少 collection_state（collected/blocked/not_run/skipped/partial）"})
+        # R6（v1.55）：线索键写错＝没留痕。校验器只读 lead（契约明文不用 new_lead），
+        # 但对「疑似线索键」静默放过就是静默失败——出声不阻断，让人当场改键名。
+        stray_lead_keys = [k for k in record
+                           if k != "lead" and "lead" in str(k).lower()
+                           and record.get(k) not in (None, "", [], {})]
+        if stray_lead_keys:
+            violations.append({"index": index, "id": ident, "code": "lead_key_unknown",
+                               "notice": True, "keys": sorted(stray_lead_keys),
+                               "message": f"存在疑似线索键 {sorted(stray_lead_keys)}："
+                                          "校验器只读 lead（{suspicion, basis, where}），"
+                                          "这些键里的线索不会进入留痕通道，请改键名后重交"})
         lead = record.get("lead")
         if lead is not None:
             if not isinstance(lead, dict):
@@ -1917,6 +2007,10 @@ def main(argv=None):
                    help="本轮采集记录 JSONL/JSON 数组路径；execute 阶段收尾提供则做 "
                         "scan-collection 结构校验，有违规即拒绝收尾（修正后重试）；"
                         "空文件记 empty、未提供记 not_provided，两者都在裁决终检压待核实")
+    p.add_argument("--ui-handoff",
+                   help="无判据定性 UI 项的放弃清单 JSON 路径（每条 view/item + criterion 或 "
+                        "not_evaluable_reason）；纯接口批次传字面量 not_applicable。"
+                        "execute 阶段收尾缺失则压档（ui_handoff_missing），revise 可补正")
 
     p = sub.add_parser("revise", help="补正已完成阶段的机械结论（不改状态、留痕）；--collection 补正必须 --note 写明依据（无人工放行，留痕供人核对，不防有意伪造）")
     p.add_argument("state")
@@ -1932,6 +2026,9 @@ def main(argv=None):
                    help="补正用的采集记录 JSONL/JSON 数组路径：re-run scan-collection 后"
                         "回写 provided/empty。用于 execute 收尾漏交采集（会无条件阻断裁决）"
                         "时解除阻断——不传则 collection 保持原状")
+    p.add_argument("--ui-handoff",
+                   help="补正用的定性 UI 放弃清单路径或字面量 not_applicable：解除 "
+                        "ui_handoff_missing 压档——不传则保持原状")
     p.add_argument("--allow-relax", action="store_true",
                    help="允许把未通过结论升级为「通过」。默认禁止；仅在补齐探针后重跑门禁"
                         "确实得「通过」时使用，note 须写明依据——history 的 transitions 字段留痕")
@@ -2022,12 +2119,14 @@ def main(argv=None):
                      artifacts=args.artifacts,
                      assumptions=args.assumptions,
                      regression=args.regression,
-                     collection=args.collection)
+                     collection=args.collection,
+                     ui_handoff=getattr(args, "ui_handoff", None))
         elif args.command == "revise":
             revise(state, args.phase,
                    attack_coverage=_read_json_arg(args.attack_coverage),
                    exploration=_read_exploration_args(args.exploration),
                    collection=args.collection,
+                   ui_handoff=getattr(args, "ui_handoff", None),
                    note=args.note, session=args.session,
                    allow_relax=args.allow_relax)
         elif args.command == "amend":

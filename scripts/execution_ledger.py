@@ -40,6 +40,7 @@ _ADV = _sibling("adversarial_data")
 _AMD = _sibling("amendment_class")
 ATTACK_PATH_TYPES = tuple(_ATTACK.PATH_TYPES)
 ORACLE_SOURCES = tuple(_ATTACK.ORACLE_SOURCES)
+ORACLE_SCOPES = tuple(_ATTACK.ORACLE_SCOPES)
 DISCOVERY_MODES = tuple(_ATTACK.DISCOVERY_MODES)
 METHOD_IDS = frozenset(_ADV.METHOD_IDS)
 
@@ -47,7 +48,7 @@ STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED"}
 SEVERITIES = {"blocker", "major", "normal", "minor"}
 # 首屏事实的 schema 版本。报告渲染器与交付模板消费同一份 headline，
 # 版本号不同即视为旧摘要（缺字段）→ 回退并如实标注，不静默按旧口径推断。
-HEADLINE_SCHEMA = "ledger-headline/1"
+HEADLINE_SCHEMA = "ledger-headline/2"  # v1.55 R7：新增 blocked/uncovered 两组首屏字段
 BUG_STATES = {"open", "in_progress", "fixed_pending_deploy", "fixed_pending_retest", "reopened", "closed"}
 CAUSES = {"none", "product", "environment", "data", "automation", "unknown"}
 # 证据等级门禁（对齐 blind_eval 的 grade != "E1" 不计检出）：
@@ -549,7 +550,7 @@ def _readonly_write_crosscheck(phase_state, write_ops_ledger):
 
 def initialize(workspace, design, context, round_id, known_issues=None, batches=None, gate_report=None,
                adversarial_gate=None, adversarial_waiver=None, phase_state=None,
-               attack_coverage=None):
+               attack_coverage=None, blocked_faces=None):
     cases, warnings = _design(design)
     _context(context)
     _text(round_id, "round_id")
@@ -578,6 +579,17 @@ def initialize(workspace, design, context, round_id, known_issues=None, batches=
         raise ValueError("workspace parent must already exist")
     workspace.mkdir(exist_ok=False)
     baseline = {"schema_version": "1.0", "round_id": round_id, "created_at": _now(), "design_hash": fingerprint(design), "context_hash": fingerprint(context), "context": context, "case_ids": list(cases), "known_issues": known_issues, "design_warnings": warnings, "gate_precondition": gate_precondition, "gate_inputs_present": gate_inputs_present, "missing_inputs": missing_inputs, "delegated_inputs": delegated_inputs}
+    # R8（v1.55）：执行期阻断面在建账时登记——面名/原因/替代通道/状态。
+    # 缺失只披露不阻断；「留待手动核验」不算已安排（无替代通道与责任人）。
+    if blocked_faces:
+        if not isinstance(blocked_faces, list):
+            raise ValueError("blocked_faces 必须为数组")
+        for i, face in enumerate(blocked_faces):
+            if not isinstance(face, dict) or not str(face.get("name") or "").strip():
+                raise ValueError(f"blocked_faces[{i}]: 须为含非空 name 的对象")
+            if not str(face.get("reason") or "").strip():
+                raise ValueError(f"blocked_faces[{i}].reason: nonempty string required")
+        baseline["blocked_faces"] = blocked_faces
     _write_json_new(workspace / "cases.snapshot.json", design)
     _write_json_new(workspace / "baseline.json", baseline)
     (workspace / "events.jsonl").touch(exist_ok=False)
@@ -674,6 +686,7 @@ def begin(workspace, design, context, attempt_id, case_id, intended_action):
 
 
 ATTACK_FIELDS = ("path_type", "surf_id", "method", "oracle_source", "oracle_channel",
+                 "oracle_scope",
                  "discovery_mode", "probes", "hypothesis", "hypothesis_outcome")
 # hypothesis / hypothesis_outcome 必须走 finish() 落进台账：attack_coverage.py 从台账读它们
 # 判「高风险面是否有可证伪预测」。若只由调用方手工回写 JSONL，会破坏 digest 哈希链
@@ -729,9 +742,19 @@ def _attack_fields(attack, evidence_paths):
         value = attack["oracle_channel"]
         _text(value, "attack.oracle_channel")
         out["oracle_channel"] = value.strip()
+    if "oracle_scope" in attack:
+        # v1.55 R2：通道范围声明。same_backend 与 independent 互斥——同后端视图
+        # 不是独立通道（额度任务 08 证据实证），落账时就拒绝，不改口成本最低。
+        value = str(attack["oracle_scope"]).strip().lower()
+        if value not in ORACLE_SCOPES:
+            raise ValueError(f"attack.oracle_scope 必须为 {list(ORACLE_SCOPES)} 之一")
+        out["oracle_scope"] = value
     if out.get("oracle_source") == "independent":
         if not out.get("oracle_channel"):
             raise ValueError("oracle_source=independent 必须同时给出 oracle_channel（哪个独立通道）")
+        if out.get("oracle_scope") == "same_backend":
+            raise ValueError("oracle_scope=same_backend 与 oracle_source=independent 互斥："
+                             "同后端视图不是独立通道，请改 oracle_source=self_attested 或换跨系统通道")
         if not evidence_paths:
             raise ValueError("oracle_source=independent 必须有证据文件，否则独立判据无法复核")
     if "probes" in attack:
@@ -1058,9 +1081,26 @@ def _build_headline(baseline, counts, executed, cases, final_precondition, ceili
         scope_text = (f"计划 {planned} 项，已执行 {executed} 项；"
                       f"未执行 {not_run} 项、阻塞 {blocked} 项、跳过 {skipped} 项")
 
+    # R7（v1.55）：首屏两组事实——已声明阻断（附原因/替代通道）与未覆盖（附来源）。
+    # 数字不手写：blocked 取自 baseline.blocked_faces，uncovered 取自 final_precondition
+    # 与基线缺口，渲染器直接消费，不再各推一套。
+    blocked_faces = baseline.get("blocked_faces") or []
+    uncovered_items = []
+    if missing_inputs:
+        uncovered_items.append({"source": "baseline.missing_inputs", "items": list(missing_inputs)})
+    if delegated_inputs:
+        uncovered_items.append({"source": "baseline.delegated_inputs",
+                                "items": [d if isinstance(d, str) else json.dumps(d, ensure_ascii=False)
+                                          for d in delegated_inputs]})
+    not_run_cases = not_run
+    if not_run_cases:
+        uncovered_items.append({"source": "execution.NOT_RUN", "items": not_run_cases})
+
     return {
         "schema": HEADLINE_SCHEMA,
         "verdict_ceiling": ceiling,
+        "blocked": {"count": len(blocked_faces), "faces": blocked_faces},
+        "uncovered": {"count": len(uncovered_items), "items": uncovered_items},
         "completion_scope": {
             "planned": planned,
             "executed": executed,
@@ -1240,6 +1280,9 @@ def main():
                               help="phase_gate.py 状态文件；未提供时留痕并压上限，阶段未走完放行流程时结论上限压待核实")
             part.add_argument("--attack-coverage",
                               help="attack_coverage.py 结论输出；未提供时留痕并压上限，攻击密度/判据独立性不达标时压上限")
+            part.add_argument("--blocked-faces",
+                              help="执行期阻断面登记 JSON 数组（每条 name/reason，建议附 alternative_channel/status）；"
+                                   "R8：缺失只披露，「留待手动核验」不算已安排")
         elif command == "begin":
             part.add_argument("attempt_id")
             part.add_argument("case_id")
@@ -1264,7 +1307,8 @@ def main():
                                 _load(args.adversarial_gate) if args.adversarial_gate else None,
                                 args.adversarial_waiver,
                                 _load(args.phase_state) if getattr(args, "phase_state", None) else None,
-                                _load(args.attack_coverage) if getattr(args, "attack_coverage", None) else None)
+                                _load(args.attack_coverage) if getattr(args, "attack_coverage", None) else None,
+                                _load(args.blocked_faces) if getattr(args, "blocked_faces", None) else None)
         elif args.command == "begin":
             result = begin(args.workspace, design, context, args.attempt_id, args.case_id, args.intended_action)
         elif args.command == "finish":

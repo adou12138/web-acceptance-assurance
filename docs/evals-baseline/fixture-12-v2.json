@@ -2,10 +2,10 @@
   "schema": "case-eval-baseline/2",
   "metrics_schema": "case-eval-metrics/1",
   "tool_version": "2",
-  "scored_at": "2026-11-20T12:42:46+00:00",
+  "scored_at": "2026-11-27T03:11:57+00:00",
   "input": {
     "path": "skills/case-generator/tests/fixtures/cases-sample-12.json",
-    "sha256": "f72e233cc5b3317e2b68adb820a0721fd595220a83fca0f75bd20a6ec92ac405"
+    "sha256": "a7169e5ee504b67effaf3f69761bcd2e212b9fdb88b71cc907c575f6a1d8edb1"
   },
   "metrics": {
     "testcases": 12,

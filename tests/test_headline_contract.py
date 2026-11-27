@@ -80,7 +80,7 @@ class HeadlineContract(HeadlineBase):
         workspace, context = self.make_workspace()
         report = self.ledger.summarize(workspace, self.design, context)
         headline = report["headline"]
-        self.assertEqual(headline["schema"], "ledger-headline/1")
+        self.assertEqual(headline["schema"], "ledger-headline/2")
         # 上限只有一个来源：headline 与顶层字段必须是同一个值
         self.assertEqual(headline["verdict_ceiling"], report["verdict_ceiling"])
         self.assertEqual(headline["completion_scope"]["planned"], report["planned"])
@@ -234,7 +234,7 @@ class ReportConsumesSameFacts(HeadlineBase):
         self.assertIn("缺首屏事实字段", note)
 
     def test_present_headline_is_consumed_verbatim(self):
-        payload = {"headline": {"schema": "ledger-headline/1",
+        payload = {"headline": {"schema": "ledger-headline/2",
                                  "verdict_ceiling": "不通过",
                                  "completion_scope": {"text": "计划 2 项，已执行 1 项"},
                                  "required_checks": [{"id": "phase_state", "label": "三阶段闸门",
@@ -259,7 +259,7 @@ class ReportConsumesSameFacts(HeadlineBase):
         按新口径渲染，会得出一个"看起来合规"的错结论——那正是首屏事实单一来源
         要消除的漂移，只是换了个位置复发。
         """
-        for schema in ("ledger-headline/0", "ledger-headline/2", None, ""):
+        for schema in ("ledger-headline/0", "ledger-headline/1", "ledger-headline/3", None, ""):
             payload = {"headline": {"schema": schema, "verdict_ceiling": "通过",
                                     "completion_scope": {"text": "旧口径占位"}}}
             path = self.folder / f"summary-{str(schema).replace('/', '-')}.json"
@@ -275,7 +275,7 @@ class ReportConsumesSameFacts(HeadlineBase):
         gate = self.write_json("gate.json", {"gate": {"verdict_ceiling": "通过",
                                                        "missing_views": []}})
         summary = self.write_json("summary.json", {"headline": {
-            "schema": "ledger-headline/1",
+            "schema": "ledger-headline/2",
             "verdict_ceiling": "待核实",
             "completion_scope": {"text": "计划 2 项，已执行 1 项；未执行 1 项",
                                   "can_claim_readonly_complete": False},

@@ -316,8 +316,8 @@ class LedgerEmitsAttackFields(unittest.TestCase):
     def attack(self, **changes):
         payload = {"path_type": "ui_content", "surf_id": "SURF-UI-01",
                    "method": "copy_audit", "oracle_source": "independent",
-                   "oracle_channel": "网页端截图 + DOM 文本", "discovery_mode": "designed_probe",
-                   "probes": 3}
+                   "oracle_channel": "跨系统账单读回", "oracle_scope": "cross_system",
+                   "discovery_mode": "designed_probe", "probes": 3}
         payload.update(changes)
         return payload
 
@@ -339,7 +339,7 @@ class LedgerEmitsAttackFields(unittest.TestCase):
         self.assertEqual(event["surf_id"], "SURF-UI-01")
         self.assertEqual(event["method"], "copy_audit")
         self.assertEqual(event["oracle_source"], "independent")
-        self.assertEqual(event["oracle_channel"], "网页端截图 + DOM 文本")
+        self.assertEqual(event["oracle_channel"], "跨系统账单读回")
         self.assertEqual(event["discovery_mode"], "designed_probe")
         self.assertEqual(event["probes"], 3)
 

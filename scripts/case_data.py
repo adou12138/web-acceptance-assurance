@@ -373,7 +373,11 @@ def validate(data):
                 errors.append(f"applicability.{key}.reason: required for {state}")
         missing = sorted(set(ATTRIBUTES) - set(applicability))
         if missing:
-            warnings.append(f"applicability: 未裁定类型 {missing}，每类都要裁定不得静默跳过")
+            # v1.55 R1：缺类仍是告警（S0 层只管结构与引用合法）；九类全裁的**强制**
+            # 在 coverage_matrix 的维度下限层落地（dimension_gaps 计入退出码）——
+            # 访谈任务实测"缺 usability/content 仍可交付"，强制点必须在覆盖层而非结构层。
+            warnings.append(f"applicability: 未裁定类型 {missing}，九类逐类裁定为交付前置"
+                            "（coverage_matrix 将按 dimension_gaps 阻断），每类都要给出 state")
     if cases:
         smoke = sum(1 for tc in cases.values() if "smoke" in safe_refs(tc, "suites"))
         if smoke / len(cases) > 0.5:

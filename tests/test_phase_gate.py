@@ -101,7 +101,8 @@ class PhaseGateTestBase(unittest.TestCase):
         } if phase == "execute" else None)
         self.pg.complete(self.state, phase, session=session, attack_coverage=coverage,
                          exploration=exploration,
-                         collection=self.clean_collection_file() if phase == "execute" else None)
+                         collection=self.clean_collection_file() if phase == "execute" else None,
+                         ui_handoff="not_applicable" if phase == "execute" else None)
         nxt = self.pg.NEXT_PHASE[phase]
         if nxt:
             self.pg.submit(self.state, nxt, session=session,
@@ -321,7 +322,8 @@ class CrossSessionHandoffTests(PhaseGateTestBase):
         self.pg.resume(self.state, "execute", "SESS-2", f"确认码 {token}", "fast")
         self.pg.start(self.state, "execute", "SESS-2")
         self.pg.complete(self.state, "execute", session="SESS-2",
-                         collection=self.clean_collection_file())
+                         collection=self.clean_collection_file(),
+                         ui_handoff="not_applicable")
         self.submit_phase("adjudicate", session="SESS-2")
         self.pg.checkpoint(self.state, "execute", self.handoff_dir, session="SESS-2")
         token2 = self.state["phases"]["execute"]["handoff"]["token"]
@@ -595,6 +597,7 @@ class CollectionClosureTests(PhaseGateTestBase):
             kwargs["collection"] = collection
         else:
             kwargs["collection"] = self.clean_collection_file()
+        kwargs["ui_handoff"] = "not_applicable"  # v1.55 R4：无 UI 范围批次显式豁免
         self.pg.complete(self.state, "execute", session=session,
                          attack_coverage=coverage, exploration=exploration, **kwargs)
         self.pg.submit(self.state, "adjudicate", session=session,

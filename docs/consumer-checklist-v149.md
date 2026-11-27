@@ -16,3 +16,17 @@
 ## 附：登记缺口
 
 - **A2 真实逃逸样本**：`docs/evals-baseline/samples/` 现有样本为合成教学需求；真实需求样本待项目方提供已脱敏且获准使用的素材后接入（规范见 samples/README.md），本轮留缺口，不编造样本。
+## v1.55.0 新产物消费核对（G0 初版）
+
+| 新产物/字段 | 生产者 | 消费者 | grep 证据 |
+|---|---|---|---|
+| `coverage_matrix.dimension_gaps` | coverage_matrix.py | main() 退出码；self-check 开工问 1 | scripts/coverage_matrix.py:build_matrix |
+| `oracle_scope`（台账字段） | execution_ledger._attack_fields | attack_coverage._oracle_scope_problem（same_source_unverified） | scripts/attack_coverage.py:_oracle_scope_problem |
+| `direction`（SURF 可选字段） | adversarial_data.validate | attack_coverage（direction_single_held 义务） | scripts/attack_coverage.py R3 块 |
+| P25 模板 | probe-playbook.md | adversarial_data.PLAYBOOK_TEMPLATES | scripts/adversarial_data.py:46 |
+| `--ui-handoff` / entry.ui_handoff | phase_gate complete/revise | REASON_POLICY.ui_handoff_missing；check-verdict limitations；_pending_verdict_inputs | scripts/phase_gate.py |
+| `lead_key_unknown` notice | scan_collection_records | complete() 收集进 entry.collection.notices（不阻断） | scripts/phase_gate.py |
+| `headline.blocked/uncovered`（/2） | execution_ledger._build_headline | render_report_html.py（分栏渲染；/1 回退标注） | scripts/render_report_html.py:load_headline |
+| `baseline.blocked_faces` | execution_ledger init --blocked-faces | _build_headline → headline.blocked | scripts/execution_ledger.py |
+| `gate_absent_check.py` | scripts/gate_absent_check.py | self-check.md 交付前问 1 | references/self-check.md |
+| `self-check.md` | — | agents/web-acceptance-assurance.md 读取契约 | agents/web-acceptance-assurance.md:90 |

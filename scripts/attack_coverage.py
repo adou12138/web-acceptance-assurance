@@ -65,7 +65,7 @@ COVERAGE_SCHEMA = "attack-coverage/1"
 # v4：M1 证据等级门禁——ATK「未命中」新增 verified_by/attempt_id/evidence 字段；
 # 推演/走读判「未命中」且影响面属功能/数据/权限时须解释或复打；practical 未命中
 # 须挂 E1 执行记录或落盘证据。同一份台账在 v3 与 v4 下可能得到不同 verdict_ceiling。
-TOOL_VERSION = "4"
+TOOL_VERSION = "5"  # v1.55：R2 同源判定 + R3 双方向义务进入 gaps 判定
 
 # 路径类型：positive 表示"确认功能可用"，其余全部是攻击维度（非正向）。
 ATTACK_PATH_TYPES = (
@@ -103,7 +103,11 @@ HYPOTHESIS_NO_RESULT = "no_result"
 # 判据缺口的两类（分开处理，不合并成一条）：
 # - no_criterion：无判据占位——没声明独立通道，或通道只写了被测物自述；
 # - no_evidence：缺真实执行证据——通道有，但拿不出可复核的证据路径。
-ORACLE_GAP_CATEGORIES = ("no_criterion", "no_evidence")
+ORACLE_GAP_CATEGORIES = ("no_criterion", "no_evidence", "same_source_unverified")
+# v1.55 R2：独立通道的"同源声明"。通道与界面同一后端/同一数据表时，"接口读回一致"
+# 只是同一份数据的另一个视图——额度任务实证（08_额度接口读回.json 与界面同读
+# SubAccountResource.ashx）。scope 必须显式声明；未声明按同源嫌疑计。
+ORACLE_SCOPES = ("cross_system", "cross_module", "same_backend")
 
 # 可疑自然语言：只作提示，不压上限。合法的自然语言描述（"并发建卷时卷名重复应拒绝"）
 # 不在此表——误伤合法描述会把如实登记变成违规。
@@ -171,7 +175,7 @@ INFER_RULES = (
 
 def _method_ids():
     """方法库稳定 ID：以 adversarial_data 为单一事实源，避免两处枚举漂移。"""
-    from adversarial_data import METHOD_IDS
+    from adversarial_data import METHOD_IDS, SURF_DIRECTIONS
     return set(METHOD_IDS)
 
 
@@ -243,6 +247,21 @@ def _evidence_list(rec):
     return []
 
 
+def _oracle_scope_problem(rec):
+    """R2：independent 通道的同源判定。返回问题原因，否则 None。
+
+    - 未声明 oracle_scope → 按同源嫌疑计（写不清＝没写）；
+    - oracle_scope=same_backend → 同源视图，不是独立通道。
+    """
+    scope = str(rec.get("oracle_scope") or "").strip().lower()
+    if scope == "same_backend":
+        return "oracle_scope=same_backend：通道与界面同一后端/同一数据表，属同源视图而非独立通道"
+    if not scope:
+        return "未声明 oracle_scope（通道与界面是否同一后端）——按同源嫌疑计；" \
+               "跨系统/跨模块通道请声明 oracle_scope=cross_system/cross_module 并写明差异"
+    return None
+
+
 def _oracle_unproven(rec):
     """声明 independent 但拿不出独立通道 → 返回原因，否则 None。"""
     channel = str(rec.get("oracle_channel") or "").strip()
@@ -251,6 +270,9 @@ def _oracle_unproven(rec):
     hit = [h for h in SELF_ATTEST_HINTS if h in channel]
     if hit:
         return f"oracle_channel 只写了被测物自述（命中「{hit[0]}」），不是独立通道"
+    scope_problem = _oracle_scope_problem(rec)
+    if scope_problem:
+        return scope_problem
     if not _evidence_list(rec):
         return "没有证据路径，独立判据无法复核"
     return None
@@ -269,6 +291,11 @@ def _oracle_gap_category(rec):
     hit = [h for h in SELF_ATTEST_HINTS if h in channel]
     if hit:
         return "no_criterion", f"oracle_channel 只写了被测物自述（命中「{hit[0]}」），不是独立通道"
+    scope_problem = _oracle_scope_problem(rec)
+    if scope_problem:
+        if scope_problem.startswith("oracle_scope=same_backend"):
+            return "no_criterion", scope_problem
+        return "same_source_unverified", scope_problem
     if not _evidence_list(rec):
         return "no_evidence", "没有证据路径，独立判据无法复核"
     return None, None
@@ -829,6 +856,7 @@ def analyse_atk(entries):
 def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
             independent_rate=DEFAULT_INDEPENDENT_RATE,
             residual_note=None, plan_surfaces=None, plan_risks=None,
+            plan_directions=None,
             surf_linkage_threshold=DEFAULT_SURF_LINKAGE, amend_note=None,
             atk_entries=None, reviews=None, prev_atk_entries=None,
             atk_absent_reason=None, replay_notes=None):
@@ -1075,6 +1103,39 @@ def analyse(records, density_threshold=DEFAULT_DENSITY_THRESHOLD,
         gaps.append({"code": "no_falsifiable_hypothesis",
                      "message": f"{total} 条记录里没有一条声明失效假设（hypothesis）："
                                 "无法区分「确认功能可用」与「构造让它坏的条件」"})
+
+    # —— R3（v1.55）：校验规则双方向义务（P25）——
+    # 方向由 plan 侧显式声明（SURF.direction）；未声明只披露，不计义务（自报字段可凑，
+    # 所以义务只压"声明了单方向且全部 held"——那才是"打了个方向就收工"的可核对信号）。
+    # 触发后的补法与 N6 同构：补反向探针（记录 hypothesis+结果）或提交不复打理由。
+    from adversarial_data import SURF_DIRECTIONS  # 局部导入，与 _method_ids 同模式
+    plan_directions = plan_directions or {}
+    direction_undeclared = []
+    direction_single_held = []
+    for surf in sorted(required_surfaces):
+        direction = str(plan_directions.get(surf) or "").strip().lower()
+        if direction not in SURF_DIRECTIONS:
+            direction_undeclared.append(surf)
+            continue
+        if direction in ("both", "n/a"):
+            continue
+        bucket = per_surf.get(surf)
+        if not bucket or not bucket["records"] or bucket["broken"]:
+            continue
+        direction_single_held.append({"surface": surf, "direction": direction,
+                                      "records": bucket["records"],
+                                      "hypotheses": bucket["hypotheses"]})
+    if direction_undeclared:
+        notices.append({"code": "direction_undeclared",
+                        "message": f"{len(direction_undeclared)} 个高风险面未声明 direction"
+                                   f"（P25 校验双方向）：{direction_undeclared[:6]}"
+                                   "（仅披露；声明单方向且全部 held 才触发补测义务）"})
+    if direction_single_held:
+        gaps.append({"code": "direction_single_held",
+                     "message": "以下校验类高风险面仅单方向探针且结果全部 held（P25 双方向义务）："
+                     + "；".join(f"{d['surface']}({d['direction']}，{d['records']}条)"
+                                for d in direction_single_held[:5])
+                     + "——须补反向探针（记录 hypothesis 与结果）或提交不复打理由（--replay-note）"})
     if hyp_without_surface:
         gaps.append({"code": "hypothesis_without_surface",
                      "message": f"{len(hyp_without_surface)} 条失效假设未关联风险面："
@@ -1595,6 +1656,16 @@ def _plan_surfaces(path):
     return {str(s.get("id")) for s in surfaces if isinstance(s, dict) and s.get("id")}
 
 
+def _plan_directions(path):
+    """R3：风险面 → 方向声明（increase/decrease/both/n/a）。未声明返回空串。"""
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    surfaces = data.get("surfaces")
+    if not isinstance(surfaces, list):
+        raise ValueError("plan 缺 surfaces 数组")
+    return {str(s.get("id")): str(s.get("direction") or "").strip().lower()
+            for s in surfaces if isinstance(s, dict) and s.get("id")}
+
+
 def _plan_risks(path):
     """风险面 → 风险等级。高风险面必须至少有一条可证伪预测，这是"设计过攻击"的判据。"""
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -1665,6 +1736,7 @@ def main(argv=None):
         result = analyse(records, args.density_threshold, args.independent_rate,
                          residual_note=residual,
                          plan_surfaces=_plan_surfaces(args.plan) if args.plan else None,
+                         plan_directions=_plan_directions(args.plan) if args.plan else None,
                          plan_risks=_plan_risks(args.plan) if args.plan else None,
                          surf_linkage_threshold=args.surf_linkage,
                          amend_note=args.amend_note,

@@ -12,6 +12,9 @@
 
 - `cases.snapshot.json`：冻结本轮设计，防止正在执行的步骤被静默更改。
 - `baseline.json`：round_id、UTC创建时间、设计/环境哈希、计划TC、提测上下文和已知缺陷快照。
+- `baseline.blocked_faces`（v1.55 R8）：执行期阻断面登记——每条 `name`（面名）+ `reason`（原因），
+  建议附 `alternative_channel`（替代通道）与 `status`；经 `execution_ledger.py init --blocked-faces <JSON数组>` 登记，
+  进报告首屏「已声明阻断」栏。缺失只披露不阻断；**"留待手动核验"不算已安排**（无替代通道与责任人的登记形同虚设）。
 - `events.jsonl`：逐条 BEGIN/FINISH，带序号、时间、前一事件摘要和自身摘要。
 - `.writer.lock`：写入期间的互斥锁，非业务数据；中断遗留时先检查原进程，不能自动删锁或绕过。
 

@@ -12,6 +12,8 @@
 
 每条判定依据登记一条：来源 `source` 只允许 REQ / AC / contract / invariant / req_issue 五类枚举（需求原文、验收标准、接口契约、明确业务不变量、需求可疑点），观测入口（observation_entry，写明从哪里观测到什么）与适用条件（applicable_condition）。模型自猜的规则不得登记为 ORC——先按 `adversarial-testing.md` 记"待核验"，确认后再入账。
 
+**独立判据的同源判定（v1.55 R2）**：台账 `oracle_source=independent` 时必须同时声明 `oracle_scope ∈ {cross_system, cross_module, same_backend}`。同一后端/同一数据表的另一个视图（如同域接口换参数、页面 DOM 再读一遍）**不算独立**——额度任务把 `SubAccountResource.ashx` 的接口读回当独立通道，实际与界面同源。台账落账即拒绝 `independent + same_backend` 组合；未声明 scope 按同源嫌疑计（same_source_unverified）。真正的独立通道来自不同系统或不同模块：交易流水页、素材库、真实扣减行为、第三方账单。
+
 ### req_issue（需求可疑点判据）与需求批判
 
 批判者不只批判实现，也批判需求本身。评审阶段产出的**需求可疑点**（遗漏 / 冲突 / 隐含假设 / 业务合理性存疑，见 `skills/requirement-review/SKILL.md` 的伴随文件约定）登记为 `source=req_issue` 的 ORC，驱动"挑战需求"类探针：验证产品在需求未定义、自相矛盾或违背业务常识之处的行为是否可辩护。纪律：

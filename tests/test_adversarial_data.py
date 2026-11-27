@@ -145,7 +145,7 @@ class AdversarialDataTests(unittest.TestCase):
         plan = build_plan(obligations=[
             {"id": "ADV-01", "surface_ref": "SURF-01", "oracle_ref": "ORC-01",
              "probe_type": "challenge", "budget": "1 次挑战", "status": "planned",
-             "playbook_ref": "P25"},
+             "playbook_ref": "P99"},
         ])
         with self.assertRaises(ValueError):
             self.tool.validate(plan)

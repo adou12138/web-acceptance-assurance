@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import attack_coverage as ac  # noqa: E402
 
-CHANNEL = "网页端 DOM 读回 + 接口响应双通道"
+CHANNEL = "跨系统账单读回（第三方账单导出比对）"
 
 
 def rec(i, path_type="boundary", surf="SURF-01", method="boundary",
@@ -43,6 +43,7 @@ def rec(i, path_type="boundary", surf="SURF-01", method="boundary",
     if oracle == "independent":
         if channel is not None:
             record["oracle_channel"] = channel
+        record["oracle_scope"] = "cross_system"
         if evidence:
             record["evidence"] = [f"evidence/tc-{i}.png"]
     return record

@@ -24,7 +24,7 @@ METHOD_FOR = {"positive": "equivalence", "boundary": "boundary", "exception": "f
               "permission": "decision_table", "combo": "concurrency", "ui_content": "copy_audit",
               "usability": "heuristic_review", "accessibility": "visual_walkthrough",
               "data_consistency": "consistency_check", "regression": "regression_impact"}
-CHANNEL = "网页端 DOM 读回 + 接口响应双通道"
+CHANNEL = "跨系统账单读回（第三方账单导出比对）"  # v1.55 R2：independent 须声明范围且非同源
 
 # N7：结论达「通过」时残余风险声明必须是结构化声明；空 items 表示「无未破攻击面」。
 RESIDUAL_CLEAR = {"items": []}
@@ -46,6 +46,7 @@ def rec(i, path_type=None, surf=True, method=None, oracle="independent",
         record["oracle_source"] = oracle
         if oracle == "independent":
             record["oracle_channel"] = CHANNEL
+            record["oracle_scope"] = "cross_system"
             record["evidence"] = [f"evidence/tc-{i}.png"]
     if mode:
         record["discovery_mode"] = mode
@@ -147,11 +148,12 @@ class CliContract(unittest.TestCase):
         ledger = self.dir / "l.csv"
         with ledger.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=["id", "path_type", "surf_id", "method",
-                                                    "oracle_source", "discovery_mode"])
+                                                    "oracle_source", "oracle_scope", "discovery_mode"])
             writer.writeheader()
             for i in range(3):
                 writer.writerow({"id": f"TC-{i}", "path_type": "positive", "surf_id": "SURF-01",
                                  "method": "eq", "oracle_source": "independent",
+                                 "oracle_scope": "cross_system",
                                  "discovery_mode": "designed_probe"})
         out_json, out_csv = self.dir / "out.json", self.dir / "out.csv"
         ac.main(["--ledger", str(ledger), "--emit-json", str(out_json), "--emit-csv", str(out_csv)])
@@ -317,7 +319,8 @@ class EventStreamIntake(unittest.TestCase):
             {"kind": "FINISH", "attempt_id": "A1", "case_id": "TC-1", "status": "FAIL",
              "actual": "按钮文案显示 {{name}} 未渲染", "path_type": "ui_content",
              "surf_id": "SURF-01", "method": "copy_audit", "oracle_source": "independent",
-             "oracle_channel": "网页截图 + DOM 文本", "discovery_mode": "designed_probe",
+             "oracle_channel": "跨系统账单读回", "oracle_scope": "cross_system",
+             "discovery_mode": "designed_probe",
              "evidence": [{"path": "/tmp/a.png", "sha256": "0" * 64}]},
         ]
         result = ac.analyse(events)

@@ -1639,3 +1639,48 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **治理**：循环产物含判定字段即作废，下一轮须 `--resume-after-human`；`--plan` 必填；loop-log 披露新增 case/surf/方法/FAIL 与 `amendment_required`。
 - **验证**：专项 56 例、全量 1057 例通过；真实样本一轮（dense-form 夹具 + Playwright）4 探针 3 PASS / 1 FAIL，loop 收敛 `queue_empty`。
 - **版本**：`plugin.json` 1.53.0 → 1.54.0；tag `v1.54.0`。
+### v1.55.0 · 六个检测器 + 诚实度改造（2026-11-27）
+
+来源：额度分配（web-quota-1037678，17 条外部反馈零命中）与访谈独立模块（241 条人工问题，
+我方 4 条缺陷）两轮漏测的四轮回源归因。真实病灶不是规则缺失，而是**声明与覆盖脱钩、
+判据假独立、规则在但不触发**。按 `methodology.md` 的自设原则（加锁不是变强），本版
+**只声明 6 项产生新检出**（R1/R2/R3/R4/R5/R6），R7–R11 为诚实度与执行机制，如实标注。
+
+- **R1 适用性覆盖下限**：`coverage_matrix.py` 新增维度层——声明 applicable 的
+  visual/usability/accessibility 须各有一条 coverage_flags 含 VISUAL/USABILITY/ACCESSIBILITY
+  的用例，缺项记 `dimension_gaps` 并计入退出码；policy `structure.dimension_floor` 可配。
+  `case_data.py` 缺类保持告警（强制点在覆盖层而非结构层，保住 case-generator 的 S0 分层）。
+  **能发现**：访谈"声明可测却只测溢出与截断"的假覆盖。
+- **R2 同源判定**：台账 `oracle_scope ∈ {cross_system, cross_module, same_backend}` 新字段；
+  `independent + same_backend` 落账即拒；未声明 scope 按同源嫌疑计（same_source_unverified）。
+  **能发现**：把同一 Handler 换参数当独立通道（额度 08 证据实证）。
+- **R3 校验双方向（P25）**：probe-playbook 新增 P25；SURF 可选 `direction` 字段；
+  高风险面单方向全部 held 触发 `direction_single_held` 义务（补反向探针或给理由）；
+  未声明只披露。**能发现**：额度 #12 回收方向被伪上界误拦。
+- **R4 定性 UI 放弃留痕**：`phase_gate complete/revise --ui-handoff`（清单结构
+  view/item + criterion 或 not_evaluable_reason；字面量 not_applicable 豁免纯接口批次）；
+  缺失压 `ui_handoff_missing`。**能发现**：间距/图标/字号/对齐类"无判据不报"的静默放弃。
+- **R5 文案跨视图互比**：`copy_consistency.py --cross-view`——横向比对量词单位与
+  小数精度，只产观察候选。**能发现**：额度 #4 单位不统一、#13 小数位（夹具实测 4 条候选）。
+- **R6 线索键静默丢弃检测**：`scan_collection` 对疑似线索键（new_lead 等）出
+  `lead_key_unknown` notice——不阻断，但必须出声（访谈 OBS-003 线索丢失实证）。
+- **R7 报告两栏**：`HEADLINE_SCHEMA` 升 `ledger-headline/2`，headline 新增 `blocked`/
+  `uncovered` 两组字段；渲染器消费并分栏，禁止混列。不产生新检出，只让"阻断当漏测、
+  漏测当阻断"的呈现失败可见。
+- **R8 阻断留痕升级**：`execution_ledger init --blocked-faces`（baseline.blocked_faces）；
+  "留待手动核验"不算已安排。不产生新检出。
+- **R9 门禁缺席检测**：新脚本 `scripts/gate_absent_check.py`——有执行类产物而无台账/
+  attack_coverage/exploration gate 时点名并建议上限。不产生新检出，但让"门禁没跑"可被机械发现。
+- **R10 逐类结论表**：output-templates 要求按 applicability 九类逐类给结论，缺类即交付不完整。
+- **R11 双自检清单**：新增 `references/self-check.md`（开工 6 问 / 交付 8 问），agents 读取契约回链。
+- **准出记录**：全量测试通过（1077+新增），P25 白名单/`SURF_FIELDS`/`ORACLE_SOURCES`/
+  `TOOL_VERSION` 同步；`test_adversarial_data` 未知模板夹具改 P99；evals 基线
+  `fixture-12-v2.json` 因夹具补齐 applicability 按协议重存。
+- **兼容性**：`oracle_scope`/`direction`/`blocked_faces` 均为可选字段，旧台账/旧 plan
+  缺字段不熔断（R2 的 scope 缺失按同源嫌疑计，仅在重跑 attack_coverage 时生效——
+  归档产物保持原判并标注版本）；headline/2 旧摘要走版本不符回退并标注。
+- **回退**：`git revert` 或回退 `v1.54.0` tag；旧缓存 1.54.0 SKILL.md 已禁活（.disabled），
+  回退时需恢复。
+- **本版不宣称的能力**：R7–R11 不产生新检出；本版不消除漏测，只覆盖已识别的三类病灶
+  （声明-覆盖脱钩、假独立、规则不触发）；不宣称像素级 diff、渗透、压测、全量 WCAG 合规。
+- **版本**：`plugin.json`/`marketplace.json` 1.54.0 → 1.55.0；tag `v1.55.0`。
