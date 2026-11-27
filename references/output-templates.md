@@ -94,8 +94,9 @@
 | 候选复核记录 | `reviews.jsonl` | `finding_id` / `verdict`（accepted/rejected/unresolved），须配 `--events` | `finding_summary.py --reviews` |
 | 运行时能力探测 | `runtime-capabilities.json` | 五通道三态 + `reason`/`recovery`（`runtime-capabilities/1`） | `exploration_runner.py` 队列过滤；探索清单 `blocked_reason` 依据；报告「能力边界」段；交接包 `runtime_diagnostics` |
 | 运行时 manifest | `runtime-manifest.json` | 已存在资源声明 + `read_only_budget`（`runtime-manifest/1`）；环境声明不是放行凭据，不写进 `approval` | `runtime_probe.py`、`exploration_runner.py` |
-| 批次编排计划 | `batch-plan.json` | `ready_queue`/`budget`/`stop_conditions`/`reconcile_items`/`writeback_commands`（发射模板）/`honest_exits`（`batch-plan/1`） | Agent 批次执行、报告「未探索前沿」 |
-| 预算账本 | `budget-consumption.json` | 三口径累计 + `auto_approval` 事件（`budget-consumption/1`） | 交接包 `runtime_diagnostics`、`autonomy-result.md` 指标源 |
+| 批次编排计划 | `batch-plan.json` | `ready_queue`/`queue_state`（ready/承认/阻塞三态）/`budget`/`stop_conditions`（三条收敛 `queue_empty`/`increment_zero`/`budget_exhausted` + 安全联锁 `side_effect_pending`）/`reconcile_items`/`writeback_commands`（发射模板）/`honest_exits`（`batch-plan/1`） | Agent 批次执行、报告「未探索前沿」 |
+| 预算账本 | `budget-consumption.json` | 三口径累计 + `auto_approval` + `auto_judgements`（每次判定都记，含 auto=false）+ `recorded_through_seq` 水位线（`budget-consumption/1`） | 交接包 `runtime_diagnostics`、`autonomy-result.md` 指标源 |
+| 循环状态与日志 | `loop-state.json` / `loop-log.jsonl` | 每轮 `new_executions`/`new_case_ids`/`new_surf_ids`/`method_counts`/`new_fail_count`/`oracle_executions`/`unregistered_expansion`/`amendment_required`/`surfaces_missing`/`queue` 三态/`budget`/`stop`/`convergence`/`requires_human`；`n_zero_rounds` 与 `plan_hash` 首轮写死，`--plan` 必填，作废轮须 `--resume-after-human` 才可推进（`loop-state/1`、`loop-log/1`） | 有界自迭代的停机核对、覆盖扩张与检出披露、留档复算 |
 | 风险假设清算 | `assumptions.json` | `reviewed` / `items[].result`∈confirmed/refuted/open | `phase_gate.py check-verdict --assumptions` |
 | 回归影响面 | `regression.json` | `changed_areas` / `candidates[].basis` / `no_impact_reason` | `phase_gate.py check-verdict --regression` |
 

@@ -1606,3 +1606,25 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 | collect `note` 未写 newEvents/windowFindings 口径（仅代码注释） | 低 | 同上（note 已补） |  |  |
 
 - **验证**：runtime smoke **33→36**（3 条窗口归属断言：首窗口 windowSeq=0 / 第二窗口只含新异常 / 无新增为空且累计保留）；转换测试 **11→13**（windowFindings 优先 / 旧产物回退）；变异验证：撤 `windowFindings`（改全量）→ 2 断言红 → 还原 36/0；全量 unittest OK、dense-form 7/0。
+
+### 有界自迭代停机条件重写（2026-11-26，S0.5–S4）
+
+按评审修订集落地；不改门禁语义、不新增配额判据、不宣称检出提升。回滚方式：revert 本提交即回到五条停机（含空气项 `quota_triggered`）与可标签操纵的增量口径。
+
+- **S0.5**（`scripts/exploration_runner.py`）：预算键名归一（`probes` / `probes_consumed`）；`writes:0` 不再把零写入判成超预算；删除编排占位批；新增 `record` 子命令（探针求和、时长由 BEGIN→FINISH 派生、写入取写台账条数）；账本新增 `minutes_missing_batches` / `writes_missing_batches`，不把「没申报」写成 0。
+- **S1**：`stop_conditions` 改为三条收敛条件（`queue_empty` / `increment_zero` / `budget_exhausted`）+ 一条安全联锁（`side_effect_pending`），删除指向不存在配额的 `quota_triggered` 与仅作提示的 `capability_missing`（后者已由 `blocked_with_recovery` 承载）；新增 `evaluate_stop` 纯函数与 `queue_state`（ready/承认/阻塞三态），停机判定不读 gate 结论；队列空但仍有承认/阻塞、或增量归零但 ready 仍有剩余时 `convergence=false`。
+- **S2**：新增 `scripts/iteration_delta.py`——新增执行按执行签名（`case_id`×`surf_id`×`intended_action`）去重，`status∈{PASS,FAIL}` 才计；证据哈希复用与 `oracle_source=independent` 只披露、不参与停机；`record` 增加 `recorded_through_seq` 水位线，重复调用不重复计费；未声明 `probes` 的 FINISH 按每条至少 1 次计入预算下限。
+- **S3**：计划外 `attack.surf_id` 照常计入增量并记 `unregistered_expansion`（与 `attack_coverage`「计划外计为产出」同口径）；`scan_loop_products` 在采集禁判定键集上补 `accepted` / `accepted_by` / `triage_state`，并扫描任意嵌套层。
+- **S4**：`loop` 子命令读写 `loop-state.json` / `loop-log.jsonl`；`n_zero_rounds` 首轮写死后改值即拒绝；每轮记录增量、独立 oracle、计划外面、队列三态、预算与停机判定；候选产物含判定字段时该轮增量计 0 并标记 `products_invalid`。
+- **文档**：`adversarial-testing.md` 停机条款改为三条收敛 + 安全联锁（配额并入预算口径）；`autonomy-protocol.md` 更新 ready 行号、`auto_approval_ratio` 分母与 `budget_stop_compliance` 数据源，标注 `agent_steps_per_batch` 未运行，新增 §5 `--loop` 常态化决策判据；`output-templates.md` 补 `queue_state` 与 `loop-state.json` / `loop-log.jsonl` 产物。
+- **二次审查修复**：`record` 与 `loop` 先校验 events 的 `digest/seq/previous` 哈希链，篡改或缺失即拒绝（返回 2）；增量签名去掉自由文本 `intended_action`，改措辞不再刷增量；`loop` 每轮把消耗写回账本并推进 `recorded_through_seq`；`auto_judgements` 记录每次判定（含 `auto=false`）为比率提供分母；`queue_state` 改从 items 派生并不再读 gate，通道缺失计入 `blocked_by_capability`；`loop-state` 绑定 `plan_hash`、重复 `batch_id` 拒绝；产物作废轮记 `requires_human` 且不参与增量归零；`loop-log` 增 `new_case_ids`/`new_surf_ids`/`method_counts`/`amendment_required`。
+- **测试**：`tests/test_exploration_runner.py` 19→41 例，新增 `tests/test_iteration_delta.py` 11 例，两文件合计 52 例通过。既有无关失败 `skills/case-generator/tests/test_review_check.py`（缺 `requirement-issues.json`，改动前即存在）保持原状。
+
+### 三轮审查修复（2026-11-26，G-A–G-F）
+
+- **G-A**：`loop` 上一轮 `products_invalid` 时下一轮直接拒绝推进（返回 2），须人工核对 loop-log 的 `product_violations` 后带 `--resume-after-human` 才可继续——「循环内不自我裁决」从日志约束升级为代码强制。
+- **G-B**：`--plan` 改为必填（缺省即静默关闭自扩边界检查）；plan 无 `surfaces` 字段时 loop-log 记 `surfaces_missing=true`，计划外面计数不得静默为零。
+- **G-C**：`round_delta` 与 loop-log 新增 `new_fail_count`/`fail_attempt_ids` 检出披露（纯披露、不作门禁），S5 第二轮观测检出有了数据源。
+- **G-D**：编排期判定（`plan-*`）在 `auto_judgements`/`auto_approval` 中只保留最近一次，反复重排不虚增 `auto_approval_ratio` 分母。
+- **G-E/G-F**：文档写明预算停机滞后一轮口径、作废轮真实执行按披露项留档但不计入收敛计数。
+- **测试**：两文件合计 52→56 例通过（新增作废拦截、`--plan` 必填、`surfaces_missing`、FAIL 披露、重排去母）。
