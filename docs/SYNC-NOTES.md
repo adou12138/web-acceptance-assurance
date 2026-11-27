@@ -1628,3 +1628,14 @@ v1.47.2 复审（两轮）发现其 G1（`context.allowed_origins`）虽未改�
 - **G-D**：编排期判定（`plan-*`）在 `auto_judgements`/`auto_approval` 中只保留最近一次，反复重排不虚增 `auto_approval_ratio` 分母。
 - **G-E/G-F**：文档写明预算停机滞后一轮口径、作废轮真实执行按披露项留档但不计入收敛计数。
 - **测试**：两文件合计 52→56 例通过（新增作废拦截、`--plan` 必填、`surfaces_missing`、FAIL 披露、重排去母）。
+
+### v1.54.0 · 有界自迭代 loop（2026-11-27）
+
+三轮审查与真实样本验证后的发布版本；不改门禁语义、不新增配额判据、不宣称检出提升。
+
+- **停机**：三条机械收敛条件（队列空 / 连续 N 轮增量归零 / 预算耗尽）+ 副作用安全联锁；删除配额触发、缺口清零、无新增可证伪预测三类条件。N 首轮写死，`convergence` 单独披露。
+- **增量**：按 `case_id`×`surf_id` 去重的新 FINISH 计；证据复用与独立 oracle 只披露；计划外风险面照常计入并标记 `unregistered_expansion`。
+- **台账**：`record`/`loop` 校验 `digest/seq/previous` 哈希链；`loop` 每轮写回预算并推进 `recorded_through_seq`，绑定 `plan_hash`；重复 `batch_id` 拒绝。
+- **治理**：循环产物含判定字段即作废，下一轮须 `--resume-after-human`；`--plan` 必填；loop-log 披露新增 case/surf/方法/FAIL 与 `amendment_required`。
+- **验证**：专项 56 例、全量 1057 例通过；真实样本一轮（dense-form 夹具 + Playwright）4 探针 3 PASS / 1 FAIL，loop 收敛 `queue_empty`。
+- **版本**：`plugin.json` 1.53.0 → 1.54.0；tag `v1.54.0`。

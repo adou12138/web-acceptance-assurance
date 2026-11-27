@@ -27,3 +27,4 @@ backup/
 # 站点适配临时落位（包外母本：D:/TestCase/.workbuddy/site-adapters/wjx）
 skills/api-test/adapters/sojump.py
 skills/api-test/scripts/business_flow_executor.py
+.security/
