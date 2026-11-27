@@ -859,6 +859,12 @@ def revise(state, phase, attack_coverage=None, exploration=None, collection=None
         changed.append("collection")
 
     if ui_handoff is not None:
+        # S7（v1.56）补口：revise 不接受 not_applicable 豁免补交——豁免只在 complete
+        # 时声明（彼时有与采集记录的交叉核验）；补正阶段没有采集记录可核，放行
+        # 豁免就是留一条绕过 S7 的后路（实测坐实）。补正请交真实放弃清单。
+        if str(ui_handoff).strip().lower() == "not_applicable":
+            raise ValueError("revise 不接受 not_applicable 豁免补交：豁免只能在 complete "
+                             "时声明（彼时有 S7 交叉核验）；补正请交真实放弃清单")
         # R4（v1.55）：漏交 ui_handoff 的补正入口——与 collection 的 revise 同口径，
         # 补正无需人工放行，事件记 auto + basis 留痕。
         old_state = (entry.get("ui_handoff") or {}).get("state")

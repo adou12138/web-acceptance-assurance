@@ -357,6 +357,18 @@ class S7NotApplicableCrossCheck(unittest.TestCase):
         self._finish(state, folder, "not_applicable", path_type="positive")
         self.assertEqual(state["phases"]["execute"]["ui_handoff"]["state"], "not_applicable")
 
+    def test_revise_cannot_supply_waiver_after_the_fact(self):
+        """S7 补口：revise 补交 not_applicable 必须被拒（否则 complete 时漏交、
+        revise 时补豁免即可绕过与采集记录的交叉核验）。"""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        state = self._state(folder)
+        self._finish(state, folder, None, path_type="ui_content")  # 漏交 ui_handoff
+        with self.assertRaises(ValueError) as ctx:
+            pg.revise(state, "execute", ui_handoff="not_applicable", note="补豁免")
+        self.assertIn("not_applicable", str(ctx.exception))
+
     def test_collect_path_types_helper(self):
         out = set()
         pg._collect_path_types({"a": {"path_type": "UI_Content"}, "b": [{"path_type": "x"}]},
